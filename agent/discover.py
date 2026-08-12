@@ -54,12 +54,16 @@ def _lot_size(src: str) -> tuple[int, str | None]:
     return int(count) * _MULT.get(unit, 1), f"{count}{unit.upper()}"
 
 
-def _margin_currencies(fee_payload) -> tuple[set[str] | None, str]:
+def _margin_currencies(fee_payload, unavailable_reason: str | None = None
+                       ) -> tuple[set[str] | None, str]:
     """Margin-enabled currencies from /margin/fee-rates.
 
     None means "could not determine", which becomes MARGIN_UNKNOWN — never a silent
     "available".
     """
+    if fee_payload is None:
+        return None, (unavailable_reason
+                      or "/margin/fee-rates was not fetched — it needs API credentials")
     if not isinstance(fee_payload, dict):
         return None, f"unexpected response type {type(fee_payload).__name__}"
     rates = fee_payload.get("feeRates")
@@ -82,7 +86,8 @@ def _fee_rate_for(fee_payload, currency: str) -> float | None:
     return None
 
 
-def resolve(stats_payload: dict, fee_payload=None) -> dict:
+def resolve(stats_payload: dict, fee_payload=None,
+            fee_error: str | None = None) -> dict:
     stats = _parse_stats(stats_payload)
     by_src: dict[str, dict] = {}
     for (src, dst), value in stats.items():
@@ -96,7 +101,7 @@ def resolve(stats_payload: dict, fee_payload=None) -> dict:
         if base not in src_for_coin or not lot_label:
             src_for_coin[base] = src
 
-    margin_coins, margin_note = _margin_currencies(fee_payload)
+    margin_coins, margin_note = _margin_currencies(fee_payload, fee_error)
 
     entries = []
     for coin in config.REQUESTED_COINS:
@@ -134,8 +139,10 @@ def resolve(stats_payload: dict, fee_payload=None) -> dict:
             entry["market_closed"] = bool(picked.get("isClosed"))
 
         if margin_coins is None:
+            # The full explanation is reported once under `margin_detection`; repeating
+            # it on all 43 rows buries the per-coin notes that are actually specific.
             entry["status"] = MARGIN_UNKNOWN
-            entry["reason"] = f"margin availability unverified: {margin_note}"
+            entry["reason"] = "margin availability unverified"
         elif src in margin_coins:
             entry["status"] = AVAILABLE
             entry["position_fee_rate"] = _fee_rate_for(fee_payload, src)
@@ -194,14 +201,20 @@ def run(verbose: bool = True) -> dict:
     config.ensure_dirs()
 
     stats = skill.market_stats_all()
-    try:
-        fees = skill.margin_fee_rates()
-    except skill.SkillError as exc:
-        fees = None
-        if verbose:
-            print(f"  /margin/fee-rates unavailable: {exc}")
+    fees, fee_error = None, None
+    creds = config.credential_status()
+    if not (creds["api_key_set"] and creds["api_secret_set"]) and not creds["token_set"]:
+        fee_error = ("no API credentials in .env, so /margin/fee-rates could not be "
+                     "read — margin availability is unverified for every listed coin")
+    else:
+        try:
+            fees = skill.margin_fee_rates()
+        except skill.SkillError as exc:
+            fee_error = f"/margin/fee-rates failed: {exc}"
+    if fee_error and verbose:
+        print(f"  {fee_error}")
 
-    watchlist = resolve(stats, fees)
+    watchlist = resolve(stats, fees, fee_error)
     watchlist["usdt_irt"] = usdt_irt_rate(stats)
 
     config.WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
