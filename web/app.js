@@ -12,8 +12,9 @@
 'use strict';
 
 const API = {
-  state:      () => fetchJSON('/api/state'),
+  state:      () => fetchJSON(`/api/state?lang=${encodeURIComponent(state.lang)}`),
   series:     (coin) => fetchJSON(`/api/coin/${encodeURIComponent(coin)}/series`),
+  coin:       (c) => fetchJSON(`/api/coin/${encodeURIComponent(c)}?lang=${encodeURIComponent(state.lang)}`),
   settings:   (patch) => fetchJSON('/api/settings', patch),
   scan:       (coins) => fetchJSON('/api/scan', coins ? { coins } : {}),
   cancel:     () => fetchJSON('/api/scan/cancel', {}),

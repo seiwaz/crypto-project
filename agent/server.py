@@ -27,7 +27,7 @@ import threading
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 
 from . import config, discover, guard, llm, scanner, store
 
@@ -140,14 +140,23 @@ def sort_key(card: dict):
     return (VERDICT_ORDER.get(verdict, 5), -(card.get("score") or 0), card["coin"])
 
 
-def state_payload() -> dict:
+def state_payload(lang: str | None = None) -> dict:
+    """Assemble the board.
+
+    `lang` is the language the *browser* is currently showing, which is not always
+    settings.json's. The client keeps its choice in localStorage, so a fresh browser
+    renders English while settings.json still says fa — and commentary is stored per
+    language. Picking the row from settings.json served Persian text into an English
+    page. The client's language wins; settings.json is only the default for a browser
+    that has not chosen yet.
+    """
     settings = config.load_settings()
     watchlist = config.load_watchlist()
     by_coin = {c["coin"]: c for c in watchlist.get("coins", [])}
     manual_all = store.all_manual_checks()
 
     commentary_rows: dict[str, dict] = {}
-    lang = settings.get("language", "en")
+    lang = lang if lang in ("en", "fa") else settings.get("language", "en")
     for coin in by_coin:
         rec = store.commentary_for(coin, lang)
         if rec:
@@ -286,7 +295,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api_get(self, path: str):
         if path == "/api/state":
-            return self._json(state_payload())
+            wanted = parse_qs(urlparse(self.path).query).get("lang", [None])[0]
+            return self._json(state_payload(wanted))
         if path == "/api/health":
             return self._json({"ok": True, "read_only": True,
                                "guard_failures": guard.self_test()})
@@ -316,7 +326,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, f"no result stored for {coin}")
         watchlist = config.load_watchlist()
         meta = next((c for c in watchlist.get("coins", []) if c["coin"] == coin), {})
-        lang = config.load_settings().get("language", "en")
+        wanted = parse_qs(urlparse(self.path).query).get("lang", [None])[0]
+        lang = wanted if wanted in ("en", "fa") else \
+            config.load_settings().get("language", "en")
         rec = store.commentary_for(coin, lang)
         card = build_card(row, meta, store.manual_checks_for(coin),
                           {coin: dict(rec) if rec else {}})
