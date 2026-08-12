@@ -271,27 +271,38 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routing ----------------------------------------------------------------
 
+    # A client that navigates away mid-response resets the socket during the write.
+    # That is not a server error and there is nobody left to send a 500 to.
+    DISCONNECTS = (BrokenPipeError, ConnectionResetError, TimeoutError)
+
     def do_GET(self):
         path = urlparse(self.path).path
         try:
             if path.startswith("/api/"):
                 return self._api_get(path)
             return self._static(path)
-        except BrokenPipeError:
-            pass
+        except self.DISCONNECTS:
+            self.close_connection = True
         except Exception:
             log.exception("GET %s failed", path)
-            self._error(500, "internal error")
+            self._safe_error(path)
 
     def do_POST(self):
         path = urlparse(self.path).path
         try:
             return self._api_post(path)
-        except BrokenPipeError:
-            pass
+        except self.DISCONNECTS:
+            self.close_connection = True
         except Exception:
             log.exception("POST %s failed", path)
+            self._safe_error(path)
+
+    def _safe_error(self, path: str):
+        """Report a 500 without raising a second exception on a dead socket."""
+        try:
             self._error(500, "internal error")
+        except self.DISCONNECTS:
+            self.close_connection = True
 
     def _api_get(self, path: str):
         if path == "/api/state":
