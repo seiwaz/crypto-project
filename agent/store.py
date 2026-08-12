@@ -16,7 +16,15 @@ from datetime import datetime, timezone
 
 from . import config
 
-_local = threading.local()
+# One shared connection, not one per thread.
+#
+# ThreadingHTTPServer creates a thread per request, so a thread-local connection
+# leaked a SQLite handle (plus its -wal and -shm) on every single request — 62 open
+# handles and 70 MB RSS after a few minutes of normal polling, climbing without
+# bound. sqlite3.threadsafety is 3 (serialized) here, so one connection is safe to
+# share; the lock serialises whole transactions, which the C layer does not do for us.
+_conn: sqlite3.Connection | None = None
+_conn_lock = threading.RLock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scans (
@@ -104,27 +112,41 @@ def now_iso() -> str:
 
 
 def connect() -> sqlite3.Connection:
-    conn = getattr(_local, "conn", None)
-    if conn is None:
-        config.ensure_dirs()
-        conn = sqlite3.connect(config.DB_PATH, timeout=30, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
-        _local.conn = conn
-    return conn
+    global _conn
+    with _conn_lock:
+        if _conn is None:
+            config.ensure_dirs()
+            conn = sqlite3.connect(config.DB_PATH, timeout=30, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=10000")
+            _conn = conn
+        return _conn
 
 
 @contextmanager
 def tx():
     conn = connect()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    with _conn_lock:
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def _rows(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+    """Guarded read. Reads share the connection with the scanner's writes, so they
+    take the same lock rather than interleaving with an open transaction."""
+    with _conn_lock:
+        return connect().execute(sql, params).fetchall()
+
+
+def _row(sql: str, params: tuple = ()) -> sqlite3.Row | None:
+    rows = _rows(sql, params)
+    return rows[0] if rows else None
 
 
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS will not add a
@@ -177,15 +199,12 @@ def finish_scan(scan_id: int, status: str = "done", note: str | None = None) -> 
 
 
 def latest_scan() -> dict | None:
-    row = connect().execute(
-        "SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+    row = _row("SELECT * FROM scans ORDER BY id DESC LIMIT 1")
     return dict(row) if row else None
 
 
 def running_scan() -> dict | None:
-    row = connect().execute(
-        "SELECT * FROM scans WHERE status = 'running' ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    row = _row("SELECT * FROM scans WHERE status = 'running' ORDER BY id DESC LIMIT 1")
     return dict(row) if row else None
 
 
@@ -230,27 +249,23 @@ def latest_results() -> list[dict]:
     pass should keep showing its last good analysis with an honest timestamp, rather
     than vanishing from the board.
     """
-    rows = connect().execute(
-        "SELECT r.* FROM results r "
+    rows = _rows("SELECT r.* FROM results r "
         "JOIN (SELECT coin, MAX(scan_id) AS scan_id FROM results GROUP BY coin) m "
-        "  ON m.coin = r.coin AND m.scan_id = r.scan_id"
-    ).fetchall()
+        "  ON m.coin = r.coin AND m.scan_id = r.scan_id")
     return [dict(r) for r in rows]
 
 
 def result_for(coin: str) -> dict | None:
-    row = connect().execute(
-        "SELECT * FROM results WHERE coin = ? ORDER BY scan_id DESC LIMIT 1",
-        (coin,)).fetchone()
+    row = _row("SELECT * FROM results WHERE coin = ? ORDER BY scan_id DESC LIMIT 1",
+        (coin,))
     return dict(row) if row else None
 
 
 def history_for(coin: str, limit: int = 60) -> list[dict]:
-    rows = connect().execute(
-        "SELECT r.scan_id, r.fetched_at, r.verdict, r.score, r.side, s.profile "
+    rows = _rows("SELECT r.scan_id, r.fetched_at, r.verdict, r.score, r.side, s.profile "
         "FROM results r JOIN scans s ON s.id = r.scan_id "
         "WHERE r.coin = ? AND r.verdict IS NOT NULL "
-        "ORDER BY r.scan_id DESC LIMIT ?", (coin, limit)).fetchall()
+        "ORDER BY r.scan_id DESC LIMIT ?", (coin, limit))
     return [dict(r) for r in rows][::-1]
 
 
@@ -272,9 +287,8 @@ def save_series(coin: str, role: str, scan_id: int, timeframe: str | None,
 
 
 def series_for(coin: str, role: str = "decision") -> dict | None:
-    row = connect().execute(
-        "SELECT * FROM chart_series WHERE coin = ? AND role = ?",
-        (coin, role)).fetchone()
+    row = _row("SELECT * FROM chart_series WHERE coin = ? AND role = ?",
+        (coin, role))
     if not row:
         return None
     out = dict(row)
@@ -300,16 +314,13 @@ def set_manual_check(coin: str, check_key: str, resolved: bool,
 
 
 def manual_checks_for(coin: str) -> dict:
-    rows = connect().execute(
-        "SELECT check_key, resolved, note, resolved_at FROM manual_checks "
-        "WHERE coin = ?", (coin,)).fetchall()
+    rows = _rows("SELECT check_key, resolved, note, resolved_at FROM manual_checks "
+        "WHERE coin = ?", (coin,))
     return {r["check_key"]: dict(r) for r in rows}
 
 
 def all_manual_checks() -> dict:
-    rows = connect().execute(
-        "SELECT coin, check_key, resolved, note, resolved_at FROM manual_checks"
-    ).fetchall()
+    rows = _rows("SELECT coin, check_key, resolved, note, resolved_at FROM manual_checks")
     out: dict[str, dict] = {}
     for r in rows:
         out.setdefault(r["coin"], {})[r["check_key"]] = dict(r)
@@ -335,8 +346,7 @@ def save_commentary(coin: str, lang: str, *, scan_id: int | None, text: str | No
 
 
 def commentary_for(coin: str, lang: str) -> dict | None:
-    row = connect().execute(
-        "SELECT * FROM commentary WHERE coin = ? AND lang = ?", (coin, lang)).fetchone()
+    row = _row("SELECT * FROM commentary WHERE coin = ? AND lang = ?", (coin, lang))
     return dict(row) if row else None
 
 
@@ -358,7 +368,7 @@ def prune(keep_scans: int) -> int:
 
 
 def get_kv(key: str, default=None):
-    row = connect().execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    row = _row("SELECT value FROM kv WHERE key = ?", (key,))
     return json.loads(row["value"]) if row else default
 
 
