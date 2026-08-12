@@ -5,14 +5,19 @@ sentences of plain language about it. It never produces, adjusts, or second-gues
 price, level, score, or verdict — the analysis is deterministic and does not need a
 model's opinion.
 
-Two defences enforce that, because a local model hallucinating a stop-loss into a
+Three defences enforce that, because a local model hallucinating a stop-loss into a
 trading dashboard is the worst thing this project could do:
 
 1. The prompt carries a curated fact sheet and instructs the model to write no
    numerals at all.
 2. `validate_numbers()` re-reads the output and rejects it if it contains any number
-   that is not present in the input. Rejected commentary is dropped and the reason is
-   surfaced, never silently swallowed.
+   that is not present in the input.
+3. `validate_confirmation()` rejects prose claiming the analysis is settled while
+   manual checks are still open — a factual inversion with no digits in it, which the
+   number guard cannot see and which is the most dangerous thing a provisional TAKE
+   could say.
+
+Rejected commentary is dropped and the reason surfaced, never silently swallowed.
 
 Ollama is never a hard dependency. If it is missing, commentary is disabled and every
 other part of the dashboard works normally.
@@ -451,8 +456,8 @@ _SYSTEM = (
     "- Do NOT offer an opinion on whether to trade, and do not contradict, adjust or "
     "second-guess the verdict you were given.\n"
     "- Do NOT invent any fact that is not in the input.\n"
-    "- If unresolved manual checks are listed, say plainly that the verdict is not "
-    "yet confirmed."
+    "- If `verdict_is_confirmed` is false you MUST say the verdict is not yet "
+    "confirmed and still needs manual checks. Never state or imply the opposite."
 )
 
 _LANG_INSTRUCTION = {
@@ -467,6 +472,11 @@ def build_facts(coin: str, plan: dict, unresolved: list[str]) -> dict:
 
     Deliberately small and mostly non-numeric: the less numeric material in the
     prompt, the less there is for the model to misquote.
+
+    Confirmation status is given as a single flag rather than a list. Handed the
+    list, qwen2.5:3b wrote "There are no unresolved manual checks ... but there are
+    two ... that still need confirmation" — self-contradictory, and wrong on the one
+    fact that decides whether a TAKE is safe to act on.
     """
     qual = plan.get("qualification") or {}
     return {
@@ -480,9 +490,35 @@ def build_facts(coin: str, plan: dict, unresolved: list[str]) -> dict:
                                 if not g["passed"]],
         "blockers": plan.get("blockers") or [],
         "warnings": plan.get("warnings") or [],
-        "unresolved_manual_checks": unresolved,
+        "verdict_is_confirmed": not unresolved,
         "stop_source": (plan.get("levels") or {}).get("stop_source"),
     }
+
+
+# Phrases that assert the analysis is settled. Checked only when it is not.
+_CLAIMS_CONFIRMED = (
+    "no unresolved", "no outstanding", "no pending", "nothing pending",
+    "all confirmed", "fully confirmed", "all checks", "no manual check",
+    "no further check", "ready to execute", "no remaining",
+    "بدون بررسی", "همه تأیید", "تأیید شده است", "نیازی به بررسی",
+)
+
+
+def validate_confirmation(text: str, confirmed: bool) -> tuple[bool, str | None]:
+    """Reject prose claiming the verdict is settled when it is not.
+
+    The number guard cannot see this: "there are no unresolved manual checks" is a
+    factual inversion with no digits in it. On a provisional TAKE it is the single
+    most dangerous sentence the model could write, so it gets its own check.
+    """
+    if confirmed:
+        return True, None
+    low = text.lower()
+    for phrase in _CLAIMS_CONFIRMED:
+        if phrase in low:
+            return False, (f"output claimed the analysis was settled ('{phrase}') "
+                           f"while manual checks are still unresolved")
+    return True, None
 
 
 def commentary(coin: str, plan: dict, unresolved: list[str], lang: str = "en") -> dict:
@@ -530,10 +566,11 @@ def commentary(coin: str, plan: dict, unresolved: list[str], lang: str = "en") -
         return {"status": "unavailable", "text": None, "model": model,
                 "reason": "empty response"}
 
-    ok, why = validate_numbers(text, facts)
-    if not ok:
-        log.warning("commentary for %s rejected: %s", coin, why)
-        return {"status": "rejected", "text": None, "model": model, "reason": why}
+    for ok, why in (validate_numbers(text, facts),
+                    validate_confirmation(text, facts["verdict_is_confirmed"])):
+        if not ok:
+            log.warning("commentary for %s rejected: %s", coin, why)
+            return {"status": "rejected", "text": None, "model": model, "reason": why}
     return {"status": "ok", "text": _trim_sentences(text, 4), "model": model,
             "reason": None}
 
