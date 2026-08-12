@@ -14,10 +14,49 @@
   "skill_dir": "/Users/sadjad/.claude/skills/crypto-leverage-trade-plan",
   "llm": {
     "enabled": true,
-    "model": null,
+    "model": "qwen2.5:3b-instruct-q4_K_M",
     "host": "http://127.0.0.1:11434",
     "timeout_seconds": 120,
     "mode": "on_demand",
-    "decision": null
+    "decision": {
+      "model": "qwen2.5:3b-instruct-q4_K_M",
+      "suitable": true,
+      "comfortable": false,
+      "reasoning": [
+        "No GPU acceleration (Intel Iris Plus Graphics 645), so inference runs on 8 CPU cores and will be slow. Commentary is generated on demand rather than for every coin in a scan.",
+        "8.0 GB RAM total, about 5 GB usable for a model after leaving room for the OS.",
+        "Selected qwen2.5:3b-instruct-q4_K_M (3.1B, Q4_K_M). This is below the ~7B this job really wants, so expect serviceable English and weaker Persian. It is the best of what is installed, not a model I would choose for Persian commentary.",
+        "Persian commentary is disabled on qwen2.5:3b-instruct-q4_K_M. Tested on this machine it produced Farsi that misdescribed the analysis, not merely clumsy phrasing. English from the same model is fine. For Persian, `ollama pull qwen2.5:7b-instruct-q4_K_M` (needs about 5.6 GB against roughly 5 GB usable here, so it will lean on swap and run slowly — but it is the smallest model that produces trustworthy Persian for this task). Set llm.allow_weak_persian to true in config/settings.json to use it anyway."
+      ],
+      "hardware": {
+        "platform": "Darwin 24.6.0",
+        "arch": "x86_64",
+        "cpu_cores": 8,
+        "cpu_model": "Intel(R) Core(TM) i5-8257U CPU @ 1.40GHz",
+        "total_ram_gb": 8.0,
+        "gpu": "Intel Iris Plus Graphics 645",
+        "vram_mb": 1536,
+        "unified_memory": false,
+        "accelerated": false
+      },
+      "recommendation": {
+        "model": "qwen2.5:3b-instruct-q4_K_M",
+        "parameters_b": 3.1,
+        "why": "runs almost anywhere, but Persian is noticeably weaker",
+        "estimated_ram_gb": 2.9,
+        "command": "ollama pull qwen2.5:3b-instruct-q4_K_M"
+      },
+      "commentary_enabled": true,
+      "parameters_b": 3.1,
+      "persian_ok": false,
+      "persian_upgrade": {
+        "model": "qwen2.5:7b-instruct-q4_K_M",
+        "parameters_b": 7.6,
+        "estimated_ram_gb": 5.6,
+        "command": "ollama pull qwen2.5:7b-instruct-q4_K_M",
+        "fits_comfortably": false,
+        "caveat": "needs about 5.6 GB against roughly 5 GB usable here, so it will lean on swap and run slowly — but it is the smallest model that produces trustworthy Persian for this task"
+      }
+    }
   }
 }
