@@ -146,13 +146,14 @@ _CLIENT_SNIPPETS = {
 }
 
 
-def snapshot(symbol: str, profile: str, count: int = 300,
-             want_candles: bool = True) -> tuple[dict, dict]:
-    """Run `nobitex_api.py snapshot`.
+def analyze(symbol: str, profile: str, *, capital: float, risk_pct: float,
+            count: int = 300, exchange: str = "nobitex", hold_hours: float = 0.0,
+            account_level: int | None = None,
+            want_candles: bool = True) -> tuple[dict, dict, dict, dict]:
+    """Snapshot then plan, in that order, sharing one temp directory.
 
-    Returns (snapshot_json, candles_by_role). The snapshot itself stores only scalar
-    indicators, so `--save-csv` is used to capture the raw OHLCV the chart needs —
-    same API calls, no extra requests.
+    Returns (snapshot, plan, candles_by_role, side_info). The planner reads the
+    snapshot from disk, so both calls have to see the same file.
     """
     with tempfile.TemporaryDirectory(prefix="scan-") as tmp:
         out = Path(tmp) / "snap.json"
@@ -166,7 +167,12 @@ def snapshot(symbol: str, profile: str, count: int = 300,
                              or f"snapshot exited {proc.returncode}")
         snap = json.loads(out.read_text(encoding="utf-8"))
         candles = _collect_csvs(Path(tmp), snap) if want_candles else {}
-    return snap, candles
+
+        side, side_info = side_from_direction(snap)
+        built = plan(str(out), side, capital, profile=profile, risk_pct=risk_pct,
+                     exchange=exchange, hold_hours=hold_hours,
+                     account_level=account_level)
+    return snap, built, candles, side_info
 
 
 def plan(snapshot_path: str, side: str, capital: float, *, profile: str,

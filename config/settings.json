@@ -1,0 +1,23 @@
+{
+  "profile": "intraday",
+  "capital": 1000.0,
+  "capital_currency": "USDT",
+  "risk_pct": 1.0,
+  "scan_interval_minutes": 15,
+  "language": "en",
+  "exchange": "nobitex",
+  "hold_hours": 8.0,
+  "account_level": null,
+  "candle_count": 300,
+  "chart_candles": 180,
+  "keep_scans": 40,
+  "skill_dir": "/Users/sadjad/.claude/skills/crypto-leverage-trade-plan",
+  "llm": {
+    "enabled": true,
+    "model": null,
+    "host": "http://127.0.0.1:11434",
+    "timeout_seconds": 120,
+    "mode": "on_demand",
+    "decision": null
+  }
+}

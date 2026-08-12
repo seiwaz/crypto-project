@@ -36,7 +36,9 @@ DEFAULT_SKILL_DIR = Path.home() / ".claude" / "skills" / "crypto-leverage-trade-
 
 DEFAULTS = {
     "profile": "intraday",
-    "capital": 10000.0,
+    # Sized to sit inside Nobitex's pool depth: at 10,000 USDT even BTC fails the
+    # liquidity-depth gate, which would report your position size as a market defect.
+    "capital": 1000.0,
     # Which currency `capital` is denominated in. Markets quoted in the other
     # currency are converted at the live USDTIRT rate, which is recorded per scan.
     "capital_currency": "USDT",
@@ -44,7 +46,9 @@ DEFAULTS = {
     "scan_interval_minutes": 15,
     "language": "en",
     "exchange": "nobitex",
-    "hold_hours": 24.0,
+    # One 8h renewal period. This feeds the renewal-fee calculation and moves
+    # verdicts materially — at 24h the extra charges fail the cost gate on their own.
+    "hold_hours": 8.0,
     "account_level": None,
     "candle_count": 300,
     "chart_candles": 180,
