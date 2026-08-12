@@ -148,10 +148,15 @@ trade_plan.py  plan --snapshot <tmp> --side <derived> --capital <cap> --json
 `--save-csv` captures the raw OHLCV for the chart at no extra API cost — the snapshot
 JSON stores only scalar indicators.
 
-A full 36-coin pass takes about 6.5 minutes: the skill serialises requests with a ~1.1s
-floor, and each coin costs roughly five calls. That gap is re-enforced *across* process
-boundaries here, because the skill's own limiter lives inside a single process and we
-spawn one per coin. Scans run in a background thread; page loads never wait on them.
+A full 36-coin pass takes **7–8 minutes** (measured: 423s, 460s). The skill serialises
+requests with a ~1.1s floor and each coin costs roughly five calls. That gap is
+re-enforced *across* process boundaries here, because the skill's own limiter lives
+inside a single process and we spawn one per coin. Scans run in a background thread;
+page loads never wait on them.
+
+Steady-state resource use, measured over a 30-minute watch: ~27 MB RSS, 42 open file
+descriptors, both flat across scans. If you see either climbing, that is a bug — one
+such leak is described in the commit history.
 
 ### Choosing which coins to screen
 
