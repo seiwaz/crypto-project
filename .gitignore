@@ -1,0 +1,26 @@
+# Credentials — never commit. NOBITEX_API_KEY / NOBITEX_API_SECRET live here.
+.env
+.env.local
+
+# Runtime state
+.venv/
+var/
+*.log
+*.pid
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Generated at first run by symbol discovery; regenerate with `./run.sh setup`
+config/watchlist.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store
