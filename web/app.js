@@ -206,6 +206,13 @@ function buildCard(card) {
     if (card.levels && card.levels.entry !== undefined) {
       line.append(' ', document.createTextNode(`${t('pos.entry')} `), num(card.levels.entry));
     }
+    /* Say why on the collapsed row. Sorting puts a SKIP scoring 87 above a TAKE
+     * scoring 70 — correct, since a gate failure is decisive regardless of score —
+     * but it reads as a contradiction unless the failing gate is right there. */
+    const reason = (card.gates_failed || []).map(ts).join(' · ');
+    if (reason) {
+      line.append(' ', el('span', { class: 'card__reason', text: `— ${reason}` }));
+    }
   }
   idBlock.append(line);
 
@@ -461,11 +468,24 @@ function chartBlock(card) {
   const host = el('div', { class: 'chart__canvas', attrs: { 'data-chart': card.coin } });
   wrap.append(host);
   wrap.append(el('div', { class: 'chart__legend' }, [
+    candleKey(t('chart.legend.up'), false),
+    candleKey(t('chart.legend.down'), true),
     legendKey(t('chart.legend.ema20'), 'var(--series-1)'),
     legendKey(t('chart.legend.ema50'), 'var(--series-2)'),
     legendKey(t('chart.legend.ema200'), 'var(--series-3)'),
   ]));
   return wrap;
+}
+
+/* The hollow/solid candle encoding has to be stated, or it is a private joke. */
+function candleKey(label, filled) {
+  return el('span', { class: 'chart__key' }, [
+    el('span', {
+      class: 'chart__candle',
+      attrs: { style: filled ? 'background:var(--candle)' : 'background:transparent', 'aria-hidden': 'true' },
+    }),
+    el('span', { text: label }),
+  ]);
 }
 
 function legendKey(label, colour) {
@@ -524,11 +544,20 @@ async function renderChart(card) {
     localization: { locale: 'en-US' },
   });
 
+  /* Candles are deliberately not green/red. Direction is encoded by fill — hollow
+   * for up, solid for down — which is a shape channel, so it survives colour
+   * blindness and greyscale. It also frees the colour channel entirely for the three
+   * EMAs: with green candles, the aqua EMA 200 read as price data rather than as a
+   * moving average. Quiet candles, coloured overlays. */
+  const candleInk = cssVar('--candle');
   const candleSeries = chart.addCandlestickSeries({
-    upColor: cssVar('--up'), downColor: cssVar('--down'),
-    borderUpColor: cssVar('--up'), borderDownColor: cssVar('--down'),
-    wickUpColor: cssVar('--up'), wickDownColor: cssVar('--down'),
+    upColor: 'rgba(0,0,0,0)', downColor: candleInk,
+    borderUpColor: candleInk, borderDownColor: candleInk,
+    wickUpColor: candleInk, wickDownColor: candleInk,
     priceFormat,
+    /* The entry level is the snapshot's last price, so the series' own last-value
+     * label is the same number as the Entry line and the two collide on the axis. */
+    lastValueVisible: false, priceLineVisible: false,
   });
   candleSeries.setData(candles.map((c) => ({
     time: toTime(c.timestamp), open: c.open, high: c.high, low: c.low, close: c.close,

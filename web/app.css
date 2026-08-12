@@ -62,10 +62,11 @@
   --series-3:       #1baf7a;
   --up:             #1baf7a;
   --down:           #e34948;
+  --candle:        #6f6e6a;
 
   --radius:         10px;
   --radius-sm:      6px;
-  --gap:            clamp(0.75rem, 1.2vw, 1.15rem);
+  --gap:            clamp(0.4rem, 0.7vw, 0.6rem);
   --card-pad:       clamp(0.95rem, 1.4vw, 1.35rem);
 
   --font-ui: "Vazirmatn", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -91,6 +92,7 @@
     --series-3:     #199e70;
     --up:           #199e70;
     --down:         #e66767;
+    --candle:        #9a9891;
     --shadow:       none;
   }
 }
@@ -113,6 +115,7 @@
   --series-3:     #199e70;
   --up:           #199e70;
   --down:         #e66767;
+  --candle:        #9a9891;
   --shadow:       none;
 }
 
@@ -243,10 +246,13 @@ main { max-width: 1180px; margin-inline: auto; padding: var(--gap) clamp(1rem, 3
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 0.85rem;
-  padding: var(--card-pad);
+  /* Tight rows on purpose: 36 coins should be flickable, and a collapsed card
+     carries one line of content — it does not need card-sized padding. */
+  padding: 0.6rem var(--card-pad);
   border-inline-start: 3px solid var(--verdict-colour, var(--rule));
   cursor: pointer;
 }
+.card__reason { color: var(--ink-muted); font-size: 0.76rem; }
 .card__head::-webkit-details-marker { display: none; }
 
 .badge {
@@ -283,7 +289,8 @@ main { max-width: 1180px; margin-inline: auto; padding: var(--gap) clamp(1rem, 3
 .card__coin { display: flex; align-items: baseline; gap: 0.45rem; }
 .card__coin strong { font-size: 1.02rem; font-weight: 600; }
 .card__symbol { font-size: 0.76rem; color: var(--ink-muted); }
-.card__line { font-size: 0.79rem; color: var(--ink-2); }
+.card__line { font-size: 0.79rem; color: var(--ink-2); display: flex;
+  align-items: baseline; gap: 0.35rem; flex-wrap: wrap; }
 
 .card__meta { text-align: end; font-size: 0.75rem; color: var(--ink-muted); }
 
@@ -334,6 +341,11 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 }
 .chart__key { display: inline-flex; align-items: center; gap: 0.32rem; }
 .chart__swatch { inline-size: 14px; block-size: 2px; border-radius: 1px; flex: none; }
+/* Hollow vs solid is the candle's direction channel, so the legend shows both. */
+.chart__candle {
+  inline-size: 7px; block-size: 12px; flex: none;
+  border: 1px solid var(--candle); border-radius: 1px;
+}
 .chart__placeholder {
   block-size: 240px; display: grid; place-items: center;
   color: var(--ink-muted); font-size: 0.8rem;
