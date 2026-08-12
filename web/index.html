@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Crypto Screener</title>
+<link rel="stylesheet" href="./app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◧</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <div class="brand">
+      <h1 data-i18n="app.title">Crypto Screener</h1>
+      <span data-i18n="app.subtitle">Read-only analysis · Nobitex</span>
+    </div>
+
+    <div class="field">
+      <label for="profile" data-i18n="bar.profile">Profile</label>
+      <select id="profile">
+        <option value="scalp" data-i18n="bar.profile.scalp">Scalp</option>
+        <option value="intraday" data-i18n="bar.profile.intraday">Intraday</option>
+        <option value="swing" data-i18n="bar.profile.swing">Swing</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="capital" data-i18n="bar.capital">Capital</label>
+      <input id="capital" type="number" min="1" step="any" dir="ltr" inputmode="decimal">
+    </div>
+
+    <div class="field">
+      <label for="risk" data-i18n="bar.risk">Risk %</label>
+      <input id="risk" type="number" min="0.01" max="100" step="0.05" dir="ltr" inputmode="decimal" style="inline-size:4.2rem">
+    </div>
+
+    <div class="field">
+      <label for="interval" data-i18n="bar.interval">Scan every</label>
+      <input id="interval" type="number" min="1" step="1" dir="ltr" inputmode="numeric" style="inline-size:4rem">
+      <span style="font-size:.75rem;color:var(--ink-muted)" data-i18n="bar.minutes">min</span>
+    </div>
+
+    <div class="scan" id="scanStatus">
+      <span class="scan__dot"></span>
+      <span id="scanText"></span>
+      <span class="progress" id="scanProgress" hidden><span class="progress__bar" id="scanBar"></span></span>
+    </div>
+
+    <button class="btn" id="rescan" data-i18n="bar.rescan">Rescan all</button>
+    <button class="btn btn--ghost" id="langToggle" data-i18n="bar.language">فارسی</button>
+    <button class="btn btn--ghost" id="settingsToggle" aria-haspopup="dialog" data-i18n="bar.settings">Settings</button>
+
+    <div class="filters" id="filters" role="group" aria-label="Filter by verdict"></div>
+  </div>
+</header>
+
+<main>
+  <div class="board" id="board"></div>
+
+  <details class="unavailable" id="unavailable" hidden>
+    <summary>
+      <span data-i18n="unavail.title">Not scanned</span>
+      <span class="unavailable__why" id="unavailCount"></span>
+    </summary>
+    <div class="unavailable__grid" id="unavailGrid"></div>
+  </details>
+
+  <p class="footer-note" id="footerNote" data-i18n="app.readonly">
+    Read-only. This tool never places orders.
+  </p>
+</main>
+
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="drawerTitle" hidden>
+  <div class="drawer__head">
+    <h2 id="drawerTitle" style="font-size:.95rem" data-i18n="settings.title">Settings</h2>
+    <button class="btn btn--ghost" id="drawerClose" aria-label="Close">✕</button>
+  </div>
+  <div id="drawerBody"></div>
+</aside>
+
+<script src="./vendor/lightweight-charts.standalone.production.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

@@ -4,7 +4,7 @@
   "capital_currency": "USDT",
   "risk_pct": 1.0,
   "scan_interval_minutes": 15,
-  "language": "en",
+  "language": "fa",
   "exchange": "nobitex",
   "hold_hours": 8.0,
   "account_level": null,
