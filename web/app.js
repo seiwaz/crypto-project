@@ -422,6 +422,17 @@ function qualificationBlock(card) {
   return d;
 }
 
+/* The backend explains itself in English. Render the localised version when we have
+ * a code for it, and only fall back to the raw English when we do not — an English
+ * paragraph inside the Persian UI is exactly what this avoids. */
+function reasonText(c) {
+  if (c.reason_code) {
+    const key = `comment.reason.${c.reason_code}`;
+    if (state.strings[key] !== undefined) return t(key, c.reason_params || {});
+  }
+  return c.reason || '';
+}
+
 function commentaryBlock(card) {
   const c = card.commentary || {};
   const wrap = el('div', { class: 'commentary' });
@@ -447,12 +458,15 @@ function commentaryBlock(card) {
   if (c.status === 'ok' && c.text) {
     wrap.append(el('p', { class: 'commentary__text', dir: 'auto', text: c.text }));
     wrap.append(el('div', { class: 'commentary__meta', text: `${t('comment.model')}: ${c.model || '—'}` }));
-  } else if (c.status === 'rejected') {
-    wrap.append(el('p', { class: 'commentary__text', text: t('comment.rejected') }));
-    wrap.append(el('div', { class: 'commentary__meta', dir: 'auto', text: c.reason || '' }));
   } else if (c.status) {
-    wrap.append(el('p', { class: 'commentary__text', text: t('comment.unavailable') }));
-    wrap.append(el('div', { class: 'commentary__meta', dir: 'auto', text: c.reason || '' }));
+    const headline = c.status === 'rejected' ? t('comment.rejected') : t('comment.unavailable');
+    wrap.append(el('p', { class: 'commentary__text', text: headline }));
+    wrap.append(el('div', { class: 'commentary__meta', dir: 'auto', text: reasonText(c) }));
+    /* A shell command must stay one unbreakable LTR run. Interpolated into a Persian
+     * sentence it wrapped mid-command — "ollama" on one line, "pull qwen…" on the
+     * next — which is not a command anyone can copy. */
+    const cmd = (c.reason_params || {}).command;
+    if (cmd) wrap.append(el('code', { class: 'cmd', dir: 'ltr', text: cmd }));
   } else {
     wrap.append(el('p', { class: 'commentary__text', text: t('comment.none') }));
   }

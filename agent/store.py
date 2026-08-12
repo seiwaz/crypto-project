@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS commentary (
     model      TEXT,
     status     TEXT,                       -- ok | rejected | unavailable
     reason     TEXT,
+    reason_code   TEXT,                    -- machine-readable, so the UI can localise
+    reason_params TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (coin, lang)
 );
@@ -125,9 +127,22 @@ def tx():
         raise
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS will not add a
+# column to a table that already exists, so an existing database would keep working
+# right up until the first read of the new field.
+_MIGRATIONS = (
+    ("commentary", "reason_code", "TEXT"),
+    ("commentary", "reason_params", "TEXT"),
+)
+
+
 def init() -> None:
     with tx() as conn:
         conn.executescript(SCHEMA)
+        for table, column, coltype in _MIGRATIONS:
+            existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 # --------------------------------------------------------------------------------
@@ -307,13 +322,16 @@ def all_manual_checks() -> dict:
 
 
 def save_commentary(coin: str, lang: str, *, scan_id: int | None, text: str | None,
-                    model: str | None, status: str, reason: str | None = None) -> None:
+                    model: str | None, status: str, reason: str | None = None,
+                    reason_code: str | None = None,
+                    reason_params: dict | None = None) -> None:
     with tx() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO commentary "
-            "(coin, lang, scan_id, text, model, status, reason, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (coin, lang, scan_id, text, model, status, reason, now_iso()))
+            "(coin, lang, scan_id, text, model, status, reason, reason_code, "
+            " reason_params, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (coin, lang, scan_id, text, model, status, reason, reason_code,
+             json.dumps(reason_params or {}, ensure_ascii=False), now_iso()))
 
 
 def commentary_for(coin: str, lang: str) -> dict | None:

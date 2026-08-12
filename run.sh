@@ -116,6 +116,10 @@ PY
 
   say ""
   say "${c_bold}Symbol discovery${c_reset}"
+  if [[ -f "$ROOT/config/coins.txt" ]]; then
+    n="$("$PY" -c 'from agent import config; print(len(config.load_coins()))')"
+    say "  reading $n coins from config/coins.txt — edit that file to change the list"
+  fi
   "$PY" -m agent.discover || warn "discovery failed — check network access to Nobitex"
 
   say ""

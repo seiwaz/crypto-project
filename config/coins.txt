@@ -1,0 +1,62 @@
+# Coins to screen — one per line.
+#
+# Write the plain ticker, not a Nobitex symbol: BTC, not BTCUSDT. Discovery works out
+# the real market for each one (preferring USDT, falling back to IRT) and handles
+# Nobitex's scaled lots, so SHIB resolves to 1K_SHIBUSDT on its own.
+#
+# Blank lines and lines starting with # are ignored. Case does not matter.
+# Anything that is not listed, or is listed for spot only, still appears in the
+# dashboard's "not scanned" section with the reason — nothing is silently dropped.
+#
+# After editing, run:  ./run.sh setup     (re-runs discovery against this list)
+
+BTC
+ETH
+BNB
+XRP
+SOL
+TRX
+HYPE
+DOGE
+ZEC
+ADA
+LINK
+XLM
+BCH
+GRAM
+LTC
+HBAR
+SUI
+AVAX
+SHIB
+TAO
+CRO
+UNI
+NEAR
+WLFI
+ONDO
+ASTER
+MNT
+AAVE
+DOT
+ICP
+WLD
+PEPE
+PUMP
+MORPHO
+ETC
+ENA
+POL
+ATOM
+ALGO
+KAS
+RENDER
+FIL
+JUP
+ARB
+APT
+INJ
+CRV
+PENGU
+VET
+TIA

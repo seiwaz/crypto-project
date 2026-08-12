@@ -154,6 +154,8 @@ def state_payload() -> dict:
             commentary_rows[coin] = {
                 "status": rec["status"], "text": rec["text"],
                 "model": rec["model"], "reason": rec["reason"],
+                "reason_code": rec["reason_code"],
+                "reason_params": json.loads(rec["reason_params"] or "{}"),
                 "created_at": rec["created_at"], "lang": lang,
             }
 
@@ -221,6 +223,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):  # quieter, and into our logger
         log.debug("%s - %s", self.address_string(), fmt % args)
+
+    def handle_one_request(self):
+        """Swallow the client hanging up mid-request.
+
+        A browser closing a keep-alive socket raises inside the base class's own
+        request-line read, before do_GET is ever entered, so the try/except in the
+        verbs cannot see it. Left alone it prints a full traceback per navigation and
+        buries real errors in the log.
+        """
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError, TimeoutError):
+            self.close_connection = True
 
     # -- helpers ----------------------------------------------------------------
 
@@ -374,7 +389,8 @@ class Handler(BaseHTTPRequestHandler):
         out = llm.commentary(coin, plan, unresolved, lang)
         store.save_commentary(coin, lang, scan_id=row["scan_id"], text=out["text"],
                               model=out["model"], status=out["status"],
-                              reason=out["reason"])
+                              reason=out["reason"], reason_code=out.get("reason_code"),
+                              reason_params=out.get("reason_params"))
         out["lang"] = lang
         return self._json(out)
 

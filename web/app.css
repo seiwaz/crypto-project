@@ -363,7 +363,32 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 .manual--open { border-color: var(--warning); background: rgba(250, 178, 25, 0.07); }
 .manual__note { font-size: 0.76rem; color: var(--ink-2); margin-block: 0.3rem 0.55rem; }
 .check { display: flex; align-items: flex-start; gap: 0.5rem; padding-block: 0.28rem; font-size: 0.83rem; }
-.check input { margin-block-start: 0.28rem; accent-color: var(--accent); flex: none; }
+/* These two checkboxes are the most consequential controls on the page — they are
+   what turns a provisional TAKE into a confirmed one. The native dark-mode checkbox
+   renders as a dim grey square that does not read as interactive, so they are drawn
+   explicitly and given a real hit target. */
+.check input {
+  appearance: none;
+  inline-size: 1.05rem; block-size: 1.05rem;
+  margin: 0.18rem 0 0;
+  flex: none;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--raised);
+  cursor: pointer;
+  display: grid; place-content: center;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.check input:hover { border-color: var(--accent); }
+.check input:checked { background: var(--accent); border-color: var(--accent); }
+.check input:checked::after {
+  content: "";
+  inline-size: 0.28rem; block-size: 0.55rem;
+  border: solid #fff; border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+.check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.check label { cursor: pointer; }
 .check__body { display: flex; flex-direction: column; gap: 0.1rem; }
 .check__meta { font-size: 0.72rem; color: var(--ink-muted); }
 .check__stale { color: var(--serious); }
@@ -408,6 +433,20 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 }
 .commentary__text { font-size: 0.86rem; color: var(--ink-2); margin-block-start: 0.35rem; }
 .commentary__meta { font-size: 0.72rem; color: var(--ink-muted); margin-block-start: 0.3rem; }
+.cmd {
+  display: block;
+  unicode-bidi: isolate;
+  margin-block-start: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--plane);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--ink-2);
+  overflow-x: auto;
+  white-space: nowrap;
+}
 
 /* Unavailable */
 

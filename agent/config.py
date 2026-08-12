@@ -21,16 +21,41 @@ DB_PATH = VAR_DIR / "screener.sqlite3"
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
 WATCHLIST_PATH = CONFIG_DIR / "watchlist.json"
 
-# The coins the user asked for, in their original order. This list is the *request*;
-# config/watchlist.json is the *answer* — what each coin actually resolved to on
-# Nobitex. Never treat these as tradeable symbols directly.
-REQUESTED_COINS = [
+COINS_PATH = CONFIG_DIR / "coins.txt"
+
+# Seed list, used only to create config/coins.txt the first time. The file is the
+# source of truth afterwards, so editing it is how you change what gets screened —
+# there is no coin list baked into the code to drift out of sync with it.
+SEED_COINS = [
     "BTC", "ETH", "BNB", "XRP", "SOL", "TRX", "HYPE", "DOGE", "ZEC", "ADA",
     "LINK", "XLM", "BCH", "GRAM", "LTC", "HBAR", "SUI", "AVAX", "SHIB", "TAO",
     "CRO", "UNI", "NEAR", "WLFI", "ONDO", "ASTER", "MNT", "AAVE", "DOT", "ICP",
     "WLD", "PEPE", "PUMP", "MORPHO", "ETC", "ENA", "POL", "ATOM", "ALGO", "KAS",
     "RENDER", "FIL", "JUP", "ARB", "APT", "INJ", "CRV", "PENGU", "VET", "TIA",
 ]
+
+
+def load_coins() -> list[str]:
+    """Read config/coins.txt — one ticker per line, # comments, blanks ignored.
+
+    These are the coins the user *asked for*, not tradeable symbols.
+    config/watchlist.json is the answer: what each one actually resolved to.
+    Duplicates are collapsed and order is preserved, so the file reads the way the
+    board is ordered before scoring.
+    """
+    try:
+        raw = COINS_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return list(SEED_COINS)
+    seen, out = set(), []
+    for line in raw.splitlines():
+        token = line.split("#", 1)[0].strip().upper()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out or list(SEED_COINS)
+
 
 DEFAULT_SKILL_DIR = Path.home() / ".claude" / "skills" / "crypto-leverage-trade-plan"
 

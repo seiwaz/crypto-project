@@ -526,7 +526,8 @@ def commentary(coin: str, plan: dict, unresolved: list[str], lang: str = "en") -
     llm_cfg = settings.get("llm") or {}
     if not llm_cfg.get("enabled") or not llm_cfg.get("model"):
         return {"status": "unavailable", "text": None, "model": None,
-                "reason": "commentary disabled or no model selected"}
+                "reason": "commentary disabled or no model selected",
+                "reason_code": "no_model", "reason_params": {}}
 
     decision = llm_cfg.get("decision") or {}
     if (lang == "fa" and not decision.get("persian_ok")
@@ -540,7 +541,13 @@ def commentary(coin: str, plan: dict, unresolved: list[str], lang: str = "en") -
                            f"on this task; its Farsi misdescribed the analysis in "
                            f"testing. English commentary is available. For Persian: "
                            f"{up.get('command', 'ollama pull qwen2.5:7b-instruct-q4_K_M')}"
-                           f"{caveat}")}
+                           f"{caveat}"),
+                "reason_code": "persian_needs_bigger_model",
+                "reason_params": {
+                    "model": llm_cfg.get("model"),
+                    "minimum": f"{MIN_PARAMS_FOR_PERSIAN_B:g}",
+                    "command": up.get("command", "ollama pull qwen2.5:7b-instruct-q4_K_M"),
+                }}
 
     facts = build_facts(coin, plan, unresolved)
     prompt = (f"{_LANG_INSTRUCTION.get(lang, _LANG_INSTRUCTION['en'])}\n\n"
@@ -559,20 +566,24 @@ def commentary(coin: str, plan: dict, unresolved: list[str], lang: str = "en") -
         }, timeout=int(llm_cfg.get("timeout_seconds", 120)))
     except Exception as exc:
         return {"status": "unavailable", "text": None, "model": model,
-                "reason": f"Ollama call failed: {exc}"}
+                "reason": f"Ollama call failed: {exc}",
+                "reason_code": "call_failed", "reason_params": {"detail": str(exc)}}
 
     text = ((resp or {}).get("message") or {}).get("content", "").strip()
     if not text:
         return {"status": "unavailable", "text": None, "model": model,
-                "reason": "empty response"}
+                "reason": "empty response",
+                "reason_code": "empty_response", "reason_params": {}}
 
-    for ok, why in (validate_numbers(text, facts),
-                    validate_confirmation(text, facts["verdict_is_confirmed"])):
+    for code, (ok, why) in (("rejected_number", validate_numbers(text, facts)),
+                            ("rejected_confirmation",
+                             validate_confirmation(text, facts["verdict_is_confirmed"]))):
         if not ok:
             log.warning("commentary for %s rejected: %s", coin, why)
-            return {"status": "rejected", "text": None, "model": model, "reason": why}
+            return {"status": "rejected", "text": None, "model": model, "reason": why,
+                    "reason_code": code, "reason_params": {}}
     return {"status": "ok", "text": _trim_sentences(text, 4), "model": model,
-            "reason": None}
+            "reason": None, "reason_code": None, "reason_params": {}}
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?؟])\s+")

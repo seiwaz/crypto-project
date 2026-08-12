@@ -104,7 +104,8 @@ def resolve(stats_payload: dict, fee_payload=None,
     margin_coins, margin_note = _margin_currencies(fee_payload, fee_error)
 
     entries = []
-    for coin in config.REQUESTED_COINS:
+    requested = config.load_coins()
+    for coin in requested:
         low = coin.lower()
         entry = {"coin": coin, "symbol": None, "quote": None, "status": NOT_LISTED,
                  "reason": None, "market_closed": None, "lot_size": 1,
@@ -166,7 +167,7 @@ def resolve(stats_payload: dict, fee_payload=None,
             "GET /margin/v2/delegation-limit rejects every parameter spelling tried "
             "(InvalidSymbol, symbol \"\"), so it cannot enumerate margin availability. "
             "/margin/fee-rates returns the same universe in one allowlisted call."),
-        "requested": len(config.REQUESTED_COINS),
+        "requested": len(requested),
         "coins": entries,
     }
 

@@ -153,9 +153,18 @@ floor, and each coin costs roughly five calls. That gap is re-enforced *across* 
 boundaries here, because the skill's own limiter lives inside a single process and we
 spawn one per coin. Scans run in a background thread; page loads never wait on them.
 
+### Choosing which coins to screen
+
+`config/coins.txt` is the list — one ticker per line, `#` for comments, blanks
+ignored. Write the plain ticker (`BTC`, not `BTCUSDT`); discovery works out the real
+market for each. Edit the file and re-run `./run.sh setup` to pick up the change.
+
+There is no coin list in the code, so the file cannot drift out of sync with what the
+scanner actually screens.
+
 ### Symbol discovery
 
-Do not assume `<COIN>USDT`. Of the 50 requested coins:
+Do not assume `<COIN>USDT`. Of the 50 coins shipped in `coins.txt`:
 
 - **36 are margin-tradeable** and get scanned
 - **7 are spot-only** — TAO, PUMP, MORPHO, ALGO, JUP, INJ, PENGU
