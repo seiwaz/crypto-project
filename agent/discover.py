@@ -161,6 +161,8 @@ def resolve(stats_payload: dict, fee_payload=None,
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "exchange": "nobitex",
+        "exchange_label": "Nobitex — معاملات تعهدی",
         "source": "GET /market/stats + GET /margin/fee-rates",
         "margin_detection": margin_note,
         "delegation_limit_note": (
@@ -218,9 +220,7 @@ def run(verbose: bool = True) -> dict:
     watchlist = resolve(stats, fees, fee_error)
     watchlist["usdt_irt"] = usdt_irt_rate(stats)
 
-    config.WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(config.WATCHLIST_PATH, "w", encoding="utf-8") as fh:
-        json.dump(watchlist, fh, indent=2, ensure_ascii=False)
+    config.save_watchlist("nobitex", watchlist)
 
     if verbose:
         report(watchlist)

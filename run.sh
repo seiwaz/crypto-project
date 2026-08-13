@@ -91,8 +91,13 @@ cmd_setup() {
   say "${c_bold}Credentials${c_reset}"
   if ! "$PY" - <<'PY'
 import json, sys
-from agent import config, skill
+from agent import config, exchange, skill
 config.load_dotenv()
+venue = exchange.adapter()
+print(f"  venue      : {venue.LABEL}")
+if not venue.needs_credentials:
+    print("  this venue needs no credentials — the screener uses public endpoints only")
+    sys.exit(0)
 st = config.credential_status()
 if not (st["api_key_set"] and st["api_secret_set"]) and not st["token_set"]:
     print("  no credentials in .env — public market data will still work,")
@@ -120,7 +125,8 @@ PY
     n="$("$PY" -c 'from agent import config; print(len(config.load_coins()))')"
     say "  reading $n coins from config/coins.txt — edit that file to change the list"
   fi
-  "$PY" -m agent.discover || warn "discovery failed — check network access to Nobitex"
+  "$PY" -c 'from agent import exchange; exchange.run_discovery()' \
+    || warn "discovery failed — check network access to the exchange"
 
   say ""
   say "${c_bold}Local model${c_reset}"
@@ -194,9 +200,11 @@ cmd_status() {
   fi
   [[ -x "$PY" ]] || { warn "no virtualenv — run ./run.sh setup"; return 0; }
   "$PY" - <<'PY'
-from agent import config, discover, llm, store
+from agent import config, exchange, llm, store
 config.load_dotenv()
 store.init()
+venue = exchange.adapter()
+print(f"  venue      : {venue.LABEL}")
 wl = config.load_watchlist()
 scan = store.latest_scan()
 
@@ -206,7 +214,7 @@ if wl:
         groups[c["status"]] = groups.get(c["status"], 0) + 1
     parts = ", ".join(f"{v} {k}" for k, v in sorted(groups.items()))
     print(f"  coins      : {wl.get('requested')} requested — {parts}")
-    print(f"  scannable  : {len(discover.scannable(wl))}")
+    print(f"  scannable  : {len(venue.scannable(wl))}")
 else:
     print("  coins      : no watchlist — run ./run.sh setup")
 

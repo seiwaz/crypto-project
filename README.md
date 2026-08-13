@@ -1,8 +1,18 @@
 # Crypto Screener
 
-A local, read-only screening dashboard for Nobitex margin markets. It scans a watchlist
-on a schedule and tells you, per coin, whether it is worth trading right now — and when
-it isn't, why not.
+A local, read-only screening dashboard for leveraged crypto markets. It scans a
+watchlist on a schedule and tells you, per coin, whether it is worth trading right
+now — and when it isn't, why not.
+
+Two venues are supported, switchable from the header:
+
+| | Toobit (default) | Nobitex |
+|---|---|---|
+| Instrument | USDT perpetuals | معاملات تعهدی (pool-backed margin) |
+| Coverage of the shipped list | 47 of 50 | 36 of 50 |
+| Credentials | **none needed** — all public | READ-only key required |
+| Funding rate | published, resolved automatically | not available |
+| Scan duration | ~5 min for 47 coins | ~7–8 min for 36 |
 
 **It places no orders.** Not now, and not by accident: see [Read-only](#read-only).
 
@@ -91,8 +101,14 @@ profit. A 78 does not mean a 78% chance of winning. Use it to compare candidates
 ### Provisional TAKEs
 
 Two direction checks — BTC/dominance alignment and funding-rate positioning — cannot be
-derived from Nobitex OHLCV. The skill returns them as `null` with a `MANUAL` marker
-rather than quietly passing them.
+derived from OHLCV. The skill returns them as `null` with a `MANUAL` marker rather
+than quietly passing them.
+
+**On Toobit both are settled from live data**: funding comes from the public funding
+endpoint, and BTC alignment from `BTC-SWAP-USDT` candles using the skill's own EMA
+logic. Each shows the figure it was resolved from, and the label says plainly that
+dominance is *not* covered — only the BTC leg. On Nobitex neither can be settled and
+both stay manual.
 
 A TAKE with unresolved manual checks is labelled **Provisional** and carries a banner
 saying it is not confirmed. Tick the checks yourself once you have looked them up.
@@ -169,11 +185,38 @@ scanner actually screens.
 
 ### Symbol discovery
 
-Do not assume `<COIN>USDT`. Of the 50 coins shipped in `coins.txt`:
+Do not assume `<COIN>USDT`. Each venue is enumerated live and everything that fails to
+resolve is shown with its reason rather than dropped.
 
-- **36 are margin-tradeable** and get scanned
-- **7 are spot-only** — TAO, PUMP, MORPHO, ALGO, JUP, INJ, PENGU
-- **7 are not listed at all** — CRO, WLFI, MNT, ICP, KAS, VET, TIA
+**Toobit** — 47 of the 50 resolve to perpetual contracts. `GRAM` and `MNT` have no
+contract; `PUMP` exists only as `PUMPBTC` and `PUMP2`, neither unambiguously the same
+asset, so it is reported rather than guessed at.
+
+**Nobitex** — 36 are margin-tradeable, 7 are spot-only (TAO, PUMP, MORPHO, ALGO, JUP,
+INJ, PENGU) and 7 are not listed (CRO, WLFI, MNT, ICP, KAS, VET, TIA).
+
+### Contracts are not coins
+
+Toobit trades contracts, and one contract is rarely one coin: `BTC-SWAP-USDT` is
+0.001 BTC, `CRO-SWAP-USDT` is 10 CRO, and `1000SHIB` carries its scale in the name.
+The skill sizes positions in coins, so every card shows **both** the coin quantity and
+the contract count. Entering the coin figure on a Toobit ticket would be wrong by up
+to three orders of magnitude.
+
+Order-book depth is quoted in contracts too, and is multiplied out before the
+liquidity gate sees it — without that, BTC's book reads 1000x thinner than it is.
+
+### Maintenance margin
+
+The planner's `generic-perp` profile assumes a 0.5% maintenance margin, and the skill
+exposes no flag to override it. Toobit publishes the real per-tier figure: 0.25% for
+BTC and ETH, but 0.67% for ADA and 2.5% for CRO.
+
+Where the real figure is **higher** than the assumption, the profile would place
+liquidation further away than it actually is — the one direction that cannot be left
+alone. Two things happen: the card shows both numbers with a warning, and if the
+planner's chosen leverage would not survive the real figure, the plan is re-run with a
+corrected leverage cap. Sizing still happens entirely inside `trade_plan.py`.
 
 Both groups are listed in a collapsed section at the bottom of the dashboard with the
 reason, rather than silently dropped.

@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 
-from . import config, discover, skill, store
+from . import config, exchange, skill, store
 
 log = logging.getLogger("scanner")
 
@@ -58,10 +58,11 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
     settings = config.load_settings()
     watchlist = config.load_watchlist()
 
+    venue = exchange.adapter()
     if not watchlist:
-        raise RuntimeError("config/watchlist.json is missing — run ./run.sh setup first")
+        raise RuntimeError(f"no watchlist for {venue.NAME} — run ./run.sh setup first")
 
-    targets = discover.scannable(watchlist)
+    targets = venue.scannable(watchlist)
     if coins:
         wanted = {c.upper() for c in coins}
         targets = [t for t in targets if t["coin"] in wanted]
@@ -69,6 +70,7 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
         raise RuntimeError("no scannable coins matched")
 
     usdt_irt = watchlist.get("usdt_irt")
+    log.info("venue: %s", venue.LABEL)
     scan_id = store.start_scan(
         profile=settings["profile"], capital=float(settings["capital"]),
         capital_currency=settings.get("capital_currency", "USDT"),
@@ -92,31 +94,30 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
         if cap_error:
             store.save_result(scan_id, coin, symbol=symbol, quote=entry.get("quote"),
                               side=None, side_tied=False, snapshot=None, plan=None,
-                              capital_used=None, error=cap_error)
+                              capital_used=None, exchange=venue.NAME, error=cap_error)
             failed += 1
             store.update_scan(scan_id, failed=failed)
             continue
 
         try:
-            snap, plan, candles, side_info = skill.analyze(
-                symbol, settings["profile"], capital=capital,
+            snap, plan, candles, side_info = venue.analyze(
+                entry, settings["profile"], capital=capital,
                 risk_pct=float(settings["risk_pct"]),
                 count=int(settings.get("candle_count", 300)),
-                exchange=settings.get("exchange", "nobitex"),
                 hold_hours=float(settings.get("hold_hours", 0.0)),
                 account_level=settings.get("account_level"))
         except Exception as exc:  # per-coin failure must not end the scan
             log.warning("scan %s: %s failed: %s", scan_id, coin, exc)
             store.save_result(scan_id, coin, symbol=symbol, quote=entry.get("quote"),
                               side=None, side_tied=False, snapshot=None, plan=None,
-                              capital_used=capital, error=str(exc)[:500])
+                              capital_used=capital, exchange=venue.NAME, error=str(exc)[:500])
             failed += 1
             store.update_scan(scan_id, failed=failed)
             continue
 
         store.save_result(scan_id, coin, symbol=symbol, quote=entry.get("quote"),
                           side=side_info["side"], side_tied=bool(side_info.get("tied")),
-                          snapshot=snap, plan=plan, capital_used=capital)
+                          snapshot=snap, plan=plan, capital_used=capital, exchange=venue.NAME)
 
         dec = candles.get("decision")
         if dec:

@@ -21,6 +21,12 @@ DB_PATH = VAR_DIR / "screener.sqlite3"
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
 WATCHLIST_PATH = CONFIG_DIR / "watchlist.json"
 
+
+def watchlist_path(exchange: str) -> Path:
+    """One watchlist per venue — the symbol maps are unrelated, and sharing
+    one file would silently scan Nobitex symbols against Toobit."""
+    return CONFIG_DIR / f"watchlist-{exchange}.json"
+
 COINS_PATH = CONFIG_DIR / "coins.txt"
 
 # Seed list, used only to create config/coins.txt the first time. The file is the
@@ -70,7 +76,7 @@ DEFAULTS = {
     "risk_pct": 1.0,
     "scan_interval_minutes": 15,
     "language": "en",
-    "exchange": "nobitex",
+    "exchange": "toobit",
     # One 8h renewal period. This feeds the renewal-fee calculation and moves
     # verdicts materially — at 24h the extra charges fail the cost gate on their own.
     "hold_hours": 8.0,
@@ -127,12 +133,27 @@ def save_settings(patch: dict) -> dict:
         return merged
 
 
-def load_watchlist() -> dict:
-    try:
-        with open(WATCHLIST_PATH, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+def load_watchlist(exchange: str | None = None) -> dict:
+    exchange = exchange or str(load_settings().get("exchange") or "toobit")
+    for path in (watchlist_path(exchange), WATCHLIST_PATH):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not data.get("exchange") or data["exchange"] == exchange:
+                return data
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+    return {}
+
+
+def save_watchlist(exchange: str, data: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = dict(data, exchange=exchange)
+    path = watchlist_path(exchange)
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+    tmp.replace(path)
 
 
 def skill_dir() -> Path:

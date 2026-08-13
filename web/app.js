@@ -249,6 +249,8 @@ function buildCard(card) {
     const cols = el('div', { class: 'two-col' }, [chartBlock(card), positionBlock(card)]);
     body.append(cols);
     body.append(economicsBlock(card));
+    const venue = venueBlock(card);
+    if (venue) body.append(venue);
     body.append(manualBlock(card));
     body.append(qualificationBlock(card));
     body.append(commentaryBlock(card));
@@ -292,6 +294,11 @@ function positionBlock(card) {
     stat(t('pos.tp1'), num(L.tp1)),
     stat(t('pos.tp2'), num(L.tp2)),
     stat(t('pos.quantity'), num(S.quantity)),
+    /* Toobit takes orders in contracts, not coins. Showing only the coin figure
+       next to an order ticket is how you enter a position 1000x the intended size. */
+    (card.venue && card.venue.contracts !== undefined && card.venue.contracts !== null)
+      ? stat(t('pos.contracts'), num(card.venue.contracts))
+      : null,
     stat(t('pos.notional'), num(S.notional)),
     stat(t('pos.leverage'), num(S.leverage, { suffix: '×' })),
     stat(t('pos.margin'), num(S.margin)),
@@ -323,9 +330,60 @@ function economicsBlock(card) {
   ]);
 }
 
+/* Venue facts the planner does not own: contract size, funding, and where this
+ * exchange's real maintenance margin differs from the profile's assumption. */
+function venueBlock(card) {
+  const v = card.venue;
+  if (!v) return null;
+  const wrap = el('div', {}, [el('div', { class: 'section__title', text: t('venue.title') })]);
+  const cells = [];
+
+  if (v.units_per_contract !== undefined && v.units_per_contract !== null) {
+    cells.push(stat(t('pos.contractSize'),
+      num(null, { raw: `${fmtNum(v.units_per_contract)} ${card.coin}` })));
+  }
+  const f = v.funding || card.funding;
+  if (f && f.rate_pct !== undefined) {
+    const label = `${f.rate_pct >= 0 ? '+' : ''}${fmtNum(f.rate_pct, 4)}%`;
+    cells.push(stat(`${t('venue.funding')} ${t('venue.fundingPeriod', { period: f.period || '8H' })}`,
+      num(null, { raw: label })));
+  }
+  if (v.max_leverage) cells.push(stat(t('venue.maxLeverage'), num(v.max_leverage, { suffix: '×' })));
+  if (v.maint_margin_pct !== undefined && v.maint_margin_pct !== null) {
+    cells.push(stat(t('venue.maintMargin'), num(null, { raw: `${fmtNum(v.maint_margin_pct, 3)}%` })));
+  }
+  if (!cells.length) return null;
+  wrap.append(el('div', { class: 'grid' }, cells));
+
+  /* The planner's profile assumes a fixed maintenance margin. Where the venue's real
+     figure is higher, the liquidation estimate would otherwise be optimistic — say so. */
+  const assumed = v.planner_maint_margin_pct;
+  if (assumed !== undefined && v.maint_margin_pct > assumed) {
+    wrap.append(el('div', { class: 'check__meta check__stale', dir: 'auto',
+      text: t('venue.maintMarginNote', { assumed: fmtNum(assumed, 3), real: fmtNum(v.maint_margin_pct, 3) }) }));
+  }
+  if (v.leverage_correction) {
+    wrap.append(el('div', { class: 'note note--warning' }, [
+      el('span', { text: '⚠', attrs: { 'aria-hidden': 'true' } }),
+      el('span', { dir: 'auto', text: v.leverage_correction.reason }),
+    ]));
+  }
+  return wrap;
+}
+
 function manualBlock(card) {
   const checks = card.manual_checks || [];
-  if (!checks.length) return null;
+  /* On a venue that publishes funding and a BTC perp, the skill's two MANUAL checks
+     are settled from live data and none remain. Say that explicitly rather than
+     silently omitting the block — "nothing here" and "nothing to do" look alike. */
+  if (!checks.length) {
+    return el('div', { class: 'manual' }, [
+      el('div', { class: 'commentary__label' }, [
+        el('span', { text: t('manual.title') }),
+        el('span', { class: 'pill', text: `✓ ${t('manual.allAuto')}` }),
+      ]),
+    ]);
+  }
   const openCount = checks.filter((c) => !c.resolved).length;
   const wrap = el('div', { class: `manual ${openCount ? 'manual--open' : ''}` });
 
@@ -706,6 +764,8 @@ function renderScan() {
 
 function renderSettingsForm() {
   const s = state.data.settings || {};
+  const ex = document.getElementById('exchange');
+  if (ex && s.exchange) ex.value = s.exchange;
   document.getElementById('profile').value = s.profile;
   document.getElementById('capital').value = s.capital;
   document.getElementById('risk').value = s.risk_pct;
@@ -794,6 +854,13 @@ function wireControls() {
   const push = async (patch) => { await API.settings(patch); await refresh(); };
 
   document.getElementById('profile').addEventListener('change', (e) => push({ profile: e.target.value }));
+  /* Switching venue changes which results are in scope, so the board is rebuilt
+     from scratch rather than reconciled — the two venues share no symbols. */
+  document.getElementById('exchange').addEventListener('change', async (e) => {
+    for (const chart of state.charts.values()) chart.remove();
+    state.charts.clear();
+    await push({ exchange: e.target.value });
+  });
   for (const [id, key] of [['capital', 'capital'], ['risk', 'risk_pct'], ['interval', 'scan_interval_minutes']]) {
     document.getElementById(id).addEventListener('change', (e) => {
       const v = parseFloat(e.target.value);

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS results (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id       INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
     coin          TEXT NOT NULL,
+    exchange      TEXT,
     symbol        TEXT,
     quote         TEXT,
     fetched_at    TEXT NOT NULL,
@@ -155,16 +156,35 @@ def _row(sql: str, params: tuple = ()) -> sqlite3.Row | None:
 _MIGRATIONS = (
     ("commentary", "reason_code", "TEXT"),
     ("commentary", "reason_params", "TEXT"),
+    # Results are venue-specific. Without this, switching exchanges left the other
+    # venue's rows on the board — a Nobitex GRAM card sitting among Toobit prices,
+    # with nothing on screen to say which venue it came from.
+    ("results", "exchange", "TEXT"),
+    ("chart_series", "exchange", "TEXT"),
+    # Commentary describes one specific analysis. Without the venue it survived an
+    # exchange switch and sat under a contradicting verdict — "advises skipping this
+    # trade" printed beneath a TAKE.
+    ("commentary", "exchange", "TEXT"),
 )
 
 
 def init() -> None:
     with tx() as conn:
         conn.executescript(SCHEMA)
+        added = set()
         for table, column, coltype in _MIGRATIONS:
             existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+                added.add((table, column))
+        # Every row that predates the column came from Nobitex — it was the only
+        # venue. Leaving them NULL would make them invisible to both venues' filters
+        # rather than merely stale.
+        if ("results", "exchange") in added:
+            conn.execute("UPDATE results SET exchange = 'nobitex' WHERE exchange IS NULL")
+        if ("chart_series", "exchange") in added:
+            conn.execute("UPDATE chart_series SET exchange = 'nobitex' "
+                         "WHERE exchange IS NULL")
 
 
 # --------------------------------------------------------------------------------
@@ -225,16 +245,16 @@ def mark_stale_scans() -> None:
 def save_result(scan_id: int, coin: str, *, symbol: str | None, quote: str | None,
                 side: str | None, side_tied: bool, snapshot: dict | None,
                 plan: dict | None, capital_used: float | None,
-                error: str | None = None) -> None:
+                exchange: str | None = None, error: str | None = None) -> None:
     qual = (plan or {}).get("qualification") or {}
     verdict = qual.get("verdict") if plan else "ERROR"
     with tx() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO results (scan_id, coin, symbol, quote, fetched_at,"
-            " side, side_tied, verdict, score, score_coverage, capital_used,"
-            " snapshot_json, plan_json, error)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (scan_id, coin, symbol, quote, now_iso(), side, int(side_tied), verdict,
+            "INSERT OR REPLACE INTO results (scan_id, coin, exchange, symbol, quote,"
+            " fetched_at, side, side_tied, verdict, score, score_coverage,"
+            " capital_used, snapshot_json, plan_json, error)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (scan_id, coin, exchange, symbol, quote, now_iso(), side, int(side_tied), verdict,
              qual.get("score"), qual.get("score_coverage"), capital_used,
              json.dumps(snapshot, ensure_ascii=False) if snapshot else None,
              json.dumps(plan, ensure_ascii=False) if plan else None,
@@ -242,22 +262,37 @@ def save_result(scan_id: int, coin: str, *, symbol: str | None, quote: str | Non
         )
 
 
-def latest_results() -> list[dict]:
-    """Most recent result per coin, whichever scan it came from.
+def latest_results(exchange: str | None = None) -> list[dict]:
+    """Most recent result per coin on one venue.
 
     Deliberately not 'results of the latest scan': a coin that errored in the current
     pass should keep showing its last good analysis with an honest timestamp, rather
-    than vanishing from the board.
+    than vanishing from the board. But it *is* scoped to the venue — a result from
+    the other exchange is a different instrument at a different price, and mixing
+    them put a Nobitex GRAM card in among Toobit's.
     """
-    rows = _rows("SELECT r.* FROM results r "
-        "JOIN (SELECT coin, MAX(scan_id) AS scan_id FROM results GROUP BY coin) m "
-        "  ON m.coin = r.coin AND m.scan_id = r.scan_id")
+    if exchange:
+        rows = _rows(
+            "SELECT r.* FROM results r JOIN ("
+            "  SELECT coin, MAX(scan_id) AS scan_id FROM results "
+            "  WHERE exchange = ? GROUP BY coin) m "
+            "ON m.coin = r.coin AND m.scan_id = r.scan_id WHERE r.exchange = ?",
+            (exchange, exchange))
+    else:
+        rows = _rows(
+            "SELECT r.* FROM results r "
+            "JOIN (SELECT coin, MAX(scan_id) AS scan_id FROM results GROUP BY coin) m "
+            "  ON m.coin = r.coin AND m.scan_id = r.scan_id")
     return [dict(r) for r in rows]
 
 
-def result_for(coin: str) -> dict | None:
-    row = _row("SELECT * FROM results WHERE coin = ? ORDER BY scan_id DESC LIMIT 1",
-        (coin,))
+def result_for(coin: str, exchange: str | None = None) -> dict | None:
+    if exchange:
+        row = _row("SELECT * FROM results WHERE coin = ? AND exchange = ? "
+                   "ORDER BY scan_id DESC LIMIT 1", (coin, exchange))
+    else:
+        row = _row("SELECT * FROM results WHERE coin = ? ORDER BY scan_id DESC LIMIT 1",
+                   (coin,))
     return dict(row) if row else None
 
 
@@ -335,19 +370,36 @@ def all_manual_checks() -> dict:
 def save_commentary(coin: str, lang: str, *, scan_id: int | None, text: str | None,
                     model: str | None, status: str, reason: str | None = None,
                     reason_code: str | None = None,
-                    reason_params: dict | None = None) -> None:
+                    reason_params: dict | None = None,
+                    exchange: str | None = None) -> None:
     with tx() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO commentary "
-            "(coin, lang, scan_id, text, model, status, reason, reason_code, "
-            " reason_params, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (coin, lang, scan_id, text, model, status, reason, reason_code,
+            "(coin, lang, scan_id, exchange, text, model, status, reason, reason_code, "
+            " reason_params, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (coin, lang, scan_id, exchange, text, model, status, reason, reason_code,
              json.dumps(reason_params or {}, ensure_ascii=False), now_iso()))
 
 
-def commentary_for(coin: str, lang: str) -> dict | None:
+def commentary_for(coin: str, lang: str, exchange: str | None = None,
+                   scan_id: int | None = None) -> dict | None:
+    """Commentary for this coin, only if it describes the analysis on screen.
+
+    A row from another venue, or from an older scan than the result being rendered,
+    is not stale decoration — it is a paragraph that can contradict the verdict above
+    it. Those are dropped rather than shown.
+    """
     row = _row("SELECT * FROM commentary WHERE coin = ? AND lang = ?", (coin, lang))
-    return dict(row) if row else None
+    if not row:
+        return None
+    rec = dict(row)
+    if exchange and rec.get("exchange") and rec["exchange"] != exchange:
+        return None
+    if exchange and not rec.get("exchange"):
+        return None  # predates venue tracking; provenance unknown, so not trusted
+    if scan_id is not None and rec.get("scan_id") not in (None, scan_id):
+        return None
+    return rec
 
 
 # --------------------------------------------------------------------------------

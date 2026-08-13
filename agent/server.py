@@ -29,7 +29,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote, parse_qs
 
-from . import config, discover, guard, llm, scanner, store
+from . import config, discover, exchange, guard, llm, scanner, store
 
 log = logging.getLogger("server")
 
@@ -56,6 +56,8 @@ def public_settings(settings: dict) -> dict:
         "language": settings["language"],
         "hold_hours": settings["hold_hours"],
         "exchange": settings["exchange"],
+        "exchange_label": exchange.label(settings["exchange"]),
+        "exchanges": list(exchange.SUPPORTED),
         "chart_candles": settings["chart_candles"],
     }
 
@@ -80,6 +82,7 @@ def _manual_checks(snapshot: dict, saved: dict, fetched_at: str | None) -> list[
         out.append({
             "key": key,
             "observed": check.get("observed"),
+            "resolved_by": check.get("resolved_by"),
             "resolved": resolved and not stale,
             "stale": stale,
             "note": rec.get("note"),
@@ -129,6 +132,8 @@ def build_card(row: dict, meta: dict, manual_saved: dict,
         "unresolved_manual": unresolved,
         # A TAKE with unconfirmed manual checks is not a confirmed TAKE.
         "provisional": bool(row.get("verdict") == "TAKE" and unresolved),
+        "venue": (plan or {}).get("venue"),
+        "funding": (snapshot or {}).get("funding"),
         "commentary": commentary_rows.get(row["coin"], {}),
         "caveat": qual.get("caveat"),
         "disclaimer": (plan or {}).get("disclaimer"),
@@ -157,8 +162,11 @@ def state_payload(lang: str | None = None) -> dict:
 
     commentary_rows: dict[str, dict] = {}
     lang = lang if lang in ("en", "fa") else settings.get("language", "en")
+    active = settings.get("exchange")
+    rows = store.latest_results(active)
+    scan_by_coin = {r["coin"]: r["scan_id"] for r in rows}
     for coin in by_coin:
-        rec = store.commentary_for(coin, lang)
+        rec = store.commentary_for(coin, lang, active, scan_by_coin.get(coin))
         if rec:
             commentary_rows[coin] = {
                 "status": rec["status"], "text": rec["text"],
@@ -170,18 +178,20 @@ def state_payload(lang: str | None = None) -> dict:
 
     cards = [build_card(row, by_coin.get(row["coin"], {}),
                         manual_all.get(row["coin"], {}), commentary_rows)
-             for row in store.latest_results()]
+             for row in rows]
     cards.sort(key=sort_key)
 
     scanned = {c["coin"] for c in cards}
     # "Unavailable" means the market cannot be scanned at all — not merely that we
     # have not reached it yet. Conflating the two would report a coin awaiting its
     # first scan as unlisted.
+    venue = exchange.adapter()
+    scannable_coins = {c["coin"] for c in venue.scannable(watchlist)}
     unavailable, pending = [], []
     for c in watchlist.get("coins", []):
         entry = {"coin": c["coin"], "symbol": c.get("symbol"), "status": c["status"],
                  "reason": c.get("reason"), "market_closed": c.get("market_closed")}
-        if c["status"] in (discover.SPOT_ONLY, discover.NOT_LISTED) or c.get("market_closed"):
+        if c["coin"] not in scannable_coins:
             unavailable.append(entry)
         elif c["coin"] not in scanned:
             pending.append(entry)
@@ -210,7 +220,9 @@ def state_payload(lang: str | None = None) -> dict:
             "generated_at": watchlist.get("generated_at"),
             "requested": watchlist.get("requested"),
             "margin_detection": watchlist.get("margin_detection"),
-            "scannable": len(discover.scannable(watchlist)),
+            "exchange": watchlist.get("exchange"),
+            "exchange_label": watchlist.get("exchange_label"),
+            "scannable": len(venue.scannable(watchlist)),
         },
         "counts": counts,
         "coins": cards,
@@ -332,7 +344,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._error(404, "unknown endpoint")
 
     def _coin_detail(self, coin: str):
-        row = store.result_for(coin)
+        active = config.load_settings().get("exchange")
+        row = store.result_for(coin, active) or store.result_for(coin)
         if not row:
             return self._error(404, f"no result stored for {coin}")
         watchlist = config.load_watchlist()
@@ -340,7 +353,7 @@ class Handler(BaseHTTPRequestHandler):
         wanted = parse_qs(urlparse(self.path).query).get("lang", [None])[0]
         lang = wanted if wanted in ("en", "fa") else \
             config.load_settings().get("language", "en")
-        rec = store.commentary_for(coin, lang)
+        rec = store.commentary_for(coin, lang, active, row["scan_id"])
         card = build_card(row, meta, store.manual_checks_for(coin),
                           {coin: dict(rec) if rec else {}})
         card["snapshot"] = json.loads(row["snapshot_json"]) if row["snapshot_json"] else None
@@ -353,10 +366,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             allowed = {"profile", "capital", "capital_currency", "risk_pct",
-                       "scan_interval_minutes", "language", "hold_hours"}
+                       "scan_interval_minutes", "language", "hold_hours", "exchange"}
             patch = {k: v for k, v in body.items() if k in allowed}
             if "profile" in patch and patch["profile"] not in ("scalp", "intraday", "swing"):
                 return self._error(400, "profile must be scalp, intraday or swing")
+            if "exchange" in patch and patch["exchange"] not in exchange.SUPPORTED:
+                return self._error(400,
+                                   f"exchange must be one of {', '.join(exchange.SUPPORTED)}")
             for numeric in ("capital", "risk_pct", "hold_hours", "scan_interval_minutes"):
                 if numeric in patch:
                     try:
@@ -413,7 +429,8 @@ class Handler(BaseHTTPRequestHandler):
         store.save_commentary(coin, lang, scan_id=row["scan_id"], text=out["text"],
                               model=out["model"], status=out["status"],
                               reason=out["reason"], reason_code=out.get("reason_code"),
-                              reason_params=out.get("reason_params"))
+                              reason_params=out.get("reason_params"),
+                              exchange=row.get("exchange"))
         out["lang"] = lang
         return self._json(out)
 

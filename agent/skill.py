@@ -75,21 +75,31 @@ def _mark_call_finished() -> None:
     _last_call_finished = time.monotonic()
 
 
+# Only the API client talks to the network; trade_plan.py is pure computation, so
+# rate-limiting it just adds sleep to every scan. On a 47-coin Toobit pass that was
+# roughly two minutes of doing nothing.
+_NETWORK_SCRIPTS = {"nobitex_api.py"}
+
+
 def _run(script: str, args: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
     ok, detail = check_installed()
     if not ok:
         raise SkillError(f"crypto-leverage-trade-plan skill not found: {detail}")
     cmd = [_python(), str(scripts_dir() / script), *args]
-    _respect_gap()
+    throttled = script in _NETWORK_SCRIPTS
+    if throttled:
+        _respect_gap()
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, env=_env(),
             cwd=str(scripts_dir()),
         )
     except subprocess.TimeoutExpired as exc:
-        _mark_call_finished()
+        if throttled:
+            _mark_call_finished()
         raise SkillError(f"{script} timed out after {timeout}s") from exc
-    _mark_call_finished()
+    if throttled:
+        _mark_call_finished()
     return proc
 
 
@@ -177,13 +187,19 @@ def analyze(symbol: str, profile: str, *, capital: float, risk_pct: float,
 
 def plan(snapshot_path: str, side: str, capital: float, *, profile: str,
          risk_pct: float, exchange: str = "nobitex", hold_hours: float = 0.0,
-         account_level: int | None = None) -> dict:
+         account_level: int | None = None,
+         leverage_cap: float | None = None,
+         leverage: float | None = None) -> dict:
     args = ["plan", "--snapshot", snapshot_path, "--side", side,
             "--capital", f"{capital:.10g}", "--profile", profile,
             "--risk-pct", str(risk_pct), "--exchange", exchange,
             "--hold-hours", str(hold_hours), "--json"]
     if account_level:
         args += ["--account-level", str(account_level)]
+    if leverage_cap:
+        args += ["--leverage-cap", f"{leverage_cap:.6g}"]
+    if leverage:
+        args += ["--leverage", f"{leverage:.6g}"]
     proc = _run("trade_plan.py", args, timeout=120)
     if proc.returncode != 0:
         raise SkillError(_tail(proc.stderr) or f"plan exited {proc.returncode}")
@@ -222,6 +238,31 @@ def _load_trade_plan_module():
         sys.path.insert(0, d)
     import trade_plan  # noqa: PLC0415
     return trade_plan
+
+
+def _load_api_module():
+    """The skill's nobitex_api module.
+
+    Despite the name it also holds two venue-agnostic functions — `compute_indicators`
+    and `score_direction` — that take plain OHLCV rows. The Toobit adapter imports
+    them rather than growing a second copy of the indicator set, so both venues score
+    a chart identically.
+    """
+    d = str(scripts_dir())
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    import nobitex_api  # noqa: PLC0415
+    return nobitex_api
+
+
+def compute_indicators(rows: list[dict]) -> dict:
+    """ATR/EMA/RSI/RVOL/VWAP/structure for one timeframe — the skill's own."""
+    return _load_api_module().compute_indicators(rows)
+
+
+def score_direction(profile: str, tfs: dict) -> dict:
+    """The skill's direction scoring, including its MANUAL markers."""
+    return _load_api_module().score_direction(profile, tfs)
 
 
 def ema_series(closes: list[float], period: int) -> list[float | None]:
