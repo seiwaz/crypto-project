@@ -4,7 +4,7 @@
   "capital_currency": "USDT",
   "risk_pct": 1.0,
   "scan_interval_minutes": 15,
-  "language": "fa",
+  "language": "en",
   "exchange": "toobit",
   "hold_hours": 8.0,
   "account_level": null,
@@ -58,5 +58,13 @@
         "caveat": "needs about 5.6 GB against roughly 5 GB usable here, so it will lean on swap and run slowly — but it is the smallest model that produces trustworthy Persian for this task"
       }
     }
+  },
+  "demo": {
+    "enabled": true,
+    "slots": 5,
+    "heat_cap_pct": 6.0,
+    "capital": 1000.0,
+    "exchange": "toobit",
+    "cycle_seconds": 60
   }
 }

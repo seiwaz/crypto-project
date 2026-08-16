@@ -509,6 +509,12 @@ def serve(host: str | None = None, port: int | None = None,
     if with_scheduler:
         threading.Thread(target=scanner.scheduler_loop, args=(_stop_event,),
                          name="scheduler", daemon=True).start()
+        # The demo manages its own positions on a timer. Without this it would only
+        # mark to market when someone opened the tab, and an exit would be recorded
+        # at whatever price the page happened to load at rather than where the level
+        # was actually hit.
+        threading.Thread(target=demo.scheduler_loop, args=(_stop_event,),
+                         name="demo", daemon=True).start()
 
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True

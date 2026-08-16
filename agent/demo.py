@@ -40,6 +40,35 @@ MAX_CORRELATED_SAME_SIDE = 2
 CORRELATION_THRESHOLD = 0.9
 
 
+DEFAULT_CYCLE_SECONDS = 90
+
+
+def scheduler_loop(stop_event) -> None:
+    """Run the monitoring cycle on a timer for as long as the server lives.
+
+    The demo is meant to trade by itself — a position that only gets marked when
+    somebody opens the tab would miss the stop it should have exited on, and the
+    journal would record an exit at whatever price the page happened to be loaded
+    at. The loop is what makes the record honest.
+
+    Errors are logged and swallowed: a dropped VPN or a rate limit must not kill the
+    loop and silently freeze every open position.
+    """
+    while not stop_event.is_set():
+        cfg = settings()
+        if cfg["enabled"]:
+            try:
+                out = cycle()
+                closed = [r for r in out["results"] if r.get("action") == "CLOSE"]
+                filled = try_fill_slots()
+                if closed or filled["opened"]:
+                    log.info("demo cycle: %d closed, %d opened",
+                             len(closed), len(filled["opened"]))
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("demo cycle failed: %s", exc)
+        stop_event.wait(cfg.get("cycle_seconds") or DEFAULT_CYCLE_SECONDS)
+
+
 def settings() -> dict:
     s = config.load_settings()
     demo = s.get("demo") or {}
@@ -49,6 +78,7 @@ def settings() -> dict:
         "capital": float(demo.get("capital") or s.get("capital") or 1000.0),
         "exchange": demo.get("exchange") or s.get("exchange") or "toobit",
         "enabled": bool(demo.get("enabled")),
+        "cycle_seconds": int(demo.get("cycle_seconds") or DEFAULT_CYCLE_SECONDS),
     }
 
 

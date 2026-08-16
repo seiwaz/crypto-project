@@ -262,6 +262,11 @@ scanner.scan_once(coins, verbose=True)
 PY
 }
 
+cmd_journal() {
+  [[ -x "$PY" ]] || die "no virtualenv — run ./run.sh setup first"
+  "$PY" -c 'from agent import journal; print(journal.text())'
+}
+
 case "${1:-}" in
   setup)     cmd_setup ;;
   start)     cmd_start ;;
@@ -270,8 +275,9 @@ case "${1:-}" in
   status)    cmd_status ;;
   logs)      cmd_logs "${2:-}" ;;
   scan-once) cmd_scan_once "$@" ;;
+  journal)   cmd_journal ;;
   *)
-    say "usage: ./run.sh {setup|start|stop|restart|status|logs [-f]|scan-once [COIN...]}"
+    say "usage: ./run.sh {setup|start|stop|restart|status|logs [-f]|scan-once [COIN...]|journal}"
     exit 1
     ;;
 esac
