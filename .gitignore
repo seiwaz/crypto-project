@@ -24,3 +24,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Build output from packaging/make-bundle.sh
+dist/
