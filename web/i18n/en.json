@@ -210,5 +210,6 @@
   "demo.col.totalPnl": "Total P&L",
   "demo.strategy": "Strategy",
   "demo.timeStop": "time stop after",
-  "demo.below": "if below"
+  "demo.below": "if below",
+  "demo.trades": "trades"
 }

@@ -559,6 +559,13 @@ def paper_closed_positions() -> list[dict]:
         "ORDER BY closed_at DESC, id DESC")]
 
 
+def paper_last_close_times() -> dict[str, str]:
+    """Most recent close time per coin, for the re-entry guard."""
+    return {r["coin"]: r["closed_at"] for r in _rows(
+        "SELECT coin, MAX(closed_at) AS closed_at FROM paper_positions "
+        "WHERE status = 'closed' AND closed_at IS NOT NULL GROUP BY coin")}
+
+
 def paper_position(position_id: int) -> dict | None:
     row = _row("SELECT * FROM paper_positions WHERE id = ?", (position_id,))
     return dict(row) if row else None

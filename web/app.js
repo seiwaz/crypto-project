@@ -872,15 +872,30 @@ function inUsdt(rMultiple, riskAmount) {
   return rMultiple * riskAmount;
 }
 
-function demoAccount(acc) {
-  return el('div', { class: 'demo__account' }, [
+function demoAccount(acc, agg) {
+  const cells = [
     stat(t('demo.equity'), num(acc.equity, { digits: 2, suffix: ' USDT' })),
     stat(t('demo.balance'), num(acc.balance, { digits: 2 })),
     stat(t('demo.openPnl'), signed(acc.open_pnl, { digits: 4 })),
     stat(t('demo.usedMargin'), num(acc.used_margin, { digits: 2 })),
     stat(t('demo.available'), num(acc.available_margin, { digits: 2 })),
     stat(t('demo.return'), signed(acc.return_pct, { digits: 3, suffix: '%' })),
-  ]);
+  ];
+  /* Win rate belongs at the top, not only in the report further down — it is the
+   * first thing anyone looks for. The closed-trade count travels with it, because a
+   * win rate over three trades and one over three hundred are different claims and
+   * the number alone cannot tell them apart. */
+  if (agg) {
+    cells.push(stat(t('demo.winRate'), el('span', {}, [
+      num(agg.win_rate, { digits: 1, suffix: '%' }),
+      el('span', { class: 'stat__sub' }, [
+        document.createTextNode(' '),
+        num(agg.closed),
+        document.createTextNode(` ${t('demo.trades')}`),
+      ]),
+    ])));
+  }
+  return el('div', { class: 'demo__account' }, cells);
 }
 
 /* An empty slot is a legitimate state, so it is labelled with its cause rather than
@@ -1123,7 +1138,7 @@ function renderDemo() {
         el('button', { class: 'btn btn--ghost', attrs: { id: 'demoReset' }, text: t('demo.reset') }),
       ]),
     ]),
-    demoAccount(d.account),
+    demoAccount(d.account, state.report && state.report.aggregate),
     demoSlots(d),
     demoPositions(d),
     reportBlock(state.report),

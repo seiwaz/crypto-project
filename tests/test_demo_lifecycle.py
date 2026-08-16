@@ -129,6 +129,27 @@ cb = demo.circuit_breaker()
 results.append(check("breaker tripped", cb and cb['code'], 'consecutive_losses'))
 results.append(check("losses counted", cb and cb['losses'], 3))
 
+print("9. A coin that just closed is not re-entered on the same stale scan")
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+SCAN_AT = "2026-01-01T00:00:00+00:00"
+row = {"coin": "FIL", "symbol": SYM, "exchange": "toobit", "side": "long",
+       "verdict": "TAKE", "score": 88.0, "fetched_at": SCAN_AT, "plan_json": None,
+       "scan_id": 1}
+demo.store.latest_results = lambda ex: [row]
+results.append(check("eligible before any trade",
+                     [r["coin"] for r in demo.qualifying_signals()], ["FIL"]))
+
+pid = store.paper_open(coin='FIL', symbol=SYM, exchange='toobit', side='long', slot=1,
+    contracts=10, entry_price=ENTRY, leverage=5.0, margin=1.0, risk_amount=RISK,
+    stop=0.6, tp1=0.7, tp2=0.8, opened_ts=paper.now_ts(), entry_fee=0.0)
+store.paper_close(pid, exit_price=0.6, exit_reason='stopped', realised_pnl=-10.0, exit_fee=0.0)
+results.append(check("blocked after closing on that scan",
+                     [r["coin"] for r in demo.qualifying_signals()], []))
+
+row["fetched_at"] = "2099-01-01T00:00:00+00:00"   # a scan newer than the close
+results.append(check("eligible again on a fresher scan",
+                     [r["coin"] for r in demo.qualifying_signals()], ["FIL"]))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

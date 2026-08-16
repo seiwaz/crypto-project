@@ -694,3 +694,6 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 .pos__mae { border-block-start: 1px solid var(--hairline); margin-block-start: 0.2rem; padding-block-start: 0.2rem; }
 
 .demo__unit { color: var(--ink-muted); font-size: 0.75rem; margin: 0 0 0.4rem; }
+
+/* A qualifier riding alongside a headline figure — the sample behind a win rate. */
+.stat__sub { color: var(--ink-muted); font-size: 0.75rem; }

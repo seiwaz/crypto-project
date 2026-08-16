@@ -100,13 +100,67 @@ def scheduler_loop(stop_event) -> None:
             try:
                 out = cycle()
                 closed = [r for r in out["results"] if r.get("action") == "CLOSE"]
+                # Refill in the same pass, so a freed slot is taken by the current
+                # highest-scoring candidate rather than waiting for the next cycle.
                 filled = try_fill_slots()
                 if closed or filled["opened"]:
-                    log.info("demo cycle: %d closed, %d opened",
-                             len(closed), len(filled["opened"]))
+                    log.info("demo cycle: %d closed (%s), %d opened (%s)",
+                             len(closed), ", ".join(f"{c['coin']}:{c['reason']}"
+                                                    for c in closed) or "-",
+                             len(filled["opened"]),
+                             ", ".join(o["coin"] for o in filled["opened"]) or "-")
+                persist_reports()
             except Exception as exc:                          # noqa: BLE001
                 log.warning("demo cycle failed: %s", exc)
         stop_event.wait(cfg.get("cycle_seconds") or DEFAULT_CYCLE_SECONDS)
+
+
+def persist_reports() -> None:
+    """Write the journal, the report and one equity sample, every cycle.
+
+    Three files, because they answer different questions and have different
+    lifetimes:
+
+      var/journal.txt    the current picture, human-readable, overwritten
+      var/report.json    the same figures as data, for the optimisation pass later
+      var/history.jsonl  one line per cycle, appended — the equity curve, and the
+                         only record of what the account looked like *between*
+                         closes. A report built solely from closed trades cannot
+                         show a drawdown that recovered before anything exited.
+
+    Failures here are logged and swallowed: reporting must never be able to stop
+    the trading loop it is reporting on.
+    """
+    from . import journal as journal_mod, report as report_mod   # noqa: PLC0415
+
+    try:
+        snapshot = state()
+        rep = report_mod.build()
+        acct = snapshot["account"]
+        agg = rep["aggregate"]
+
+        config.VAR_DIR.mkdir(parents=True, exist_ok=True)
+        (config.VAR_DIR / "journal.txt").write_text(journal_mod.text() + "\n",
+                                                    encoding="utf-8")
+        (config.VAR_DIR / "report.json").write_text(
+            json.dumps(rep, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8")
+
+        line = {
+            "at": store.now_iso(),
+            "equity": round(acct["equity"], 4),
+            "balance": round(acct["balance"], 4),
+            "unrealised": round(acct["open_pnl"], 4),
+            "open": len(snapshot["positions"]),
+            "closed": agg["closed"],
+            "win_rate": agg["win_rate"],
+            "net_pnl": agg["net_pnl"],
+            "heat_usdt": round(snapshot["heat"]["used_usdt"], 4),
+        }
+        with (config.VAR_DIR / "history.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("could not persist reports: %s", exc)
 
 
 def settings() -> dict:
@@ -344,6 +398,7 @@ def qualifying_signals() -> list[dict]:
     """
     cfg = settings()
     open_coins = {p["coin"] for p in store.paper_open_positions()}
+    closed_at = store.paper_last_close_times()
     out = []
     for row in store.latest_results(cfg["exchange"]):
         if row.get("verdict") != "TAKE":
@@ -352,6 +407,17 @@ def qualifying_signals() -> list[dict]:
         if score is None or float(score) < MIN_SCORE:
             continue
         if row["coin"] in open_coins:
+            continue
+        # Re-enter only on fresh evidence.
+        #
+        # A slot frees the instant a position closes, and the scan row that opened it
+        # is still sitting there rated TAKE. Without this the agent would reopen the
+        # exact trade that just stopped out, at a worse price, on evidence the market
+        # has already falsified — and it would do it every cycle until the next scan.
+        # Requiring a scan newer than the close means a re-entry is a new signal, not
+        # an echo of the failed one.
+        last = closed_at.get(row["coin"])
+        if last and str(row.get("fetched_at") or "") <= str(last):
             continue
         out.append(row)
     out.sort(key=lambda r: float(r.get("score") or 0), reverse=True)
