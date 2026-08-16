@@ -187,6 +187,13 @@ def state() -> dict:
         row["funding"] = paper.funding(symbol)
         rows.append(row)
 
+    try:
+        last = toobit.last_prices_for(r["symbol"] for r in rows)
+    except toobit.ToobitError:
+        last = {}
+    for row in rows:
+        row["last_price"] = last.get(row["symbol"])
+
     balance = float(acct["balance"])
     equity = balance + open_pnl
     heat = portfolio_heat(positions, specs, equity)

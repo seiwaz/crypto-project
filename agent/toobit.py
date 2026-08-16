@@ -36,6 +36,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from . import config, guard, skill
 
@@ -309,6 +310,60 @@ def index_prices(refresh: bool = False) -> dict[str, dict]:
                     continue
     with _batch_lock:
         _index_cache = (time.time(), out)
+    return out
+
+
+_last_price_cache: dict[str, tuple[float, float]] = {}
+
+
+def last_prices_for(symbols) -> dict[str, float]:
+    """Last traded price for specific perpetual contracts.
+
+    This is not the mark. Mark comes from a cross-venue index and is what liquidation
+    is judged on; last is what actually traded on this book, and it is the number the
+    venue's own ticker shows. They differ, so the board shows both rather than
+    implying they are the same.
+
+    Unlike the index and funding endpoints there is no batched form for perps: with no
+    symbol, `/quote/v1/ticker/price` and `/quote/v1/ticker/24hr` both return 1077 spot
+    symbols and not one contract, and a comma-separated list is rejected with a 400.
+    So this fetches per symbol, concurrently and only for the symbols asked for — a
+    handful of open positions, not the whole venue.
+    """
+    symbols = list(dict.fromkeys(symbols))
+    now = time.time()
+    out: dict[str, float] = {}
+    missing: list[str] = []
+    with _batch_lock:
+        for sym in symbols:
+            hit = _last_price_cache.get(sym)
+            if hit and now - hit[0] < _INDEX_TTL:
+                out[sym] = hit[1]
+            else:
+                missing.append(sym)
+    if not missing:
+        return out
+
+    def fetch(sym):
+        try:
+            raw = _get("/quote/v1/ticker/price", {"symbol": sym})
+        except ToobitError:
+            return sym, None
+        row = raw[0] if isinstance(raw, list) and raw else raw
+        try:
+            return sym, float(row["p"])
+        except (KeyError, TypeError, ValueError):
+            return sym, None
+
+    # Four workers is the measured ceiling before Toobit's throttling makes every
+    # request slower; a portfolio is rarely larger than that anyway.
+    with ThreadPoolExecutor(max_workers=min(4, len(missing))) as pool:
+        for sym, price in pool.map(fetch, missing):
+            if price is None:
+                continue
+            out[sym] = price
+            with _batch_lock:
+                _last_price_cache[sym] = (time.time(), price)
     return out
 
 

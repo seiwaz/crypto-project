@@ -166,7 +166,7 @@
   "demo.col.coin": "Coin",
   "demo.col.side": "Side",
   "demo.col.entry": "Entry",
-  "demo.col.mark": "Mark",
+  "demo.col.mark": "Mark / last",
   "demo.col.liq": "Liquidation",
   "demo.col.lev": "Leverage",
   "demo.col.margin": "Margin",
@@ -206,5 +206,6 @@
   "demo.exit.reduced": "Reduced at TP1",
   "demo.col.sizeUsdt": "Size",
   "demo.contracts": "ctr",
-  "demo.unitNote": "All amounts in USDT. Prices are the contract's quote price."
+  "demo.unitNote": "All amounts in USDT. Prices are the contract's quote price.",
+  "demo.last": "last"
 }

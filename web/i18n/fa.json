@@ -186,7 +186,7 @@
   "demo.col.coin": "ارز",
   "demo.col.side": "جهت",
   "demo.col.entry": "ورود",
-  "demo.col.mark": "قیمت نشانه",
+  "demo.col.mark": "نشانه / آخرین",
   "demo.col.liq": "لیکوئید",
   "demo.col.lev": "اهرم",
   "demo.col.margin": "وجه تضمین",
@@ -226,5 +226,6 @@
   "demo.exit.reduced": "کاهش در حد سود ۱",
   "demo.col.sizeUsdt": "حجم",
   "demo.contracts": "قرارداد",
-  "demo.unitNote": "همهٔ مبالغ به تتر (USDT) است. قیمت‌ها قیمت مظنهٔ قرارداد است."
+  "demo.unitNote": "همهٔ مبالغ به تتر (USDT) است. قیمت‌ها قیمت مظنهٔ قرارداد است.",
+  "demo.last": "آخرین"
 }

@@ -973,7 +973,14 @@ function positionRow(p) {
       ]),
     ]),
     el('td', {}, [num(p.entry_price, { digits: 6 })]),
+    /* Last traded price sits with the mark. They are different numbers: mark comes
+     * from a cross-venue index and is what liquidation is judged on, last is what
+     * traded on this book. Showing only one would leave a reader comparing the board
+     * against Toobit's ticker and finding a mismatch with no explanation. */
     el('td', {}, [num(s ? s.mark : null, { digits: 6 }),
+                  el('div', { class: 'pos__sub' }, [
+                    el('span', { text: `${t('demo.last')} ` }),
+                    num(p.last_price, { digits: 6 })]),
                   el('div', { class: 'pos__sub', text: p.mark_source || '' })]),
     /* Targets sit under the stop rather than in columns of their own: the row already
      * carries twelve figures, and what a reader needs at a glance is the three levels
