@@ -66,6 +66,17 @@ def _costs(trade: dict) -> dict:
     }
 
 
+def _hours_held(row: dict) -> float | None:
+    """Wall-clock hours a closed position was open, from its own timestamps."""
+    from datetime import datetime
+    try:
+        opened = datetime.fromisoformat(row["opened_at"])
+        closed = datetime.fromisoformat(row["closed_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (closed - opened).total_seconds() / 3600.0
+
+
 def _risk_of(trade: dict) -> float | None:
     """The R unit in USDT for a trade, recovered from its own numbers."""
     r, net = trade.get("r"), trade.get("net_pnl")
@@ -97,6 +108,12 @@ def trades() -> list[dict]:
             "mfe_r": row.get("mfe_r"),
             "mae_r": row.get("mae_r"),
             "bars_held": row.get("bars_held"),
+            "hours_held": _hours_held(row),
+            "mfe_hours": row.get("mfe_hours"),
+            "mae_hours": row.get("mae_hours"),
+            "entry_slippage_pct": row.get("entry_slippage_pct"),
+            "btc_bias": row.get("btc_bias"),
+            "takes_available": row.get("takes_available"),
             "leverage": row.get("leverage"),
             "score_at_entry": row.get("score"),
             "verdict_at_entry": row.get("verdict"),
@@ -223,6 +240,71 @@ def by_score_band(rows: list[dict]) -> list[dict]:
     return out
 
 
+def selection_quality(limit: int = 2000) -> dict:
+    """What the filler passed over, and why.
+
+    A trade declined for `slots_full` at rank 1 is a very different signal from one
+    declined for `insufficient_margin`: the first says the pool was richer than the
+    account could hold, the second says the sizing is wrong. Both are invisible
+    unless the declines are counted.
+    """
+    rows = store.paper_decisions(limit=limit)
+    if not rows:
+        return {"decisions": 0}
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        key = r["action"] if r["action"] == "opened" else (r["code"] or "declined")
+        buckets[key].append(r)
+
+    out = {"decisions": len(rows), "by_outcome": []}
+    for key, group in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+        scores = [r["score"] for r in group if r["score"] is not None]
+        ranks = [r["rank"] for r in group if r["rank"] is not None]
+        out["by_outcome"].append({
+            "outcome": key,
+            "count": len(group),
+            "avg_score": (sum(scores) / len(scores)) if scores else None,
+            "best_score": max(scores) if scores else None,
+            "avg_rank": (sum(ranks) / len(ranks)) if ranks else None,
+        })
+    return out
+
+
+def timing(rows: list[dict]) -> dict:
+    """How long trades took to reach their best and worst points.
+
+    Separates a management problem from a thesis problem on the time axis: a trade
+    that peaked early and was held for hours afterwards was given back, and one that
+    never moved was never right.
+    """
+    with_mfe = [t for t in rows if t.get("mfe_hours") is not None]
+    if not with_mfe:
+        return {"trades": 0}
+    peaked_early = [t for t in with_mfe
+                    if t.get("hours_held") and t["mfe_hours"] < t["hours_held"] / 2]
+    return {
+        "trades": len(with_mfe),
+        "avg_hours_to_mfe": sum(t["mfe_hours"] for t in with_mfe) / len(with_mfe),
+        "peaked_in_first_half": len(peaked_early),
+        "peaked_in_first_half_pct": len(peaked_early) / len(with_mfe) * 100.0,
+    }
+
+
+def execution(rows: list[dict]) -> dict:
+    """Fill quality against the plan, and what regime trades were taken in."""
+    slips = [t["entry_slippage_pct"] for t in rows
+             if t.get("entry_slippage_pct") is not None]
+    regimes: dict[str, int] = defaultdict(int)
+    for t in rows:
+        regimes[t.get("btc_bias") or "unknown"] += 1
+    return {
+        "trades_with_slippage": len(slips),
+        "avg_slippage_pct": (sum(slips) / len(slips)) if slips else None,
+        "worst_slippage_pct": (max(slips) if slips else None),
+        "by_btc_regime": dict(regimes),
+    }
+
+
 def build() -> dict:
     """The whole report, with an explicit statement of what the sample can support."""
     rows = trades()
@@ -232,6 +314,11 @@ def build() -> dict:
         "aggregate": aggregate(rows),
         "by_exit_reason": by_exit_reason(rows),
         "by_score_band": by_score_band(rows),
+        # Captured while running, for the optimisation pass: what was passed over,
+        # how quickly trades peaked, and how well fills matched their plans.
+        "selection": selection_quality(),
+        "timing": timing(rows),
+        "execution": execution(rows),
         "sample": {
             "closed": n,
             "minimum": MIN_SAMPLE,

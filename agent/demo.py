@@ -481,7 +481,14 @@ def _cycle_one(pos: dict) -> dict:
     plan = _plan_of(pos)
     balance_delta = _accrue_funding(pos, spec, mark)
     st = paper.position_state(pos, spec, mark)
-    _record_excursions(pos, st)
+    hours_open = (paper.now_ts() - float(pos["opened_ts"])) / 3600.0
+    _record_excursions(pos, st, hours_open)
+
+    # One point on this position's path, every cycle.
+    store.paper_sample(
+        pos["id"], ts=paper.now_ts(), hours_held=round(hours_open, 4), mark=mark,
+        unrealised=st.get("unrealised_pnl"), r=st.get("unrealised_r"),
+        margin_ratio=st.get("margin_ratio_pct"))
 
     held = bars_held(pos, plan)
     if held != int(pos.get("bars_held") or 0):
@@ -692,18 +699,25 @@ def _accrue_funding(pos: dict, spec: dict, mark: float) -> float:
     return payment
 
 
-def _record_excursions(pos: dict, st: dict) -> None:
-    """Track the best and worst the trade ever got to, in R."""
+def _record_excursions(pos: dict, st: dict, hours_held: float) -> None:
+    """Track the best and worst the trade reached, and when it reached them.
+
+    The timing is the point. "+1.4R" says a move existed; "+1.4R after 20 minutes,
+    closed 40 hours later" says it was there and was given back, which is a
+    management finding. The same number reached on the final bar is not.
+    """
     r = st.get("unrealised_r")
     if r is None:
         return
-    mfe = pos.get("mfe_r")
-    mae = pos.get("mae_r")
-    new_mfe = r if mfe is None else max(float(mfe), r)
-    new_mae = r if mae is None else min(float(mae), r)
-    if new_mfe != mfe or new_mae != mae:
-        store.paper_update(pos["id"], mfe_r=new_mfe, mae_r=new_mae)
-        pos["mfe_r"], pos["mae_r"] = new_mfe, new_mae
+    mfe, mae = pos.get("mfe_r"), pos.get("mae_r")
+    updates = {}
+    if mfe is None or r > float(mfe):
+        updates.update(mfe_r=r, mfe_at=store.now_iso(), mfe_hours=round(hours_held, 4))
+    if mae is None or r < float(mae):
+        updates.update(mae_r=r, mae_at=store.now_iso(), mae_hours=round(hours_held, 4))
+    if updates:
+        store.paper_update(pos["id"], **updates)
+        pos.update(updates)
 
 
 def _close(pos: dict, spec: dict, price: float, reason: str) -> float:
@@ -760,36 +774,54 @@ def try_fill_slots() -> dict:
     opened, declined = [], []
 
     free = snapshot["slots"]["empty"]
-    if free <= 0:
-        return {"opened": [], "declined": [], "slots_free": 0}
 
-    # "Circuit breaker: 2 losses or -3% equity (scalp), 3 losses or -5% (intraday)."
-    # A breaker that only stops the current trade is not a breaker; this stops the
-    # account taking new risk until a human resets it.
     tripped = circuit_breaker()
-    if tripped:
-        store.set_kv("demo.last_fill",
-                     {"opened": [], "declined": [], "slots_free": free,
-                      "circuit_breaker": tripped})
-        return {"opened": [], "declined": [], "slots_free": free,
-                "circuit_breaker": tripped}
 
     heat = snapshot["heat"]["used_pct"]
     cap = snapshot["heat"]["cap_pct"]
     equity = snapshot["account"]["equity"]
     available = snapshot["account"]["available_margin"]
 
-    for row in qualifying_signals():
+    pool = qualifying_signals()
+
+    def record(row, rank, action, code, mark=None, detail=None):
+        """Log the decision, taken or not.
+
+        Every candidate is written, including the ones never reached because the
+        slots filled first — "slots_full" on a score of 91 is exactly the case worth
+        finding later.
+        """
+        try:
+            store.paper_decision(
+                ts=paper.now_ts(), scan_id=row.get("scan_id"), coin=row["coin"],
+                symbol=row.get("symbol"), side=row.get("side"),
+                score=row.get("score"), rank=rank, action=action, code=code,
+                mark=mark, detail=detail)
+        except Exception as exc:                              # noqa: BLE001
+            log.debug("could not record decision for %s: %s", row.get("coin"), exc)
+
+    # A full board and a tripped breaker are still decisions worth recording. The
+    # early returns that used to sit here skipped the loop entirely, so the case most
+    # worth finding later — a score of 91 that never got a slot — left no trace at
+    # all. Both conditions now fall through and are logged per candidate.
+    for rank, row in enumerate(pool, start=1):
+        if tripped:
+            record(row, rank, "declined", "circuit_breaker",
+                   detail=json.dumps(tripped, default=str))
+            continue
         if free <= 0:
-            break
+            record(row, rank, "declined", "slots_full")
+            continue
         try:
             proposal = _proposal(row, equity)
         except (paper.PaperError, toobit.ToobitError, ValueError) as exc:
             declined.append({"coin": row["coin"], "code": "unavailable",
                              "detail": str(exc)})
+            record(row, rank, "declined", "unavailable", detail=str(exc)[:200])
             continue
         if proposal is None:
             declined.append({"coin": row["coin"], "code": "no_plan"})
+            record(row, rank, "declined", "no_plan")
             continue
 
         # A venue rejects an order it cannot collateralise, and so must this.
@@ -804,10 +836,15 @@ def try_fill_slots() -> dict:
             declined.append({"coin": row["coin"], "code": "insufficient_margin",
                              "needs": cost, "available": available,
                              "leverage": proposal["leverage"]})
+            record(row, rank, "declined", "insufficient_margin",
+                   mark=proposal["entry"],
+                   detail=f"needs {cost:.2f}, available {available:.2f}")
             continue
 
         added_heat = proposal["risk_amount"] / equity * 100.0 if equity > 0 else 0.0
         if heat + added_heat > cap:
+            record(row, rank, "declined", "heat_cap", mark=proposal["entry"],
+                   detail=f"would add {added_heat:.2f}% to {heat:.2f}% of {cap:.1f}%")
             # The sixth signal that would breach the cap is declined, not shrunk to
             # fit. Sizing down to squeeze it in would mean the position no longer
             # matches the plan that qualified it.
@@ -816,14 +853,19 @@ def try_fill_slots() -> dict:
                              "heat_pct": heat, "cap_pct": cap})
             continue
 
-        pid = _open(row, proposal, slot=snapshot["slots"]["filled"] + len(opened) + 1)
+        pid = _open(row, proposal, slot=snapshot["slots"]["filled"] + len(opened) + 1,
+                    rank=rank, pool_size=len(pool))
+        record(row, rank, "opened", None, mark=proposal["entry"])
         opened.append({"coin": row["coin"], "id": pid,
                        "risk_amount": proposal["risk_amount"]})
         heat += added_heat
         available -= cost
         free -= 1
 
-    outcome = {"opened": opened, "declined": declined, "slots_free": free}
+    outcome = {"opened": opened, "declined": declined, "slots_free": free,
+               "candidates": len(pool)}
+    if tripped:
+        outcome["circuit_breaker"] = tripped
     store.set_kv("demo.last_fill", outcome)
     return outcome
 
@@ -914,7 +956,33 @@ def _proposal(row: dict, equity: float) -> dict | None:
     }
 
 
-def _open(row: dict, proposal: dict, slot: int) -> int:
+def _btc_bias_label() -> str | None:
+    """BTC's own trend at entry, so results can be split by regime later.
+
+    An altcoin short taken while BTC is falling and one taken while BTC is rallying
+    are different trades. Without this tag the sample mixes them and every average
+    across it is the average of two populations.
+    """
+    try:
+        bias = toobit._btc_bias("1D", 300)
+    except Exception:                                         # noqa: BLE001
+        return None
+    if not bias:
+        return None
+    return "bullish" if bias.get("bullish") else "bearish"
+
+
+def _open(row: dict, proposal: dict, slot: int, rank: int = 0,
+          pool_size: int = 0) -> int:
+    # The plan named an entry; the fill happens at the current mark. The gap is
+    # execution drift, and it is signed against the position: a short filled below
+    # its planned entry started worse off.
+    plan_entry = ((proposal["plan"].get("levels") or {}).get("entry"))
+    slippage = None
+    if isinstance(plan_entry, (int, float)) and plan_entry:
+        raw = (proposal["entry"] - plan_entry) / plan_entry * 100.0
+        slippage = raw if row["side"] == "long" else -raw
+
     pid = store.paper_open(
         coin=row["coin"], symbol=row["symbol"], exchange=row["exchange"],
         side=row["side"], slot=slot,
@@ -926,6 +994,10 @@ def _open(row: dict, proposal: dict, slot: int) -> int:
         scan_id=row.get("scan_id"), score=row.get("score"),
         verdict=row.get("verdict"),
         plan_json=json.dumps(proposal["plan"], ensure_ascii=False),
+        plan_entry=plan_entry,
+        entry_slippage_pct=slippage,
+        btc_bias=_btc_bias_label(),
+        takes_available=pool_size,
     )
     # The entry fee leaves the account the moment the position opens, exactly as it
     # would on the venue.

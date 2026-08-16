@@ -179,6 +179,58 @@ CREATE TABLE IF NOT EXISTS paper_events (
     detail      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_paper_events ON paper_events(position_id, id);
+
+-- The path a position took, one row per cycle.
+--
+-- MFE and MAE on the position row are scalars, and a scalar cannot distinguish
+-- "reached +1.4R twenty minutes in, then bled out over two days" from "reached
+-- +1.4R on the final bar". Those have opposite fixes, so the shape is kept, not
+-- just its extremes. Five positions on a 60s cycle is roughly 7k rows a day.
+CREATE TABLE IF NOT EXISTS paper_samples (
+    position_id  INTEGER NOT NULL REFERENCES paper_positions(id) ON DELETE CASCADE,
+    at           TEXT NOT NULL,
+    ts           REAL NOT NULL,
+    hours_held   REAL,
+    mark         REAL,
+    unrealised   REAL,
+    r            REAL,
+    margin_ratio REAL
+);
+CREATE INDEX IF NOT EXISTS idx_paper_samples ON paper_samples(position_id, ts);
+
+-- Every candidate the filler considered, taken or not.
+--
+-- This is the counterfactual, and it is the most valuable thing here for improving
+-- selection: if the trades that were declined would have outperformed the ones
+-- taken, the problem is the ranking, not the management. Without a record of what
+-- was passed over there is no way to ask that question at all. `mark` is the price
+-- at the moment of the decision, so the outcome can be reconstructed later from
+-- candles without sampling every rejected coin continuously.
+CREATE TABLE IF NOT EXISTS paper_decisions (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    at       TEXT NOT NULL,
+    ts       REAL NOT NULL,
+    scan_id  INTEGER,
+    coin     TEXT NOT NULL,
+    symbol   TEXT,
+    side     TEXT,
+    score    REAL,
+    rank     INTEGER,
+    action   TEXT NOT NULL,      -- opened | declined
+    code     TEXT,               -- insufficient_margin | heat_cap | slots_full | ...
+    mark     REAL,
+    detail   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_paper_decisions ON paper_decisions(ts DESC, coin);
+
+-- One row per candidate per scan per outcome.
+--
+-- The filler runs every 60s but the candidate set only changes when a scan does, so
+-- without this a full board would write the same "slots_full" verdict for the same
+-- thirteen coins 1440 times a day. Deduplicating on the scan keeps the table a
+-- record of distinct decisions rather than a record of how often the timer fired.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_decisions_unique
+    ON paper_decisions(scan_id, coin, action, code);
 """
 
 
@@ -245,6 +297,19 @@ _MIGRATIONS = (
     ("paper_positions", "realised_partial", "REAL NOT NULL DEFAULT 0"),
     ("paper_positions", "stop_moved_to_be", "INTEGER NOT NULL DEFAULT 0"),
     ("paper_positions", "original_contracts", "REAL"),
+    # Execution drift: the plan named an entry, the fill happened at mark. That gap
+    # is real slippage and was never recorded, so it could never be measured.
+    ("paper_positions", "plan_entry", "REAL"),
+    ("paper_positions", "entry_slippage_pct", "REAL"),
+    # Regime and competition at entry, so results can be bucketed by the conditions
+    # they were taken in rather than treated as one undifferentiated sample.
+    ("paper_positions", "btc_bias", "TEXT"),
+    ("paper_positions", "takes_available", "INTEGER"),
+    # When the extremes happened, not just how large they were.
+    ("paper_positions", "mfe_at", "TEXT"),
+    ("paper_positions", "mae_at", "TEXT"),
+    ("paper_positions", "mfe_hours", "REAL"),
+    ("paper_positions", "mae_hours", "REAL"),
 )
 
 
@@ -571,10 +636,13 @@ def paper_position(position_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+# Anything not listed here is silently dropped by paper_open, so a new column has
+# to be added in both places or it will read as NULL forever with no error.
 _OPEN_FIELDS = (
     "coin", "symbol", "exchange", "side", "slot", "contracts", "entry_price",
     "leverage", "margin", "risk_amount", "stop", "tp1", "tp2", "opened_ts",
     "entry_fee", "scan_id", "score", "verdict", "plan_json", "context_json",
+    "plan_entry", "entry_slippage_pct", "btc_bias", "takes_available",
 )
 
 
@@ -615,6 +683,42 @@ def paper_event(position_id: int | None, kind: str, *, action: str | None = None
             "VALUES (?, ?, ?, ?, ?, ?)",
             (position_id, now_iso(), kind, action, amount, detail),
         )
+
+
+def paper_sample(position_id: int, **fields) -> None:
+    """One point on a position's path. Cheap and frequent, so it is a single insert."""
+    cols = ("at", "ts", "hours_held", "mark", "unrealised", "r", "margin_ratio")
+    with tx() as conn:
+        conn.execute(
+            f"INSERT INTO paper_samples (position_id, {', '.join(cols)}) "
+            f"VALUES (?, {', '.join('?' for _ in cols)})",
+            (position_id, now_iso(), *(fields.get(c) for c in cols[1:])),
+        )
+
+
+def paper_samples(position_id: int) -> list[dict]:
+    return [dict(r) for r in _rows(
+        "SELECT * FROM paper_samples WHERE position_id = ? ORDER BY ts", (position_id,))]
+
+
+def paper_decision(**fields) -> None:
+    cols = ("ts", "scan_id", "coin", "symbol", "side", "score", "rank",
+            "action", "code", "mark", "detail")
+    with tx() as conn:
+        conn.execute(
+            f"INSERT OR IGNORE INTO paper_decisions (at, {', '.join(cols)}) "
+            f"VALUES (?, {', '.join('?' for _ in cols)})",
+            (now_iso(), *(fields.get(c) for c in cols)),
+        )
+
+
+def paper_decisions(limit: int = 500, action: str | None = None) -> list[dict]:
+    if action:
+        return [dict(r) for r in _rows(
+            "SELECT * FROM paper_decisions WHERE action = ? ORDER BY id DESC LIMIT ?",
+            (action, limit))]
+    return [dict(r) for r in _rows(
+        "SELECT * FROM paper_decisions ORDER BY id DESC LIMIT ?", (limit,))]
 
 
 def paper_events(position_id: int | None = None, limit: int = 200) -> list[dict]:
