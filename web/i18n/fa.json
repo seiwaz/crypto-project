@@ -188,7 +188,6 @@
   "demo.col.size": "قرارداد / سکه",
   "demo.col.entry": "ورود",
   "demo.col.mark": "قیمت نشانه",
-  "demo.col.stop": "حد ضرر",
   "demo.col.liq": "لیکوئید",
   "demo.col.lev": "اهرم",
   "demo.col.margin": "وجه تضمین",
@@ -218,5 +217,12 @@
   "demo.exit.time_stop": "حد زمانی",
   "demo.exit.review_exit": "خروج پس از بازبینی",
   "demo.exit.unknown": "نامشخص",
-  "demo.col.marginFunding": "وجه تضمین / فاندینگ"
+  "demo.col.marginFunding": "وجه تضمین / فاندینگ",
+  "demo.col.levels": "حد ضرر / اهداف",
+  "demo.tp1": "حد سود ۱",
+  "demo.tp2": "حد سود ۲",
+  "demo.filled": "✓ پر شد",
+  "demo.stopAtBe": "حد ضرر روی نقطه سربه‌سر + هزینه‌ها",
+  "demo.slot.circuit_breaker": "قطع‌کنندهٔ مدار فعال شد — موقعیت تازه‌ای باز نمی‌شود",
+  "demo.exit.reduced": "کاهش در حد سود ۱"
 }

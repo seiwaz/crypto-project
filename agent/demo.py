@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 
-from . import config, paper, store, toobit
+from . import config, paper, skill, store, toobit
 
 log = logging.getLogger("demo")
 
@@ -41,6 +41,32 @@ CORRELATION_THRESHOLD = 0.9
 
 
 DEFAULT_CYCLE_SECONDS = 90
+
+# ---------------------------------------------------------------------------
+# Management policy, transcribed from the skill's Step 9.
+#
+# These rules belong in the skill's position_manager.py, which is not installed.
+# They are kept here as a single named block, with the skill's own wording quoted,
+# so that swapping them for the real script later is a deletion rather than a hunt
+# through the cycle logic. Every plan also carries its own `management` strings, and
+# a plan's numbers always win over these defaults.
+#
+#   "On TP1: close 50%, stop to breakeven plus accumulated costs"
+#   "Time stop: ~6 decision-TF candles (scalp) or ~12 (intraday) below 0.5R"
+#   "Trail behind new swing points on the decision TF, not a tight indicator"
+#   "Never widen a stop"
+#   "Circuit breaker: 2 losses or -3% equity (scalp), 3 losses or -5% (intraday)"
+# ---------------------------------------------------------------------------
+
+TP1_CLOSE_FRACTION = 0.5
+TIME_STOP_BARS = {"scalp": 6, "intraday": 12, "swing": 12}
+TIME_STOP_MIN_R = 0.5
+CIRCUIT_BREAKER = {"scalp": (2, 3.0), "intraday": (3, 5.0), "swing": (3, 5.0)}
+
+# Decision-timeframe labels to minutes, for counting bars held.
+_TF_MINUTES = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+               "1H": 60, "2H": 120, "4H": 240, "6H": 360, "12H": 720,
+               "1D": 1440, "3D": 4320, "1W": 10080}
 
 
 def scheduler_loop(stop_event) -> None:
@@ -215,6 +241,8 @@ def _empty_slot_reason(filled: int, slots: int, heat: float, acct: dict) -> dict
     # load. Reporting "awaiting fill" when the real answer is "no margin" would send
     # the reader looking at the market instead of at the sizing.
     last = store.get_kv("demo.last_fill") or {}
+    if last.get("circuit_breaker"):
+        return {"code": "circuit_breaker", "detail": last["circuit_breaker"]}
     blocked = last.get("declined") or []
     if blocked:
         top = blocked[0]
@@ -299,23 +327,49 @@ def cycle() -> dict:
     return {"checked": len(results), "results": results}
 
 
+def _plan_of(pos: dict) -> dict:
+    try:
+        return json.loads(pos["plan_json"]) if pos.get("plan_json") else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def decision_tf(plan: dict) -> str:
+    return ((plan.get("timeframes") or {}).get("decision")) or "4H"
+
+
+def bars_held(pos: dict, plan: dict) -> int:
+    minutes = _TF_MINUTES.get(decision_tf(plan), 240)
+    elapsed_min = (paper.now_ts() - float(pos["opened_ts"])) / 60.0
+    return int(elapsed_min // minutes)
+
+
 def _cycle_one(pos: dict) -> dict:
     spec = paper.contract_spec(pos["symbol"])
     mark, mark_source = paper.mark_price(spec)
     if mark is None:
         return {"coin": pos["coin"], "action": "SKIP", "reason": "no mark price"}
 
+    plan = _plan_of(pos)
     balance_delta = _accrue_funding(pos, spec, mark)
     st = paper.position_state(pos, spec, mark)
     _record_excursions(pos, st)
+
+    held = bars_held(pos, plan)
+    if held != int(pos.get("bars_held") or 0):
+        store.paper_update(pos["id"], bars_held=held)
+        pos["bars_held"] = held
 
     candle = _latest_candle(pos["symbol"])
     high = max(candle["high"], mark) if candle else mark
     low = min(candle["low"], mark) if candle else mark
 
+    # Terminal exits first. TP1 is deliberately excluded here — it is a partial, and
+    # treating it as an exit would close the whole position at the point the plan
+    # says to take half off and let the rest run.
     hit = paper.exit_reason(
         pos["side"], high, low,
-        stop=pos.get("stop"), tp1=pos.get("tp1"), tp2=pos.get("tp2"),
+        stop=pos.get("stop"), tp1=None, tp2=pos.get("tp2"),
         liq=st["liquidation_price"],
     )
     if hit:
@@ -325,9 +379,159 @@ def _cycle_one(pos: dict) -> dict:
                 "exit_price": price, "realised": realised,
                 "balance_delta": balance_delta + realised}
 
+    # "On TP1: close 50%, stop to breakeven plus accumulated costs."
+    if not int(pos.get("tp1_filled") or 0) and _touched(pos["side"], high, low,
+                                                        pos.get("tp1")):
+        realised = _reduce_at_tp1(pos, spec, float(pos["tp1"]))
+        return {"coin": pos["coin"], "action": "REDUCE", "reason": "tp1",
+                "exit_price": pos["tp1"], "realised": realised,
+                "balance_delta": balance_delta + realised}
+
+    moved = _trail_stop(pos, plan, spec)
+
+    # "Time stop: ~6 decision-TF candles (scalp) or ~12 (intraday) below 0.5R."
+    limit = TIME_STOP_BARS.get(plan.get("profile") or "intraday", 12)
+    r_now = st.get("unrealised_r")
+    if held >= limit and r_now is not None and r_now < TIME_STOP_MIN_R:
+        realised = _close(pos, spec, mark, "time_stop")
+        return {"coin": pos["coin"], "action": "CLOSE", "reason": "time_stop",
+                "bars_held": held, "unrealised_r": r_now,
+                "exit_price": mark, "realised": realised,
+                "balance_delta": balance_delta + realised}
+
+    # "Re-evaluate before every 8h renewal/funding charge — would I open this now?"
+    verdict = _review(pos)
+    if verdict is not None:
+        realised = _close(pos, spec, mark, "review_exit")
+        return {"coin": pos["coin"], "action": "CLOSE", "reason": "review_exit",
+                "detail": verdict, "exit_price": mark, "realised": realised,
+                "balance_delta": balance_delta + realised}
+
     return {"coin": pos["coin"], "action": "HOLD", "mark": mark,
-            "mark_source": mark_source,
-            "unrealised_r": st["unrealised_r"], "balance_delta": balance_delta}
+            "mark_source": mark_source, "bars_held": held,
+            "stop_moved": moved,
+            "unrealised_r": r_now, "balance_delta": balance_delta}
+
+
+def _touched(side: str, high: float, low: float, level: float | None) -> bool:
+    return level is not None and low <= float(level) <= high
+
+
+def _reduce_at_tp1(pos: dict, spec: dict, price: float) -> float:
+    """Close half the position at TP1 and move the stop to breakeven plus costs.
+
+    Breakeven *plus accumulated cost*, not bare entry: exiting the remainder at the
+    entry price would still lose the fees and funding already paid, so a "breakeven"
+    stop set there is a small guaranteed loss.
+    """
+    qty = float(pos["contracts"])
+    closing = paper.round_to_step(qty * TP1_CLOSE_FRACTION, spec["step_size"])
+    if closing <= 0 or closing >= qty:
+        # Too small to halve on this venue's lot step — take the whole thing at TP1
+        # rather than leaving an untradeable remainder behind.
+        return _close(pos, spec, price, "tp1")
+
+    remaining = qty - closing
+    gross = paper.unrealised_pnl(pos["side"], float(pos["entry_price"]), price,
+                                 closing, spec)
+    fee = paper.fee(paper.notional(closing, price, spec))
+    realised = gross - fee
+
+    entry = float(pos["entry_price"])
+    costs = (float(pos.get("entry_fee") or 0.0) + fee
+             - float(pos.get("funding_paid") or 0.0))
+    coins_left = paper.coins(remaining, spec)
+    offset = (costs / coins_left) if coins_left else 0.0
+    be_stop = entry + offset if pos["side"] == "long" else entry - offset
+
+    margin_released = float(pos["margin"]) * (closing / qty)   # un-reserved, not cash
+    store.paper_update(
+        pos["id"],
+        contracts=remaining,
+        original_contracts=float(pos.get("original_contracts") or qty),
+        margin=float(pos["margin"]) - margin_released,
+        tp1_filled=1,
+        stop_moved_to_be=1,
+        stop=be_stop,
+        exit_fee=float(pos.get("exit_fee") or 0.0) + fee,
+        realised_partial=float(pos.get("realised_partial") or 0.0) + realised,
+    )
+    store.paper_event(pos["id"], "action", action="REDUCE", amount=realised,
+                      detail=f"TP1 {closing:g} of {qty:g} contracts @ {price:g}; "
+                             f"stop to breakeven+costs {be_stop:.8g}")
+    pos.update(contracts=remaining, tp1_filled=1, stop=be_stop,
+               margin=float(pos["margin"]) - margin_released)
+    return realised
+
+
+def _trail_stop(pos: dict, plan: dict, spec: dict) -> float | None:
+    """Trail behind the latest swing point on the decision timeframe.
+
+    Swings come from the skill's own `compute_indicators`, not a local reimplementation,
+    so the level the demo trails to is the same one the planner would have named.
+    A stop is only ever tightened — "never widen a stop" is the one management rule
+    with no exceptions.
+    """
+    if not int(pos.get("tp1_filled") or 0):
+        return None                       # trail only the runner, after TP1
+    try:
+        rows = toobit.klines(pos["symbol"], _tf_to_interval(decision_tf(plan)),
+                             limit=120)
+    except toobit.ToobitError:
+        return None
+    if not rows:
+        return None
+    try:
+        ind = skill.compute_indicators(rows)
+    except Exception:                                        # noqa: BLE001
+        return None
+
+    level = ind.get("swing_low") if pos["side"] == "long" else ind.get("swing_high")
+    if not isinstance(level, (int, float)):
+        return None
+    current = pos.get("stop")
+    if current is None:
+        return None
+    tighter = level > float(current) if pos["side"] == "long" else level < float(current)
+    if not tighter:
+        return None
+    store.paper_update(pos["id"], stop=float(level))
+    store.paper_event(pos["id"], "action", action="MOVE_STOP_BE",
+                      detail=f"trailed {float(current):.8g} -> {float(level):.8g} "
+                             f"behind {decision_tf(plan)} swing")
+    pos["stop"] = float(level)
+    return float(level)
+
+
+def _tf_to_interval(tf: str) -> str:
+    """Skill timeframe labels to Toobit kline intervals."""
+    return {"1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1H": "1h", "2H": "2h", "4H": "4h", "6H": "6h", "12H": "12h",
+            "1D": "1d", "1W": "1w"}.get(tf, "4h")
+
+
+def _review(pos: dict) -> str | None:
+    """"Would I open this now?" — asked once per funding period, not every cycle.
+
+    The demo answers it with the screener's current verdict for that coin. If the
+    latest scan no longer rates it a TAKE, the thesis that justified the position is
+    gone and the position goes with it. Returns the reason to close, or None to hold.
+    """
+    periods = int(pos.get("funding_periods") or 0)
+    if periods <= 0:
+        return None
+    last_reviewed = store.get_kv(f"demo.reviewed.{pos['id']}") or 0
+    if periods <= int(last_reviewed):
+        return None
+    store.set_kv(f"demo.reviewed.{pos['id']}", periods)
+
+    row = store.result_for(pos["coin"], pos["exchange"])
+    if not row:
+        return None
+    verdict, score = row.get("verdict"), row.get("score")
+    if verdict == "TAKE" and score is not None and float(score) >= MIN_SCORE:
+        return None
+    return f"verdict is now {verdict} ({score}) at funding period {periods}"
 
 
 def _accrue_funding(pos: dict, spec: dict, mark: float) -> float:
@@ -376,11 +580,23 @@ def _close(pos: dict, spec: dict, price: float, reason: str) -> float:
                                  float(pos["contracts"]), spec)
     exit_fee = paper.fee(paper.notional(float(pos["contracts"]), price, spec))
     realised = gross - exit_fee
+
+    # The stored result is the whole trade, including anything banked at TP1 — a
+    # position halved at +1.5R and stopped at breakeven is a winner, and recording
+    # only the final leg would file it as a scratch.
+    partial = float(pos.get("realised_partial") or 0.0)
     store.paper_close(pos["id"], exit_price=price, exit_reason=reason,
-                      realised_pnl=realised, exit_fee=exit_fee)
+                      realised_pnl=realised + partial,
+                      exit_fee=float(pos.get("exit_fee") or 0.0) + exit_fee)
     store.paper_event(pos["id"], "close", action="CLOSE", amount=realised,
                       detail=reason)
-    return float(pos["margin"]) + realised
+    # Only the P&L moves the balance.
+    #
+    # Margin is *reserved*, not spent: `available_margin` is balance minus the margin
+    # of open positions, and opening never debited it. Crediting it back on close
+    # therefore invented money — a trade that made +7.57 left the balance +57.57.
+    # TP1's proceeds were already credited when it filled.
+    return realised
 
 
 def _latest_candle(symbol: str) -> dict | None:
@@ -409,6 +625,17 @@ def try_fill_slots() -> dict:
     free = snapshot["slots"]["empty"]
     if free <= 0:
         return {"opened": [], "declined": [], "slots_free": 0}
+
+    # "Circuit breaker: 2 losses or -3% equity (scalp), 3 losses or -5% (intraday)."
+    # A breaker that only stops the current trade is not a breaker; this stops the
+    # account taking new risk until a human resets it.
+    tripped = circuit_breaker()
+    if tripped:
+        store.set_kv("demo.last_fill",
+                     {"opened": [], "declined": [], "slots_free": free,
+                      "circuit_breaker": tripped})
+        return {"opened": [], "declined": [], "slots_free": free,
+                "circuit_breaker": tripped}
 
     heat = snapshot["heat"]["used_pct"]
     cap = snapshot["heat"]["cap_pct"]
@@ -462,6 +689,36 @@ def try_fill_slots() -> dict:
     outcome = {"opened": opened, "declined": declined, "slots_free": free}
     store.set_kv("demo.last_fill", outcome)
     return outcome
+
+
+def circuit_breaker() -> dict | None:
+    """Has the account taken enough damage today to stop opening new positions?
+
+    Counts only the current run of losses: one winner clears it, which is the point —
+    the breaker is for a losing streak, not a lifetime tally.
+    """
+    acct = store.paper_account()
+    if not acct:
+        return None
+    profile = (config.load_settings().get("profile") or "intraday")
+    max_losses, max_drawdown_pct = CIRCUIT_BREAKER.get(profile, (3, 5.0))
+
+    streak = 0
+    for trade in store.paper_closed_positions():          # newest first
+        pnl = trade.get("realised_pnl")
+        if pnl is None or float(pnl) > 0:
+            break
+        streak += 1
+
+    start = float(acct["starting_capital"])
+    drop_pct = (1.0 - float(acct["balance"]) / start) * 100.0 if start else 0.0
+
+    if streak >= max_losses:
+        return {"code": "consecutive_losses", "losses": streak, "limit": max_losses}
+    if drop_pct >= max_drawdown_pct:
+        return {"code": "equity_drawdown", "drop_pct": drop_pct,
+                "limit_pct": max_drawdown_pct}
+    return None
 
 
 def _proposal(row: dict, equity: float) -> dict | None:

@@ -151,6 +151,10 @@ CREATE TABLE IF NOT EXISTS paper_positions (
     -- management failure, never moved is a thesis failure. Same P&L, different fix.
     mfe_r         REAL,
     mae_r         REAL,
+    tp1_filled    INTEGER NOT NULL DEFAULT 0,
+    realised_partial REAL NOT NULL DEFAULT 0,
+    stop_moved_to_be INTEGER NOT NULL DEFAULT 0,
+    original_contracts REAL,
     closed_at     TEXT,
     exit_price    REAL,
     exit_reason   TEXT,                   -- tp1 | tp2 | stopped | liquidated | time_stop | review_exit
@@ -235,6 +239,12 @@ _MIGRATIONS = (
     # exchange switch and sat under a contradicting verdict — "advises skipping this
     # trade" printed beneath a TAKE.
     ("commentary", "exchange", "TEXT"),
+    # TP1 is a partial exit, so it must fire once and only once. Without this flag a
+    # position that oscillates around TP1 would be halved on every cycle.
+    ("paper_positions", "tp1_filled", "INTEGER NOT NULL DEFAULT 0"),
+    ("paper_positions", "realised_partial", "REAL NOT NULL DEFAULT 0"),
+    ("paper_positions", "stop_moved_to_be", "INTEGER NOT NULL DEFAULT 0"),
+    ("paper_positions", "original_contracts", "REAL"),
 )
 
 

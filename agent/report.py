@@ -29,13 +29,29 @@ MIN_SAMPLE = 30
 EXIT_REASONS = ("tp2", "tp1", "stopped", "liquidated", "time_stop", "review_exit")
 
 
-def _r_multiple(trade: dict) -> float | None:
-    """Result in R: net PnL over the risk that was on at entry."""
-    risk = trade.get("risk_amount")
+def _net_pnl(trade: dict) -> float | None:
+    """P&L after every cost the trade actually incurred.
+
+    `realised_pnl` is already net of exit fees, because those are taken at the moment
+    each leg closes. The entry fee is not: it leaves the balance when the position
+    opens, so it has to be subtracted here or a 1R winner reports as slightly better
+    than 1R. Funding is a signed cash-flow, negative when the position paid.
+    """
     pnl = trade.get("realised_pnl")
-    if not risk or pnl is None:
+    if pnl is None:
         return None
-    return (float(pnl) + float(trade.get("funding_paid") or 0.0)) / float(risk)
+    return (float(pnl)
+            - float(trade.get("entry_fee") or 0.0)
+            + float(trade.get("funding_paid") or 0.0))
+
+
+def _r_multiple(trade: dict) -> float | None:
+    """Result in R: net P&L over the risk that was on at entry."""
+    risk = trade.get("risk_amount")
+    net = _net_pnl(trade)
+    if not risk or net is None:
+        return None
+    return net / float(risk)
 
 
 def _costs(trade: dict) -> dict:
@@ -69,8 +85,7 @@ def trades() -> list[dict]:
             "r": _r_multiple(row),
             "gross_pnl": row.get("realised_pnl"),
             "costs": _costs(row),
-            "net_pnl": (float(row["realised_pnl"]) + float(row.get("funding_paid") or 0.0)
-                        if row.get("realised_pnl") is not None else None),
+            "net_pnl": _net_pnl(row),
             "mfe_r": row.get("mfe_r"),
             "mae_r": row.get("mae_r"),
             "bars_held": row.get("bars_held"),
@@ -168,7 +183,9 @@ def by_score_band(rows: list[dict]) -> list[dict]:
             "count": len(group),
             "win_rate": (sum(1 for r in rs if r > 0) / len(rs) * 100.0) if rs else None,
             "expectancy_r": (sum(rs) / len(rs)) if rs else None,
-            "total_r": sum(rs) if rs else 0.0,
+            # None rather than 0.0 for an empty band, for the same reason the overall
+            # total is: "+0.00R" reads as a measured wash, not as "nothing here yet".
+            "total_r": sum(rs) if rs else None,
         })
     return out
 

@@ -21,10 +21,20 @@ def _n(value, digits: int = 2, dash: str = "no data") -> str:
     return f"{value:,.{digits}f}"
 
 
-def _signed(value, digits: int = 2) -> str:
+def _signed(value, digits: int = 2, dash: str = "no data") -> str:
+    """Signed number, or `dash` when absent.
+
+    Fixed-width columns pass a short dash: "no data" is eight characters and silently
+    overflowed a seven-wide field, printing "-0.001no datano data" with no separator.
+    """
     if value is None:
-        return "no data"
+        return dash
     return f"{value:+,.{digits}f}"
+
+
+def _unit(text: str, suffix: str) -> str:
+    """Append a unit only to an actual figure — "no data%" is not a reading."""
+    return text if text == "no data" else f"{text}{suffix}"
 
 
 def _rule(width: int = 78) -> str:
@@ -68,7 +78,7 @@ def open_block() -> list[str]:
         lines.append("  none")
         return lines
     header = (f"  {'COIN':<7}{'SIDE':<6}{'CONTRACTS':>12}{'ENTRY':>13}{'MARK':>13}"
-              f"{'uPNL':>10}{'R':>8}{'MFE':>7}{'MAE':>7}{'MR%':>7}")
+              f"{'uPNL':>10}{'R':>9}{'MFE':>8}{'MAE':>8}{'MR%':>7}")
     lines.append(header)
     for p in st["positions"]:
         s = p["state"] or {}
@@ -76,11 +86,11 @@ def open_block() -> list[str]:
             f"  {p['coin']:<7}{p['side']:<6}{p['contracts']:>12,.1f}"
             f"{p['entry_price']:>13,.6f}"
             f"{(s.get('mark') or 0):>13,.6f}"
-            f"{_signed(s.get('unrealised_pnl'), 4):>10}"
-            f"{_signed(s.get('unrealised_r'), 3):>8}"
-            f"{_signed(p.get('mfe_r'), 2):>7}"
-            f"{_signed(p.get('mae_r'), 2):>7}"
-            f"{_n(s.get('margin_ratio_pct')):>7}"
+            f"{_signed(s.get('unrealised_pnl'), 4, '--'):>10}"
+            f"{_signed(s.get('unrealised_r'), 3, '--'):>9}"
+            f"{_signed(p.get('mfe_r'), 2, '--'):>8}"
+            f"{_signed(p.get('mae_r'), 2, '--'):>8}"
+            f"{_n(s.get('margin_ratio_pct'), 2, '--'):>7}"
         )
         lines.append(f"         stop {_n(p.get('stop'), 6)}  tp1 {_n(p.get('tp1'), 6)}  "
                      f"tp2 {_n(p.get('tp2'), 6)}  liq {_n(s.get('liquidation_price'), 6)}  "
@@ -116,11 +126,12 @@ def report_block() -> list[str]:
     a = r["aggregate"]
     lines = ["", "REPORT", _rule(),
              f"  closed trades    {a['closed']}",
-             f"  win rate         {_n(a['win_rate'], 1)}%",
-             f"  avg win / loss   {_signed(a['avg_win_r'], 3)}R / {_signed(a['avg_loss_r'], 3)}R",
-             f"  expectancy       {_signed(a['expectancy_r'], 3)}R per trade",
+             f"  win rate         {_unit(_n(a['win_rate'], 1), '%')}",
+             f"  avg win / loss   {_unit(_signed(a['avg_win_r'], 3), 'R')}"
+             f" / {_unit(_signed(a['avg_loss_r'], 3), 'R')}",
+             f"  expectancy       {_unit(_signed(a['expectancy_r'], 3), 'R per trade')}",
              f"  total R          {_signed(a['total_r'], 2)}",
-             f"  max drawdown     {_signed(a['max_drawdown_r'], 2)}R",
+             f"  max drawdown     {_unit(_signed(a['max_drawdown_r'], 2), 'R')}",
              f"  costs paid       {_n(a['costs_paid'], 4)} USDT",
              f"  equity vs start  {_n(a['balance'])} / {_n(a['starting_capital'])}"
              f"  ({_signed(a['return_pct'], 3)}%)"]
@@ -131,14 +142,16 @@ def report_block() -> list[str]:
                   f"{'total R':>10}{'avg MFE':>10}"]
         for b in r["by_exit_reason"]:
             lines.append(f"    {b['reason']:<14}{b['count']:>4}"
-                         f"{_n(b['share_pct'], 1):>8}%{_signed(b['avg_r'], 3):>9}"
-                         f"{_signed(b['total_r'], 2):>10}{_signed(b['avg_mfe_r'], 2):>10}")
+                         f"{_n(b['share_pct'], 1, '--'):>8}%{_signed(b['avg_r'], 3, '--'):>9}"
+                         f"{_signed(b['total_r'], 2, '--'):>10}"
+                         f"{_signed(b['avg_mfe_r'], 2, '--'):>10}")
 
     lines += ["", "  BY SCORE BAND",
               f"    {'band':<8}{'n':>4}{'win%':>9}{'expectancy':>13}{'total R':>10}"]
     for b in r["by_score_band"]:
-        lines.append(f"    {b['band']:<8}{b['count']:>4}{_n(b['win_rate'], 1):>9}"
-                     f"{_signed(b['expectancy_r'], 3):>13}{_signed(b['total_r'], 2):>10}")
+        lines.append(f"    {b['band']:<8}{b['count']:>4}{_n(b['win_rate'], 1, '--'):>9}"
+                     f"{_signed(b['expectancy_r'], 3, '--'):>13}"
+                     f"{_signed(b['total_r'], 2, '--'):>10}")
 
     s = r["sample"]
     lines.append("")

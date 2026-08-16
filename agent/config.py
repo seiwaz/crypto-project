@@ -17,7 +17,11 @@ CONFIG_DIR = ROOT / "config"
 WEB_DIR = ROOT / "web"
 VAR_DIR = ROOT / "var"
 LOG_DIR = VAR_DIR / "logs"
-DB_PATH = VAR_DIR / "screener.sqlite3"
+# Overridable so a test can run against its own database. Without this a test run
+# shares the file with the live server's demo loop, which opens positions underneath
+# it — a check for "one open position" then fails for reasons that have nothing to do
+# with the code under test.
+DB_PATH = Path(os.environ.get("SCREENER_DB") or (VAR_DIR / "screener.sqlite3"))
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
 WATCHLIST_PATH = CONFIG_DIR / "watchlist.json"
 

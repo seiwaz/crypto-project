@@ -957,7 +957,22 @@ function positionRow(p) {
     el('td', {}, [num(p.entry_price, { digits: 6 })]),
     el('td', {}, [num(s ? s.mark : null, { digits: 6 }),
                   el('div', { class: 'pos__sub', text: p.mark_source || '' })]),
-    el('td', {}, [num(p.stop, { digits: 6 })]),
+    /* Targets sit under the stop rather than in columns of their own: the row already
+     * carries twelve figures, and what a reader needs at a glance is the three levels
+     * that end the trade, together. A filled TP1 is marked, because a position whose
+     * stop now sits at breakeven is a different trade from the one that was opened. */
+    el('td', {}, [
+      num(p.stop, { digits: 6 }),
+      el('div', { class: 'pos__sub' }, [
+        el('span', { text: `${t('demo.tp1')} ` }), num(p.tp1, { digits: 6 }),
+        p.tp1_filled ? el('span', { class: 'pos__filled', text: ` ${t('demo.filled')}` }) : null,
+      ]),
+      el('div', { class: 'pos__sub' }, [
+        el('span', { text: `${t('demo.tp2')} ` }), num(p.tp2, { digits: 6 }),
+      ]),
+      p.stop_moved_to_be
+        ? el('div', { class: 'pos__sub pos__be', text: t('demo.stopAtBe') }) : null,
+    ]),
     el('td', {}, [num(s ? s.liquidation_price : null, { digits: 6 })]),
     el('td', {}, [num(p.leverage, { digits: 2, suffix: '×' })]),
     /* Funding rides under margin rather than taking a column of its own: at 13
@@ -987,7 +1002,7 @@ function demoPositions(d) {
     return el('div', { class: 'empty', text: t('demo.noPositions') });
   }
   const headers = ['demo.col.coin', 'demo.col.side', 'demo.col.size', 'demo.col.entry',
-                   'demo.col.mark', 'demo.col.stop', 'demo.col.liq', 'demo.col.lev',
+                   'demo.col.mark', 'demo.col.levels', 'demo.col.liq', 'demo.col.lev',
                    'demo.col.marginFunding', 'demo.col.upnl', 'demo.col.mfe',
                    'demo.col.marginRatio'];
   return el('div', { class: 'table-wrap' }, [

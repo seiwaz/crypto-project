@@ -685,3 +685,6 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   padding: 0.05em 0.3em;
   unicode-bidi: isolate;
 }
+
+.pos__filled { color: var(--good); font-weight: 600; }
+.pos__be { color: var(--accent); }

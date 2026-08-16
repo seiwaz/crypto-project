@@ -168,7 +168,6 @@
   "demo.col.size": "Contracts / coins",
   "demo.col.entry": "Entry",
   "demo.col.mark": "Mark",
-  "demo.col.stop": "Stop",
   "demo.col.liq": "Liquidation",
   "demo.col.lev": "Leverage",
   "demo.col.margin": "Margin",
@@ -198,5 +197,12 @@
   "demo.exit.time_stop": "Time stop",
   "demo.exit.review_exit": "Review exit",
   "demo.exit.unknown": "Unknown",
-  "demo.col.marginFunding": "Margin / funding"
+  "demo.col.marginFunding": "Margin / funding",
+  "demo.col.levels": "Stop / targets",
+  "demo.tp1": "TP1",
+  "demo.tp2": "TP2",
+  "demo.filled": "✓ filled",
+  "demo.stopAtBe": "stop at breakeven + costs",
+  "demo.slot.circuit_breaker": "Circuit breaker tripped — no new positions",
+  "demo.exit.reduced": "Reduced at TP1"
 }

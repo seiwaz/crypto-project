@@ -1,0 +1,133 @@
+"""Deterministic lifecycle checks for the demo's management rules.
+
+Run against a scratch database so the live server's demo loop cannot open positions
+underneath the assertions:
+
+    SCREENER_DB=/tmp/demo-test.sqlite3 python3 tests/test_demo_lifecycle.py
+
+Mark price and the latest candle are driven directly, because the rules being tested
+- TP1 partial, breakeven stop, time stop, review exit, circuit breaker - would
+otherwise need the market to cooperate. Everything else is the real code path.
+
+These caught two money bugs: margin being credited back on close although it was
+never debited on open (a +7.57 trade left the balance +57.57), and the entry fee
+missing from the R-multiple.
+"""
+import os, sys, json
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agent import demo, paper, store
+
+store.init()
+
+SYM, ENTRY, RISK = 'FIL-SWAP-USDT', 0.68, 10.0
+spec = paper.contract_spec(SYM)
+price = {'v': ENTRY}
+paper.mark_price = lambda s: (price['v'], 'test')
+demo._latest_candle = lambda sym: {'high': price['v'], 'low': price['v'],
+                                   'open': price['v'], 'close': price['v'], 'volume': 0}
+demo._trail_stop = lambda pos, plan, spec: None
+
+def fresh(*, side='long', opened_ago_s=0.0, verdict='TAKE', score=85.0):
+    store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+    sign = 1 if side == 'long' else -1
+    stop = ENTRY * (1 - 0.04 * sign)
+    tp1  = ENTRY * (1 + 0.06 * sign)
+    tp2  = ENTRY * (1 + 0.12 * sign)
+    qty = paper.round_to_step(RISK/abs(ENTRY-stop)/spec['units_per_contract'], spec['step_size'])
+    n = paper.notional(qty, ENTRY, spec)
+    plan = {"profile": "intraday", "timeframes": {"decision": "4H"},
+            "levels": {"entry": ENTRY, "stop": stop, "tp1": tp1, "tp2": tp2},
+            "sizing": {"quantity": paper.coins(qty, spec), "leverage": 5.0,
+                       "risk_amount_R": RISK}}
+    pid = store.paper_open(coin='FIL', symbol=SYM, exchange='toobit', side=side, slot=1,
+        contracts=qty, entry_price=ENTRY, leverage=5.0, margin=n/5.0, risk_amount=RISK,
+        stop=stop, tp1=tp1, tp2=tp2, opened_ts=paper.now_ts()-opened_ago_s,
+        entry_fee=paper.fee(n), score=score, verdict=verdict, plan_json=json.dumps(plan))
+    return pid, stop, tp1, tp2
+
+def check(label, got, want, tol=1e-6):
+    ok = abs(got-want) <= tol if isinstance(want, float) else got == want
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}: got {got!r}, want {want!r}")
+    return ok
+
+results = []
+
+print("1. TP1 takes half and moves the stop to breakeven + costs")
+pid, stop, tp1, tp2 = fresh()
+before = store.paper_position(pid)['contracts']
+price['v'] = tp1; demo.cycle()
+p = store.paper_position(pid)
+results.append(check("half closed", round(p['contracts']/before, 3), 0.5))
+results.append(check("tp1 flagged", p['tp1_filled'], 1))
+results.append(check("stop above entry", p['stop'] > ENTRY, True))
+bal_after_tp1 = store.paper_account()['balance']
+results.append(check("banked ~0.75R", round(p['realised_partial'], 2), round(0.75*RISK - 0.08, 2), 0.15))
+
+print("2. The runner stops at breakeven and the trade nets positive")
+price['v'] = p['stop']; demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("exit reason", t['exit_reason'], 'stopped'))
+results.append(check("total > 0", t['realised_pnl'] > 0, True))
+bal = store.paper_account()['balance']
+results.append(check("balance reconciles", round(bal, 4), round(1000 + t['realised_pnl'], 4), 0.01))
+from agent import report as _rep
+results.append(check("R is net of entry fee", round(_rep.trades()[0]['r'], 4),
+                     round((t['realised_pnl'] - t['entry_fee'] + (t['funding_paid'] or 0))/10.0, 4), 1e-4))
+
+print("3. TP2 closes the whole position")
+pid, stop, tp1, tp2 = fresh()
+price['v'] = tp2; demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("exit reason", t['exit_reason'], 'tp2'))
+results.append(check("no open positions", len(store.paper_open_positions()), 0))
+
+print("4. Stop-out on a short")
+pid, stop, tp1, tp2 = fresh(side='short')
+price['v'] = stop; demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("exit reason", t['exit_reason'], 'stopped'))
+results.append(check("loses about 1R", round(t['realised_pnl']/RISK, 1), -1.0, 0.15))
+
+print("5. Time stop fires after 12 4H bars below 0.5R")
+pid, *_ = fresh(opened_ago_s=13*4*3600)
+price['v'] = ENTRY * 1.001
+demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("exit reason", t['exit_reason'], 'time_stop'))
+results.append(check("bars held >= 12", t['bars_held'] >= 12, True))
+
+print("6. Time stop does NOT fire when the trade is above 0.5R")
+pid, stop, tp1, tp2 = fresh(opened_ago_s=13*4*3600)
+price['v'] = ENTRY + 0.6*(tp1-ENTRY)/1.5*1.5   # ~0.9R, below tp1
+demo.cycle()
+results.append(check("still open", len(store.paper_open_positions()), 1))
+
+print("7. Review exit when the verdict is no longer TAKE")
+pid, *_ = fresh()
+store.paper_update(pid, funding_periods=1)
+store.set_kv(f"demo.reviewed.{pid}", 0)
+import agent.demo as D
+D.store.result_for = lambda coin, ex: {"verdict": "SKIP", "score": 41.0}
+price['v'] = ENTRY
+demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("exit reason", t['exit_reason'], 'review_exit'))
+
+print("8. Circuit breaker stops new positions after 3 losses")
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+for i in range(3):
+    pid, stop, *_ = fresh.__wrapped__() if hasattr(fresh,'__wrapped__') else (None,None)
+    break
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+for i in range(3):
+    pid = store.paper_open(coin=f'X{i}', symbol=SYM, exchange='toobit', side='long', slot=1,
+        contracts=10, entry_price=ENTRY, leverage=5.0, margin=1.0, risk_amount=RISK,
+        stop=0.6, tp1=0.7, tp2=0.8, opened_ts=paper.now_ts(), entry_fee=0.0)
+    store.paper_close(pid, exit_price=0.6, exit_reason='stopped', realised_pnl=-10.0, exit_fee=0.0)
+cb = demo.circuit_breaker()
+results.append(check("breaker tripped", cb and cb['code'], 'consecutive_losses'))
+results.append(check("losses counted", cb and cb['losses'], 3))
+
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+print(f"\n{sum(results)}/{len(results)} checks passed")
+sys.exit(0 if all(results) else 1)
