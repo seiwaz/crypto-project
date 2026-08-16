@@ -280,7 +280,7 @@ def ticker(symbol: str) -> dict:
 # The TTLs differ because the data does: a mark moves continuously and is cached only
 # long enough to stop one operation fetching it repeatedly, while funding is fixed for
 # the whole 8-hour period and was being re-fetched every 60 seconds.
-_INDEX_TTL = 3.0
+_INDEX_TTL = 2.0
 _FUNDING_TTL = 300.0
 
 _index_cache: tuple[float, dict] = (0.0, {})

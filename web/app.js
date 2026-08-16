@@ -50,6 +50,9 @@ const state = {
   tab: localStorage.getItem('tab') || 'screener',
   demo: null,
   report: null,
+  demoTimer: null,
+  demoInFlight: false,
+  demoError: null,
 };
 
 async function loadStrings(lang) {
@@ -862,6 +865,13 @@ function sentenceWithCode(key, code) {
   return nodes;
 }
 
+/* An R-multiple back into cash. R is fixed at entry, so this is exact, not a
+ * re-derivation from the current price. */
+function inUsdt(rMultiple, riskAmount) {
+  if (typeof rMultiple !== 'number' || typeof riskAmount !== 'number') return null;
+  return rMultiple * riskAmount;
+}
+
 function demoAccount(acc) {
   return el('div', { class: 'demo__account' }, [
     stat(t('demo.equity'), num(acc.equity, { digits: 2, suffix: ' USDT' })),
@@ -955,7 +965,7 @@ function positionRow(p) {
      * underneath: the contract count is what a venue ticket actually takes, and the
      * two differ by the contract multiplier — 10x on FIL, 1000x on some others. */
     el('td', {}, [
-      num(s ? s.notional : null, { digits: 2, suffix: ' USDT' }),
+      num(s ? s.notional : null, { digits: 2 }),
       el('div', { class: 'pos__sub' }, [
         num(p.contracts, { digits: 1 }),
         el('span', { text: ` ${t('demo.contracts')} · ` }),
@@ -994,8 +1004,15 @@ function positionRow(p) {
                     signed(s ? s.unrealised_r : null, { digits: 3, suffix: 'R' })])]),
     /* MFE gets its own column rather than hiding in a detail panel: a trade that ran
      * to +1.4R and came back is a management failure, one that never moved is a
-     * thesis failure, and they are indistinguishable from P&L alone. */
-    el('td', {}, [signed(p.mfe_r, { digits: 2, suffix: 'R' }),
+     * thesis failure, and they are indistinguishable from P&L alone.
+     *
+     * Shown in USDT with R underneath. R is the comparable unit across coins, but
+     * cash is the one the number is actually felt in, so it leads. */
+    el('td', {}, [signed(inUsdt(p.mfe_r, p.risk_amount), { digits: 4 }),
+                  el('div', { class: 'pos__sub' }, [
+                    signed(p.mfe_r, { digits: 2, suffix: 'R' })]),
+                  el('div', { class: 'pos__sub pos__mae' }, [
+                    signed(inUsdt(p.mae_r, p.risk_amount), { digits: 4 })]),
                   el('div', { class: 'pos__sub' }, [
                     signed(p.mae_r, { digits: 2, suffix: 'R' })])]),
     el('td', {}, [num(s ? s.margin_ratio_pct : null, { digits: 2, suffix: '%' })]),
@@ -1013,10 +1030,16 @@ function demoPositions(d) {
                    'demo.col.mark', 'demo.col.levels', 'demo.col.liq', 'demo.col.lev',
                    'demo.col.marginFunding', 'demo.col.upnl', 'demo.col.mfe',
                    'demo.col.marginRatio'];
-  return el('div', { class: 'table-wrap' }, [
+  /* The unit is stated once, above the table, rather than repeated in every header.
+     Putting "(USDT)" on four headers pushed the table 91px past its container, and a
+     column that scrolls out of sight tells the reader nothing. */
+  return el('div', {}, [
+    el('p', { class: 'demo__unit', text: t('demo.unitNote') }),
+    el('div', { class: 'table-wrap' }, [
     el('table', { class: 'postable' }, [
       el('thead', {}, [el('tr', {}, headers.map((k) => el('th', { text: t(k) })))]),
       el('tbody', {}, d.positions.map(positionRow)),
+    ]),
     ]),
   ]);
 }
@@ -1100,16 +1123,41 @@ function renderDemo() {
 }
 
 async function refreshDemo() {
+  /* One request at a time. Marks come from a live endpoint that can take over a
+   * second, so a 3s timer would otherwise stack requests it never waits for, and the
+   * page would render them out of order — an older mark landing after a newer one. */
+  if (state.demoInFlight) return;
+  state.demoInFlight = true;
   try {
     const [d, r] = await Promise.all([API.demo(), API.demoReport()]);
     state.demo = d;
     state.report = r;
+    state.demoError = null;
   } catch (err) {
-    document.getElementById('demoBody').replaceChildren(
-      el('div', { class: 'empty', text: `${t('error.load')} ${err.message || ''}` }));
-    return;
+    /* A dropped poll keeps the last good board rather than blanking it. Losing one
+     * refresh should not throw away every figure on screen. */
+    state.demoError = err.message || String(err);
+    if (!state.demo) {
+      document.getElementById('demoBody').replaceChildren(
+        el('div', { class: 'empty', text: `${t('error.load')} ${state.demoError}` }));
+      return;
+    }
+  } finally {
+    state.demoInFlight = false;
   }
   renderDemo();
+}
+
+const DEMO_POLL_MS = 3000;
+
+function startDemoPolling() {
+  clearInterval(state.demoTimer);
+  state.demoTimer = setInterval(() => {
+    /* Only while the tab is visible and in front. Polling a hidden tab every 3s
+     * spends requests on a board nobody is reading. */
+    if (state.tab !== 'demo' || document.hidden) return;
+    refreshDemo();
+  }, DEMO_POLL_MS);
 }
 
 function renderTabs() {
@@ -1212,6 +1260,10 @@ function wireControls() {
   await loadStrings(state.lang);
   wireControls();
   await refresh();
+  startDemoPolling();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.tab === 'demo') refreshDemo();
+  });
   if (state.tab === 'demo') await refreshDemo();
   if (state.data && state.data.scan && state.data.scan.running) startPolling();
   else state.pollTimer = setInterval(refresh, 60000);

@@ -688,3 +688,9 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 
 .pos__filled { color: var(--good); font-weight: 600; }
 .pos__be { color: var(--accent); }
+
+/* MAE sits under MFE in the same cell; a hairline keeps the pair readable as two
+   figures rather than four loose lines. */
+.pos__mae { border-block-start: 1px solid var(--hairline); margin-block-start: 0.2rem; padding-block-start: 0.2rem; }
+
+.demo__unit { color: var(--ink-muted); font-size: 0.75rem; margin: 0 0 0.4rem; }
