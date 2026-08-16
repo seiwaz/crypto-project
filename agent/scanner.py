@@ -96,6 +96,15 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
     workers = 1 if venue.NAME == exchange.NOBITEX else max(
         1, int(settings.get("scan_workers", 4)))
 
+    # Sizing has to match what the demo will actually trade. When slots track the
+    # signal count, risk per trade is derived from the heat cap, so a plan built with
+    # the static 1% would be sized for an account holding six positions while the
+    # board is holding fifteen.
+    from . import demo as demo_mod                             # noqa: PLC0415
+    slots = demo_mod.target_slots()
+    risk_pct = demo_mod.derived_risk_pct()
+    log.info("scan %s sizing: %d slots, %.3f%% risk per trade", scan_id, slots, risk_pct)
+
     def analyse(entry):
         """Network and CPU for one coin. No database writes — those stay on the
         main thread so progress counters cannot interleave."""
@@ -106,11 +115,11 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
         try:
             return entry, capital, venue.analyze(
                 entry, settings["profile"], capital=capital,
-                risk_pct=float(settings["risk_pct"]),
+                risk_pct=risk_pct,
                 count=int(settings.get("candle_count", 300)),
                 hold_hours=float(settings.get("hold_hours", 0.0)),
                 account_level=settings.get("account_level"),
-                slots=int((settings.get("demo") or {}).get("slots") or 1)), None
+                slots=slots), None
         except Exception as exc:  # per-coin failure must not end the scan
             log.warning("scan %s: %s failed: %s", scan_id, coin, exc)
             return entry, capital, None, str(exc)[:500]

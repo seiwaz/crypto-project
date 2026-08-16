@@ -32,6 +32,14 @@ DEFAULT_SLOTS = 5
 DEFAULT_HEAT_CAP_PCT = 6.0
 MIN_SCORE = 70.0
 
+# Ceiling on concurrent positions when slots track the signal count. Not a risk
+# limit — the heat cap is — but a bound on how thin the account will slice itself,
+# and on how many contracts the venue is asked about each cycle.
+MAX_SLOTS = 20
+# Below this, a position is too small for the venue's minimum lots to accept it
+# across most of the watchlist.
+MIN_RISK_PCT = 0.2
+
 # Same-direction positions in coins that move together are one position wearing
 # several tickers, and the drawdown arrives all at once looking like several
 # independent failures.
@@ -195,7 +203,58 @@ def settings() -> dict:
                                        or CORRELATION_THRESHOLD),
         "max_correlated_same_side": int(demo.get("max_correlated_same_side")
                                         or MAX_CORRELATED_SAME_SIDE),
+        "auto_slots": bool(demo.get("auto_slots")),
+        "max_slots": int(demo.get("max_slots") or MAX_SLOTS),
+        "min_risk_pct": float(demo.get("min_risk_pct") or MIN_RISK_PCT),
     }
+
+
+def take_count() -> int:
+    """Qualifying TAKEs in the most recent scan, whether or not a slot is free."""
+    cfg = settings()
+    n = 0
+    for row in store.latest_results(cfg["exchange"]):
+        if row.get("verdict") == "TAKE" and (row.get("score") or 0) >= MIN_SCORE:
+            n += 1
+    return n
+
+
+def target_slots() -> int:
+    """Capacity: how many positions the account is willing to hold at once.
+
+    This is the *ceiling*, not a prediction of how many will fill. What actually
+    limits the board is the supply of TAKE signals and the heat cap, and both are
+    already enforced elsewhere — so capacity is a fixed number rather than something
+    that tracks the signal count.
+
+    It used to track it, and that was a feedback loop: fewer TAKEs meant fewer slots,
+    fewer slots meant a larger share of the heat budget each, larger positions failed
+    the liquidation-buffer gate more often, and that produced fewer TAKEs again. The
+    live result was risk per trade rising to 1.2% while TAKEs collapsed from 15 to 5,
+    and a board reporting "6 of 5" because capacity had shrunk below what was already
+    open. Capacity must not depend on anything downstream of capacity.
+    """
+    cfg = settings()
+    return cfg["max_slots"] if cfg["auto_slots"] else cfg["slots"]
+
+
+def derived_risk_pct() -> float:
+    """Risk per trade, so that a full board spends exactly the heat budget.
+
+    Portfolio heat is the risk budget — 6% of equity — and at 1% per trade it is
+    exhausted after six positions however many signals qualify. Raising capacity
+    alone would only move refusals from "slots_full" to "heat_cap".
+
+    So risk is the budget divided by capacity: 20 slots at 0.30% each fills the same
+    6%, spending it across more and less correlated bets instead of fewer larger
+    ones. Dividing by *capacity* rather than by the current signal count is what
+    keeps it constant between scans, which is what makes plan sizing reproducible.
+    The floor stops positions shrinking below what the venue's lot sizes accept.
+    """
+    cfg = settings()
+    if not cfg["auto_slots"]:
+        return float(config.load_settings().get("risk_pct") or 1.0)
+    return max(cfg["min_risk_pct"], cfg["heat_cap_pct"] / max(1, cfg["max_slots"]))
 
 
 def time_stop_hours() -> float:
@@ -311,7 +370,11 @@ def state() -> dict:
     balance = float(acct["balance"])
     equity = balance + open_pnl
     heat = portfolio_heat(positions, specs, equity)
-    slots = int(acct["slots"])
+    # Never report capacity below what is already held; "6 of 5" is not a state.
+    slots = max(target_slots(), len(rows))
+    if slots != int(acct["slots"]):
+        with store.tx() as conn:
+            conn.execute("UPDATE paper_account SET slots = ? WHERE id = 1", (slots,))
 
     return {
         "account": {
@@ -343,6 +406,9 @@ def state() -> dict:
         },
         "strategy": {
             "profile": settings()["profile"],
+            "auto_slots": settings()["auto_slots"],
+            "risk_pct": derived_risk_pct(),
+            "takes_available": take_count(),
             "time_stop_hours": time_stop_hours(),
             "time_stop_floor_usdt": (time_stop_floor_usdt(positions[0])
                                      if positions else None),
