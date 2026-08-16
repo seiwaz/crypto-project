@@ -27,3 +27,6 @@ __pycache__/
 
 # Build output from packaging/make-bundle.sh
 dist/
+
+# Fetched on a CentOS host by packaging/fetch-rpms.sh; too large to track
+packaging/rpms/

@@ -119,15 +119,50 @@ if [[ -f "$SRC/SHA256SUMS" ]]; then
 fi
 
 step "Packages"
-# python3-pip is needed only because `python3 -m venv` runs ensurepip, which RHEL
-# ships separately from python3 itself. No Python packages are installed from it.
-dnf install -y python3 python3-pip >/dev/null 2>&1 || dnf install -y python3 python3-pip
+# The full prerequisite set, and nothing beyond it:
+#
+#   python3      the runtime; python3-libs carries the _sqlite3 extension
+#   python3-pip  only because `python3 -m venv` runs ensurepip, which RHEL ships
+#                separately; no Python package is installed from an index
+#   procps-ng    provides `ps`, used by run.sh to confirm a PID is really ours
+#
+# There is no database package to install. The app keeps its state in one SQLite
+# file through Python's stdlib module: no server, no port, no daemon.
+NEEDED=(python3 python3-pip procps-ng)
+
+if compgen -G "$SRC/packaging/rpms/*.rpm" >/dev/null; then
+  # Offline: install from the RPMs carried in the bundle, with every repository
+  # disabled so a host with no network — or no subscription — still installs.
+  count=$(ls -1 "$SRC/packaging/rpms"/*.rpm | wc -l | tr -d ' ')
+  say "  installing $count bundled RPMs (offline, repositories disabled)"
+  if [[ -f "$SRC/packaging/rpms/SHA256SUMS.rpms" ]]; then
+    ( cd "$SRC/packaging/rpms" && sha256sum --quiet -c SHA256SUMS.rpms ) \
+      && ok "RPM checksums verified" || warn "RPM checksum check failed — continuing"
+  fi
+  dnf install -y --disablerepo='*' "$SRC/packaging/rpms"/*.rpm \
+    || rpm -Uvh --replacepkgs "$SRC/packaging/rpms"/*.rpm \
+    || die "offline package install failed"
+  ok "prerequisites installed from the bundle"
+else
+  say "  no bundled RPMs — installing from configured repositories"
+  say "  (build an offline bundle with packaging/fetch-rpms.sh on a CentOS host)"
+  dnf install -y "${NEEDED[@]}" >/dev/null 2>&1 || dnf install -y "${NEEDED[@]}" \
+    || die "package install failed and no bundled RPMs to fall back on"
+  ok "prerequisites installed from repositories"
+fi
+
+for cmd in ps runuser; do
+  command -v "$cmd" >/dev/null || die "missing required command: $cmd"
+done
+
 PYBIN="$(command -v python3.12 || command -v python3)"
 "$PYBIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
   || die "need Python 3.10 or newer; found $("$PYBIN" --version 2>&1)"
 ok "$("$PYBIN" --version)"
-"$PYBIN" -c 'import sqlite3' || die "python3 is missing sqlite3 support"
-ok "sqlite3 module present"
+# The whole database layer, verified in one line. If this imports, the app has
+# everything it needs to store scans, plans and the demo journal.
+"$PYBIN" -c 'import sqlite3; print("  sqlite       : %s (embedded, no server)" % sqlite3.sqlite_version)' \
+  || die "python3 is missing sqlite3 support — install python3-libs"
 
 # --------------------------------------------------------------------------------
 # Account and files
@@ -273,10 +308,25 @@ if [[ $START -eq 1 ]]; then
   sleep 3
   if systemctl is-active --quiet crypto-screener.service; then
     ok "service running"
-    if curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+    # Checked with python rather than curl, so curl is not a prerequisite on a
+    # minimal image — python3 is guaranteed present by this point.
+    if "$PYBIN" - "$PORT" <<'PY'
+import json, sys, urllib.request
+url = f"http://127.0.0.1:{sys.argv[1]}/api/health"
+try:
+    with urllib.request.urlopen(url, timeout=10) as r:
+        body = json.load(r)
+except Exception as exc:
+    print(f"  health check failed: {exc}")
+    sys.exit(1)
+print(f"  health       : ok={body.get('ok')} read_only={body.get('read_only')} "
+      f"guard_failures={body.get('guard_failures')}")
+sys.exit(0 if body.get("ok") and not body.get("guard_failures") else 1)
+PY
+    then
       ok "dashboard answering on 127.0.0.1:$PORT"
     else
-      warn "service is up but /api/health did not answer yet — check: journalctl -u crypto-screener -n 50"
+      warn "service is up but /api/health did not answer — journalctl -u crypto-screener -n 50"
     fi
   else
     systemctl status crypto-screener.service --no-pager -l | head -20

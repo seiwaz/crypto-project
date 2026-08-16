@@ -358,3 +358,62 @@ Nothing here is wired for it, deliberately. The seams left for it:
 
 **This is analysis tooling, not advice.** It is the mechanical output of a stated method.
 It does not predict anything, and leveraged positions can lose the entire margin.
+
+## Installing on a Linux server (CentOS Stream 10)
+
+The app is **stdlib only** and its database is **embedded SQLite** — one file under
+`var/`, with no server, no port and no daemon to supervise. That makes the
+prerequisite list very short:
+
+| Package | Why |
+|---|---|
+| `python3` | the runtime; `python3-libs` carries the `_sqlite3` extension and pulls in `sqlite-libs` |
+| `python3-pip` | only because `python3 -m venv` runs `ensurepip`, which RHEL packages separately |
+| `procps-ng` | provides `ps`, which `run.sh` uses to confirm a PID is really ours |
+
+Build a bundle here, install it there:
+
+```bash
+./packaging/make-bundle.sh                       # -> dist/crypto-screener-<ver>.tar.gz
+scp dist/crypto-screener-*.tar.gz user@host:~
+ssh user@host 'tar xzf crypto-screener-*.tar.gz'
+ssh user@host 'sudo crypto-screener-*/packaging/install-centos.sh'
+```
+
+The bundle carries the `crypto-leverage-trade-plan` skill, because the app calls its
+scripts directly and a server has no `~/.claude` to find them in.
+
+### Offline install
+
+To install on a host with no repository access, fetch the RPMs first — on a CentOS
+Stream 10 machine of the **same architecture** as the target:
+
+```bash
+podman run --rm -v "$PWD/packaging:/out:z" quay.io/centos/centos:stream10 \
+    bash /out/fetch-rpms.sh /out/rpms
+./packaging/make-bundle.sh        # picks up packaging/rpms/ automatically
+```
+
+The installer then installs them with every repository disabled. `BUNDLE` records
+whether a given tarball is offline-capable.
+
+### After installing
+
+The dashboard binds `127.0.0.1` only and the installer opens no firewall port — the
+server refuses any other bind address. Reach it by forwarding the port:
+
+```bash
+ssh -N -L 8787:127.0.0.1:8787 user@host
+```
+
+Everything is driven through `run.sh`, on the server exactly as locally, with
+systemd supervising it via the PID file `run.sh` already keeps:
+
+```bash
+systemctl {start,stop,restart,status} crypto-screener
+sudo -u screener /opt/crypto-screener/run.sh agents
+sudo -u screener /opt/crypto-screener/run.sh journal
+```
+
+Reinstalling preserves `var/` — the demo database, journals and logs.
+`packaging/install-centos.sh --uninstall` removes them.

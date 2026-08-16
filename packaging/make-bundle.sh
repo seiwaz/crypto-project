@@ -63,6 +63,25 @@ mkdir -p "$STAGE/$NAME/skill"
 cp -R "$SKILL_SRC/." "$STAGE/$NAME/skill/"
 rm -rf "$STAGE/$NAME/skill/scripts/__pycache__"
 
+# RPM prerequisites, when they have been fetched on a CentOS host. Without them the
+# bundle still installs, but the target needs working repositories.
+RPM_DIR="$ROOT/packaging/rpms"
+RPM_COUNT=0
+RPM_ARCH="n/a"
+if compgen -G "$RPM_DIR/*.rpm" >/dev/null; then
+  mkdir -p "$STAGE/$NAME/packaging/rpms"
+  cp "$RPM_DIR"/*.rpm "$STAGE/$NAME/packaging/rpms/"
+  for extra in SHA256SUMS.rpms MANIFEST; do
+    [[ -f "$RPM_DIR/$extra" ]] && cp "$RPM_DIR/$extra" "$STAGE/$NAME/packaging/rpms/"
+  done
+  RPM_COUNT=$(ls -1 "$RPM_DIR"/*.rpm | wc -l | tr -d ' ')
+  RPM_ARCH="$(ls -1 "$RPM_DIR"/*.rpm | head -1 | sed -E 's/.*\.([^.]+)\.rpm$/\1/')"
+  ok "including $RPM_COUNT RPMs ($RPM_ARCH) — offline install"
+else
+  printf '  no packaging/rpms/ — bundle will need repositories on the target\n'
+  printf '  (run packaging/fetch-rpms.sh on a CentOS Stream 10 host to add them)\n'
+fi
+
 cat > "$STAGE/$NAME/BUNDLE" <<EOF
 name:        crypto-screener
 version:     $VERSION
@@ -71,6 +90,9 @@ built:       $(date -u +%Y-%m-%dT%H:%M:%SZ)
 built_on:    $(uname -s) $(uname -r)
 skill_from:  $SKILL_SRC
 dirty:       $DIRTY
+rpms:        $RPM_COUNT ($RPM_ARCH)
+offline:     $([[ $RPM_COUNT -gt 0 ]] && echo yes || echo "no — target needs dnf repositories")
+database:    sqlite, embedded in python3 — no server, no port, no daemon
 EOF
 
 # Checksums for every shipped file, so a truncated transfer is caught at install
