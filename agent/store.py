@@ -105,6 +105,76 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Paper trading. One account row, enforced by the CHECK: two accounts would make
+-- "current equity vs the 1000 start" ambiguous, and the report depends on that
+-- reconciling exactly.
+CREATE TABLE IF NOT EXISTS paper_account (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    exchange         TEXT NOT NULL,
+    starting_capital REAL NOT NULL,
+    balance          REAL NOT NULL,       -- realised cash, excludes open PnL
+    slots            INTEGER NOT NULL,
+    heat_cap_pct     REAL NOT NULL,
+    created_at       TEXT NOT NULL,
+    reset_at         TEXT
+);
+
+-- Open and closed positions share a table so the report and the live board read the
+-- same rows; `status` separates them. Costs are stored as they accrue rather than
+-- recomputed at close, because funding depends on how long the position was actually
+-- held and at what rate each period.
+CREATE TABLE IF NOT EXISTS paper_positions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    coin          TEXT NOT NULL,
+    symbol        TEXT NOT NULL,
+    exchange      TEXT NOT NULL,
+    side          TEXT NOT NULL,
+    status        TEXT NOT NULL,          -- open | closed
+    slot          INTEGER,
+    contracts     REAL NOT NULL,
+    entry_price   REAL NOT NULL,
+    leverage      REAL NOT NULL,
+    margin        REAL NOT NULL,
+    risk_amount   REAL NOT NULL,          -- 1R in USDT, fixes the R scale for life
+    stop          REAL,
+    tp1           REAL,
+    tp2           REAL,
+    opened_at     TEXT NOT NULL,
+    opened_ts     REAL NOT NULL,
+    bars_held     INTEGER NOT NULL DEFAULT 0,
+    entry_fee     REAL NOT NULL DEFAULT 0,
+    exit_fee      REAL NOT NULL DEFAULT 0,
+    funding_paid  REAL NOT NULL DEFAULT 0,
+    funding_periods INTEGER NOT NULL DEFAULT 0,
+    -- MFE is the diagnostic for a stalled trade: ran to +1.4R and came back is a
+    -- management failure, never moved is a thesis failure. Same P&L, different fix.
+    mfe_r         REAL,
+    mae_r         REAL,
+    closed_at     TEXT,
+    exit_price    REAL,
+    exit_reason   TEXT,                   -- tp1 | tp2 | stopped | liquidated | time_stop | review_exit
+    realised_pnl  REAL,
+    scan_id       INTEGER,
+    score         REAL,
+    verdict       TEXT,
+    plan_json     TEXT,
+    context_json  TEXT                    -- the signal context at entry, for the report
+);
+CREATE INDEX IF NOT EXISTS idx_paper_status ON paper_positions(status, opened_ts DESC);
+
+-- Every action the manager takes, with its reasons. This is what makes an automated
+-- demo auditable after the fact rather than a black box that changed its mind.
+CREATE TABLE IF NOT EXISTS paper_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id INTEGER REFERENCES paper_positions(id) ON DELETE CASCADE,
+    at          TEXT NOT NULL,
+    kind        TEXT NOT NULL,            -- open | funding | action | close | skip
+    action      TEXT,                     -- HOLD | MOVE_STOP_BE | REDUCE | CLOSE
+    amount      REAL,
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_paper_events ON paper_events(position_id, id);
 """
 
 
@@ -428,3 +498,111 @@ def set_kv(key: str, value) -> None:
     with tx() as conn:
         conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
                      (key, json.dumps(value, ensure_ascii=False)))
+
+
+# --------------------------------------------------------------------------------
+# Paper trading
+# --------------------------------------------------------------------------------
+
+
+def paper_account() -> dict | None:
+    row = _row("SELECT * FROM paper_account WHERE id = 1")
+    return dict(row) if row else None
+
+
+def paper_init(*, exchange: str, capital: float, slots: int,
+               heat_cap_pct: float, reset: bool = False) -> dict:
+    """Create the account, or reset it to a clean start.
+
+    A reset wipes positions and events as well as the balance. Keeping old trades
+    against a fresh balance would silently corrupt every aggregate in the report —
+    win rate and total R would describe one account, equity another.
+    """
+    with tx() as conn:
+        if reset:
+            conn.execute("DELETE FROM paper_events")
+            conn.execute("DELETE FROM paper_positions")
+            conn.execute("DELETE FROM paper_account")
+        conn.execute(
+            "INSERT OR REPLACE INTO paper_account "
+            "(id, exchange, starting_capital, balance, slots, heat_cap_pct, "
+            " created_at, reset_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+            (exchange, capital, capital, slots, heat_cap_pct, now_iso(),
+             now_iso() if reset else None),
+        )
+    return paper_account()
+
+
+def paper_set_balance(balance: float) -> None:
+    with tx() as conn:
+        conn.execute("UPDATE paper_account SET balance = ? WHERE id = 1", (balance,))
+
+
+def paper_open_positions() -> list[dict]:
+    return [dict(r) for r in _rows(
+        "SELECT * FROM paper_positions WHERE status = 'open' ORDER BY opened_ts")]
+
+
+def paper_closed_positions() -> list[dict]:
+    return [dict(r) for r in _rows(
+        "SELECT * FROM paper_positions WHERE status = 'closed' "
+        "ORDER BY closed_at DESC, id DESC")]
+
+
+def paper_position(position_id: int) -> dict | None:
+    row = _row("SELECT * FROM paper_positions WHERE id = ?", (position_id,))
+    return dict(row) if row else None
+
+
+_OPEN_FIELDS = (
+    "coin", "symbol", "exchange", "side", "slot", "contracts", "entry_price",
+    "leverage", "margin", "risk_amount", "stop", "tp1", "tp2", "opened_ts",
+    "entry_fee", "scan_id", "score", "verdict", "plan_json", "context_json",
+)
+
+
+def paper_open(**fields) -> int:
+    cols = [f for f in _OPEN_FIELDS if f in fields]
+    sql = (f"INSERT INTO paper_positions (status, opened_at, {', '.join(cols)}) "
+           f"VALUES ('open', ?, {', '.join('?' for _ in cols)})")
+    with tx() as conn:
+        cur = conn.execute(sql, (now_iso(), *(fields[c] for c in cols)))
+        return int(cur.lastrowid)
+
+
+def paper_update(position_id: int, **fields) -> None:
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with tx() as conn:
+        conn.execute(f"UPDATE paper_positions SET {sets} WHERE id = ?",
+                     (*fields.values(), position_id))
+
+
+def paper_close(position_id: int, *, exit_price: float, exit_reason: str,
+                realised_pnl: float, exit_fee: float) -> None:
+    with tx() as conn:
+        conn.execute(
+            "UPDATE paper_positions SET status = 'closed', closed_at = ?, "
+            "exit_price = ?, exit_reason = ?, realised_pnl = ?, exit_fee = ? "
+            "WHERE id = ?",
+            (now_iso(), exit_price, exit_reason, realised_pnl, exit_fee, position_id),
+        )
+
+
+def paper_event(position_id: int | None, kind: str, *, action: str | None = None,
+                amount: float | None = None, detail: str | None = None) -> None:
+    with tx() as conn:
+        conn.execute(
+            "INSERT INTO paper_events (position_id, at, kind, action, amount, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (position_id, now_iso(), kind, action, amount, detail),
+        )
+
+
+def paper_events(position_id: int | None = None, limit: int = 200) -> list[dict]:
+    if position_id is None:
+        return [dict(r) for r in _rows(
+            "SELECT * FROM paper_events ORDER BY id DESC LIMIT ?", (limit,))]
+    return [dict(r) for r in _rows(
+        "SELECT * FROM paper_events WHERE position_id = ? ORDER BY id", (position_id,))]

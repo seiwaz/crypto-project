@@ -255,6 +255,10 @@ def funding_rate(symbol: str) -> dict | None:
         "rate_pct": rate * 100.0,
         "period": row.get("period"),
         "next_funding_time": row.get("nextFundingTime"),
+        # Toobit clamps funding to ±2%. The paper broker shows it so a large accrued
+        # funding cost reads as a real venue limit rather than a simulation artefact.
+        "rate_cap": row.get("fundingRateCap"),
+        "rate_floor": row.get("fundingRateFloor"),
     }
 
 
