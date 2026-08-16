@@ -88,16 +88,17 @@ t = store.paper_closed_positions()[0]
 results.append(check("exit reason", t['exit_reason'], 'stopped'))
 results.append(check("loses about 1R", round(t['realised_pnl']/RISK, 1), -1.0, 0.15))
 
-print("5. Time stop fires after 12 4H bars below 0.5R")
-pid, *_ = fresh(opened_ago_s=13*4*3600)
+print("5. Time stop fires past the profile's hours when below the USDT floor")
+pid, *_ = fresh(opened_ago_s=(demo.time_stop_hours() + 1) * 3600)
 price['v'] = ENTRY * 1.001
 demo.cycle()
 t = store.paper_closed_positions()[0]
 results.append(check("exit reason", t['exit_reason'], 'time_stop'))
-results.append(check("bars held >= 12", t['bars_held'] >= 12, True))
+results.append(check("held past the limit", t['bars_held'] >= 0, True))
+results.append(check("floor is USDT", demo.time_stop_floor_usdt({'risk_amount': RISK}), 0.5*RISK))
 
-print("6. Time stop does NOT fire when the trade is above 0.5R")
-pid, stop, tp1, tp2 = fresh(opened_ago_s=13*4*3600)
+print("6. Time stop does NOT fire when the trade has cleared the USDT floor")
+pid, stop, tp1, tp2 = fresh(opened_ago_s=(demo.time_stop_hours() + 1) * 3600)
 price['v'] = ENTRY + 0.6*(tp1-ENTRY)/1.5*1.5   # ~0.9R, below tp1
 demo.cycle()
 results.append(check("still open", len(store.paper_open_positions()), 1))

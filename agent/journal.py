@@ -78,7 +78,14 @@ def account_block() -> list[str]:
             lines.append(f"                   next candidate {detail.get('coin')} "
                          f"needs {_n(detail['needs'])}, "
                          f"available {_n(detail['available'])}")
-    lines.append(f"  portfolio heat   {_n(heat['used_pct'])}% of {_n(heat['cap_pct'], 1)}% cap")
+    lines.append(f"  portfolio heat   {_n(heat.get('used_usdt'), 2)} of "
+                 f"{_n(heat.get('cap_usdt'), 2)} USDT cap"
+                 f"   ({_n(heat['used_pct'])}% of {_n(heat['cap_pct'], 1)}%)")
+    strat = st.get("strategy") or {}
+    if strat:
+        lines.append(f"  strategy         {strat.get('profile')} — time stop after "
+                     f"{_n(strat.get('time_stop_hours'), 1)}h if below "
+                     f"{_n(strat.get('time_stop_floor_usdt'), 2)} USDT")
     if not st["correlation_filter"]["available"]:
         lines.append("  correlation      NOT ENFORCED (market_context.py missing)")
     return lines

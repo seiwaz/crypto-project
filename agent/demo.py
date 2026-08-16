@@ -59,9 +59,23 @@ DEFAULT_CYCLE_SECONDS = 90
 # ---------------------------------------------------------------------------
 
 TP1_CLOSE_FRACTION = 0.5
-TIME_STOP_BARS = {"scalp": 6, "intraday": 12, "swing": 12}
-TIME_STOP_MIN_R = 0.5
-CIRCUIT_BREAKER = {"scalp": (2, 3.0), "intraday": (3, 5.0), "swing": (3, 5.0)}
+
+# Time stop, in hours per profile.
+#
+# The skill's guidance is ~12 decision-timeframe candles, which on the intraday
+# profile is 48 hours. That was too long to be useful here, so these are shorter by
+# request: a quarter of the skill's window on intraday. This is a deliberate departure
+# from the skill's number, not an implementation of it, and `demo.time_stop_hours`
+# overrides it outright.
+TIME_STOP_HOURS = {"scalp": 3.0, "intraday": 12.0, "swing": 48.0}
+
+# The trade must have made at least this much to survive the time stop. Expressed as
+# a fraction of the position's own risk so it scales with capital, but every
+# comparison happens in USDT — see `time_stop_floor_usdt`.
+TIME_STOP_MIN_FRACTION = 0.5
+
+# (consecutive losses, equity drawdown as a fraction of starting capital)
+CIRCUIT_BREAKER = {"scalp": (2, 0.03), "intraday": (3, 0.05), "swing": (3, 0.05)}
 
 # Decision-timeframe labels to minutes, for counting bars held.
 _TF_MINUTES = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
@@ -105,7 +119,37 @@ def settings() -> dict:
         "exchange": demo.get("exchange") or s.get("exchange") or "toobit",
         "enabled": bool(demo.get("enabled")),
         "cycle_seconds": int(demo.get("cycle_seconds") or DEFAULT_CYCLE_SECONDS),
+        # The profile the user has selected, which is the one the whole app trades.
+        # Management reads this rather than the profile frozen into an old plan, so
+        # switching to scalp in the header shortens the time stop on positions that
+        # are already open instead of only on the next scan's.
+        "profile": s.get("profile") or "intraday",
+        "time_stop_hours": demo.get("time_stop_hours"),
+        "time_stop_min_profit_usdt": demo.get("time_stop_min_profit_usdt"),
     }
+
+
+def time_stop_hours() -> float:
+    """How long a position may go nowhere, in hours, for the selected profile."""
+    cfg = settings()
+    explicit = cfg.get("time_stop_hours")
+    if explicit:
+        return float(explicit)
+    return TIME_STOP_HOURS.get(cfg["profile"], TIME_STOP_HOURS["intraday"])
+
+
+def time_stop_floor_usdt(pos: dict) -> float:
+    """The profit a position must have shown, in USDT, to survive the time stop.
+
+    Every condition the agent acts on is compared in USDT. R is convenient to reason
+    about but it is not what the account holds, and mixing the two is how a threshold
+    ends up meaning something different from what it reads as.
+    """
+    cfg = settings()
+    explicit = cfg.get("time_stop_min_profit_usdt")
+    if explicit is not None:
+        return float(explicit)
+    return TIME_STOP_MIN_FRACTION * float(pos.get("risk_amount") or 0.0)
 
 
 def ensure_account() -> dict:
@@ -217,10 +261,21 @@ def state() -> dict:
             "empty": max(0, slots - len(rows)),
             "reason": _empty_slot_reason(len(rows), slots, heat, acct),
         },
+        # Heat in USDT as well as percent. The cap is defined as a share of equity, so
+        # the percentage is the rule; the USDT figure is what it actually means.
         "heat": {
             "used_pct": heat,
             "cap_pct": float(acct["heat_cap_pct"]),
             "headroom_pct": max(0.0, float(acct["heat_cap_pct"]) - heat),
+            "used_usdt": sum(open_risk(p, specs[p["symbol"]]) for p in positions
+                             if p["symbol"] in specs),
+            "cap_usdt": equity * float(acct["heat_cap_pct"]) / 100.0,
+        },
+        "strategy": {
+            "profile": settings()["profile"],
+            "time_stop_hours": time_stop_hours(),
+            "time_stop_floor_usdt": (time_stop_floor_usdt(positions[0])
+                                     if positions else None),
         },
         "positions": rows,
         "stale": stale,
@@ -396,13 +451,21 @@ def _cycle_one(pos: dict) -> dict:
 
     moved = _trail_stop(pos, plan, spec)
 
-    # "Time stop: ~6 decision-TF candles (scalp) or ~12 (intraday) below 0.5R."
-    limit = TIME_STOP_BARS.get(plan.get("profile") or "intraday", 12)
+    # Time stop, measured in hours and compared in USDT.
+    #
+    # Both halves must hold: long enough, and not going anywhere. A position that has
+    # made its floor is left alone however long it has been open — the stop is for
+    # trades that are idle, not for trades that are merely slow.
     r_now = st.get("unrealised_r")
-    if held >= limit and r_now is not None and r_now < TIME_STOP_MIN_R:
+    hours_held = (paper.now_ts() - float(pos["opened_ts"])) / 3600.0
+    limit_hours = time_stop_hours()
+    floor_usdt = time_stop_floor_usdt(pos)
+    pnl_now = st.get("unrealised_pnl")
+    if hours_held >= limit_hours and pnl_now is not None and pnl_now < floor_usdt:
         realised = _close(pos, spec, mark, "time_stop")
         return {"coin": pos["coin"], "action": "CLOSE", "reason": "time_stop",
-                "bars_held": held, "unrealised_r": r_now,
+                "hours_held": round(hours_held, 2), "limit_hours": limit_hours,
+                "unrealised_usdt": pnl_now, "floor_usdt": floor_usdt,
                 "exit_price": mark, "realised": realised,
                 "balance_delta": balance_delta + realised}
 
@@ -416,8 +479,9 @@ def _cycle_one(pos: dict) -> dict:
 
     return {"coin": pos["coin"], "action": "HOLD", "mark": mark,
             "mark_source": mark_source, "bars_held": held,
-            "stop_moved": moved,
-            "unrealised_r": r_now, "balance_delta": balance_delta}
+            "hours_held": round(hours_held, 2), "limit_hours": limit_hours,
+            "stop_moved": moved, "unrealised_usdt": pnl_now,
+            "floor_usdt": floor_usdt, "balance_delta": balance_delta}
 
 
 def _touched(side: str, high: float, low: float, level: float | None) -> bool:
@@ -707,8 +771,8 @@ def circuit_breaker() -> dict | None:
     acct = store.paper_account()
     if not acct:
         return None
-    profile = (config.load_settings().get("profile") or "intraday")
-    max_losses, max_drawdown_pct = CIRCUIT_BREAKER.get(profile, (3, 5.0))
+    profile = settings()["profile"]
+    max_losses, drawdown_fraction = CIRCUIT_BREAKER.get(profile, (3, 0.05))
 
     streak = 0
     for trade in store.paper_closed_positions():          # newest first
@@ -717,14 +781,17 @@ def circuit_breaker() -> dict | None:
             break
         streak += 1
 
+    # In USDT, like every other threshold the agent acts on.
     start = float(acct["starting_capital"])
-    drop_pct = (1.0 - float(acct["balance"]) / start) * 100.0 if start else 0.0
+    lost_usdt = start - float(acct["balance"])
+    limit_usdt = start * drawdown_fraction
 
     if streak >= max_losses:
-        return {"code": "consecutive_losses", "losses": streak, "limit": max_losses}
-    if drop_pct >= max_drawdown_pct:
-        return {"code": "equity_drawdown", "drop_pct": drop_pct,
-                "limit_pct": max_drawdown_pct}
+        return {"code": "consecutive_losses", "losses": streak, "limit": max_losses,
+                "profile": profile}
+    if lost_usdt >= limit_usdt:
+        return {"code": "equity_drawdown", "lost_usdt": lost_usdt,
+                "limit_usdt": limit_usdt, "profile": profile}
     return None
 
 

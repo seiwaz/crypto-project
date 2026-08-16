@@ -936,11 +936,19 @@ function demoSlots(d) {
       el('div', { class: 'heat__head' }, [
         el('span', { text: t('demo.heat') }),
         /* Heat is an amount of risk, not a gain — showing it with a "+" and the
-           profit colour made 3.88% of equity at risk read as money made. */
+           profit colour made 3.88% of equity at risk read as money made.
+           Reported in USDT, with the percentage that defines the cap after it. */
         el('span', {}, [
-          num(heat.used_pct, { digits: 2, suffix: '%' }),
+          num(heat.used_usdt, { digits: 2 }),
           document.createTextNode(` / `),
-          num(heat.cap_pct, { digits: 1, suffix: '%' }),
+          num(heat.cap_usdt, { digits: 2, suffix: ' USDT' }),
+          el('span', { class: 'demo__hint' }, [
+            document.createTextNode('  ('),
+            num(heat.used_pct, { digits: 2, suffix: '%' }),
+            document.createTextNode(' / '),
+            num(heat.cap_pct, { digits: 1, suffix: '%' }),
+            document.createTextNode(')'),
+          ]),
         ]),
       ]),
       el('div', { class: 'heat__track' }, [
@@ -1099,6 +1107,16 @@ function renderDemo() {
       el('div', {}, [
         el('h2', { text: t('demo.title') }),
         el('p', { class: 'demo__note', text: t('demo.subtitle') }),
+        /* The rule currently in force, spelled out. A time stop that fires is much
+           easier to trust when the reader already knew what it was set to. */
+        d.strategy ? el('p', { class: 'demo__note' }, [
+          document.createTextNode(`${t('demo.strategy')}: `),
+          el('strong', { text: t(`bar.profile.${d.strategy.profile}`) }),
+          document.createTextNode(` · ${t('demo.timeStop')} `),
+          num(d.strategy.time_stop_hours, { digits: 0, suffix: 'h' }),
+          document.createTextNode(` ${t('demo.below')} `),
+          num(d.strategy.time_stop_floor_usdt, { digits: 2, suffix: ' USDT' }),
+        ]) : null,
       ]),
       el('div', { class: 'demo__actions' }, [
         el('button', { class: 'btn', attrs: { id: 'demoCycle' }, text: t('demo.runCycle') }),

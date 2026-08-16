@@ -207,5 +207,8 @@
   "demo.last": "last",
   "demo.netPnl": "Net P&L",
   "demo.col.avgPnl": "Avg P&L",
-  "demo.col.totalPnl": "Total P&L"
+  "demo.col.totalPnl": "Total P&L",
+  "demo.strategy": "Strategy",
+  "demo.timeStop": "time stop after",
+  "demo.below": "if below"
 }

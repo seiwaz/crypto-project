@@ -227,5 +227,8 @@
   "demo.last": "آخرین",
   "demo.netPnl": "سود و زیان خالص",
   "demo.col.avgPnl": "میانگین سود",
-  "demo.col.totalPnl": "سود کل"
+  "demo.col.totalPnl": "سود کل",
+  "demo.strategy": "راهبرد",
+  "demo.timeStop": "حد زمانی پس از",
+  "demo.below": "اگر کمتر از"
 }
