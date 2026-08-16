@@ -509,8 +509,26 @@ def serve(host: str | None = None, port: int | None = None,
 
     host = host or os.environ.get("BIND_HOST", "127.0.0.1")
     port = int(port or os.environ.get("BIND_PORT", 8787))
+
+    # Loopback stays the default and the refusal stays in place. Binding anywhere
+    # else needs ALLOW_PUBLIC_BIND=1 set deliberately, because this dashboard has no
+    # authentication of any kind: anyone who can reach the port can reset the demo
+    # account, change capital and risk, and start scans. It cannot place an exchange
+    # order and it serves no credentials, but it is otherwise wide open.
+    #
+    # Requiring an explicit opt-in means a public bind is always something someone
+    # chose, never something a stray BIND_HOST in an environment file caused.
     if host not in ("127.0.0.1", "localhost", "::1"):
-        raise SystemExit(f"refusing to bind {host}: this dashboard is loopback-only")
+        if os.environ.get("ALLOW_PUBLIC_BIND") != "1":
+            raise SystemExit(
+                f"refusing to bind {host}: this dashboard is loopback-only.\n"
+                "  It has no authentication. To expose it anyway, set "
+                "ALLOW_PUBLIC_BIND=1 —\n"
+                "  and put it behind a reverse proxy with auth, or restrict the port "
+                "by source IP.")
+        log.warning("PUBLIC BIND: %s:%s — no authentication; anyone who can reach "
+                    "this port can reset the demo account and change settings",
+                    host, port)
 
     if with_scheduler:
         threading.Thread(target=scanner.scheduler_loop, args=(_stop_event,),

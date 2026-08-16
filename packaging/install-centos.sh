@@ -24,7 +24,13 @@
 # Options:
 #   --prefix DIR   install location          (default /opt/crypto-screener)
 #   --user NAME    service account           (default screener)
-#   --port N       loopback port             (default 8787)
+#   --port N       port                      (default 8787)
+#   --public       bind 0.0.0.0 and open the firewall port.
+#                  THE DASHBOARD HAS NO AUTHENTICATION. Anyone who can reach the
+#                  port can reset the demo account, change capital and risk, and
+#                  start scans. It cannot place an exchange order and it serves no
+#                  credentials, but treat the port as open to whoever finds it.
+#                  Prefer `ssh -L` unless you have a specific reason not to.
 #   --no-start     install but do not start
 #   --uninstall    remove service, files and account
 
@@ -33,6 +39,8 @@ set -euo pipefail
 PREFIX=/opt/crypto-screener
 SVC_USER=screener
 PORT=8787
+BIND=127.0.0.1
+PUBLIC=0
 START=1
 UNINSTALL=0
 UNIT=/etc/systemd/system/crypto-screener.service
@@ -42,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --prefix)    PREFIX="$2"; shift 2 ;;
     --user)      SVC_USER="$2"; shift 2 ;;
     --port)      PORT="$2"; shift 2 ;;
+    --public)    PUBLIC=1; BIND=0.0.0.0; shift ;;
     --no-start)  START=0; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   sed -n '2,32p' "$0"; exit 0 ;;
@@ -225,7 +234,8 @@ ok "skill at $SKILL_DIR"
 
 step "Setup"
 runuser -u "$SVC_USER" -- env \
-  CRYPTO_SKILL_DIR="$SKILL_DIR" BIND_HOST=127.0.0.1 BIND_PORT="$PORT" \
+  CRYPTO_SKILL_DIR="$SKILL_DIR" BIND_HOST="$BIND" BIND_PORT="$PORT" \
+  ALLOW_PUBLIC_BIND="$PUBLIC" \
   bash -lc "cd '$PREFIX' && ./run.sh setup" || die "./run.sh setup failed"
 
 step "Verification"
@@ -253,7 +263,26 @@ ok "verified"
 # systemd
 # --------------------------------------------------------------------------------
 
+if [[ $PUBLIC -eq 1 ]]; then
+  step "Firewall"
+  warn "binding 0.0.0.0:$PORT — this dashboard has NO AUTHENTICATION"
+  warn "anyone who can reach the port can reset the demo account and change settings"
+  if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+    firewall-cmd --permanent --add-port="$PORT/tcp" >/dev/null
+    firewall-cmd --reload >/dev/null
+    ok "firewalld: opened $PORT/tcp"
+    say "  to restrict it to one address instead:"
+    say "    firewall-cmd --permanent --remove-port=$PORT/tcp"
+    say "    firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=YOUR.IP port port=$PORT protocol=tcp accept'"
+    say "    firewall-cmd --reload"
+  else
+    warn "firewalld not active — open $PORT/tcp in whatever filters this host"
+  fi
+fi
+
 step "Service"
+PUBLIC_ENV=""
+[[ $PUBLIC -eq 1 ]] && PUBLIC_ENV="Environment=ALLOW_PUBLIC_BIND=1"
 cat > "$UNIT" <<EOF
 [Unit]
 Description=Crypto screener (read-only local dashboard)
@@ -271,8 +300,9 @@ Group=$SVC_USER
 WorkingDirectory=$PREFIX
 PIDFile=$PREFIX/var/server.pid
 Environment=CRYPTO_SKILL_DIR=$SKILL_DIR
-Environment=BIND_HOST=127.0.0.1
+Environment=BIND_HOST=$BIND
 Environment=BIND_PORT=$PORT
+$PUBLIC_ENV
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$PREFIX/run.sh start
 ExecStop=$PREFIX/run.sh stop
