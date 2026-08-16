@@ -1006,9 +1006,7 @@ function positionRow(p) {
     el('td', {}, [num(p.margin, { digits: 2 }),
                   el('div', { class: 'pos__sub' }, [
                     signed(p.funding_paid, { digits: 5 })])]),
-    el('td', {}, [signed(s ? s.unrealised_pnl : null, { digits: 4 }),
-                  el('div', { class: 'pos__sub' }, [
-                    signed(s ? s.unrealised_r : null, { digits: 3, suffix: 'R' })])]),
+    el('td', {}, [signed(s ? s.unrealised_pnl : null, { digits: 4 })]),
     /* MFE gets its own column rather than hiding in a detail panel: a trade that ran
      * to +1.4R and came back is a management failure, one that never moved is a
      * thesis failure, and they are indistinguishable from P&L alone.
@@ -1017,11 +1015,7 @@ function positionRow(p) {
      * cash is the one the number is actually felt in, so it leads. */
     el('td', {}, [signed(inUsdt(p.mfe_r, p.risk_amount), { digits: 4 }),
                   el('div', { class: 'pos__sub' }, [
-                    signed(p.mfe_r, { digits: 2, suffix: 'R' })]),
-                  el('div', { class: 'pos__sub pos__mae' }, [
-                    signed(inUsdt(p.mae_r, p.risk_amount), { digits: 4 })]),
-                  el('div', { class: 'pos__sub' }, [
-                    signed(p.mae_r, { digits: 2, suffix: 'R' })])]),
+                    signed(inUsdt(p.mae_r, p.risk_amount), { digits: 4 })])]),
     el('td', {}, [num(s ? s.margin_ratio_pct : null, { digits: 2, suffix: '%' })]),
   ];
   const row = el('tr', {}, cells);
@@ -1066,9 +1060,9 @@ function reportBlock(r) {
   kids.push(el('div', { class: 'demo__account' }, [
     stat(t('demo.closed'), num(a.closed)),
     stat(t('demo.winRate'), num(a.win_rate, { digits: 1, suffix: '%' })),
-    stat(t('demo.expectancy'), signed(a.expectancy_r, { digits: 3, suffix: 'R' })),
-    stat(t('demo.totalR'), signed(a.total_r, { digits: 2, suffix: 'R' })),
-    stat(t('demo.maxDd'), signed(a.max_drawdown_r, { digits: 2, suffix: 'R' })),
+    stat(t('demo.expectancy'), signed(a.expectancy_usdt, { digits: 4 })),
+    stat(t('demo.netPnl'), signed(a.net_pnl, { digits: 4 })),
+    stat(t('demo.maxDd'), signed(a.max_drawdown_usdt, { digits: 4 })),
     stat(t('demo.costs'), num(a.costs_paid, { digits: 4 })),
   ]));
 
@@ -1077,15 +1071,15 @@ function reportBlock(r) {
     kids.push(el('div', { class: 'table-wrap' }, [
       el('table', { class: 'postable' }, [
         el('thead', {}, [el('tr', {}, ['demo.col.reason', 'demo.col.count',
-          'demo.col.share', 'demo.col.avgR', 'demo.col.totalR', 'demo.col.avgMfe']
+          'demo.col.share', 'demo.col.avgPnl', 'demo.col.totalPnl', 'demo.col.avgMfe']
           .map((k) => el('th', { text: t(k) })))]),
         el('tbody', {}, r.by_exit_reason.map((b) => el('tr', {}, [
           el('td', { text: t(`demo.exit.${b.reason}`) }),
           el('td', {}, [num(b.count)]),
           el('td', {}, [num(b.share_pct, { digits: 1, suffix: '%' })]),
-          el('td', {}, [signed(b.avg_r, { digits: 3, suffix: 'R' })]),
-          el('td', {}, [signed(b.total_r, { digits: 2, suffix: 'R' })]),
-          el('td', {}, [signed(b.avg_mfe_r, { digits: 2, suffix: 'R' })]),
+          el('td', {}, [signed(b.avg_pnl, { digits: 4 })]),
+          el('td', {}, [signed(b.total_pnl, { digits: 4 })]),
+          el('td', {}, [signed(b.avg_mfe_usdt, { digits: 4 })]),
         ]))),
       ]),
     ]));

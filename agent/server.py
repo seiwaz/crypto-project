@@ -475,11 +475,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
-        # Vendored assets are immutable; app files should always be fresh.
+        # Vendored assets are immutable; app files must never be served from cache.
+        #
+        # "no-cache" means revalidate, but this server sends no ETag or Last-Modified
+        # for a validator to revalidate against, so a browser is free to reuse what it
+        # has — Safari does. The symptom is a change that is live on disk, correct in
+        # the API, and invisible on screen. "no-store" removes the ambiguity, and on a
+        # loopback dashboard serving a few tens of kilobytes it costs nothing.
         if "/vendor/" in path or "/fonts/" in path:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         else:
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 

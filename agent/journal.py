@@ -12,6 +12,12 @@ from __future__ import annotations
 
 from . import demo, report, store
 
+
+def _risk(trade):
+    """The R unit in USDT for a closed trade, from its own numbers."""
+    r, net = trade.get('r'), trade.get('net_pnl')
+    return None if not r or net is None else net / r
+
 DASH = "-"
 
 
@@ -33,8 +39,15 @@ def _signed(value, digits: int = 2, dash: str = "no data") -> str:
 
 
 def _unit(text: str, suffix: str) -> str:
-    """Append a unit only to an actual figure — "no data%" is not a reading."""
-    return text if text == "no data" else f"{text}{suffix}"
+    """Append a unit only to an actual figure — "no data USDT" is not a reading."""
+    return text if text.strip() in ("no data", "--") else f"{text}{suffix}"
+
+
+def _cash(r_multiple, risk) -> float | None:
+    """An R-multiple back into USDT, using the risk that was on at entry."""
+    if r_multiple is None or not risk:
+        return None
+    return float(r_multiple) * float(risk)
 
 
 def _rule(width: int = 78) -> str:
@@ -77,8 +90,10 @@ def open_block() -> list[str]:
     if not st["positions"]:
         lines.append("  none")
         return lines
+    # Every figure in USDT. R is still tracked per position for the score-band
+    # analysis, but the board and this table report cash.
     header = (f"  {'COIN':<7}{'SIDE':<6}{'CONTRACTS':>12}{'ENTRY':>13}{'MARK':>13}"
-              f"{'uPNL':>10}{'R':>9}{'MFE':>8}{'MAE':>8}{'MR%':>7}")
+              f"{'LAST':>13}{'uPNL':>10}{'MFE':>10}{'MAE':>10}{'MR%':>7}")
     lines.append(header)
     for p in st["positions"]:
         s = p["state"] or {}
@@ -86,10 +101,10 @@ def open_block() -> list[str]:
             f"  {p['coin']:<7}{p['side']:<6}{p['contracts']:>12,.1f}"
             f"{p['entry_price']:>13,.6f}"
             f"{(s.get('mark') or 0):>13,.6f}"
+            f"{_n(p.get('last_price'), 6, '--'):>13}"
             f"{_signed(s.get('unrealised_pnl'), 4, '--'):>10}"
-            f"{_signed(s.get('unrealised_r'), 3, '--'):>9}"
-            f"{_signed(p.get('mfe_r'), 2, '--'):>8}"
-            f"{_signed(p.get('mae_r'), 2, '--'):>8}"
+            f"{_signed(_cash(p.get('mfe_r'), p.get('risk_amount')), 4, '--'):>10}"
+            f"{_signed(_cash(p.get('mae_r'), p.get('risk_amount')), 4, '--'):>10}"
             f"{_n(s.get('margin_ratio_pct'), 2, '--'):>7}"
         )
         lines.append(f"         stop {_n(p.get('stop'), 6)}  tp1 {_n(p.get('tp1'), 6)}  "
@@ -108,12 +123,13 @@ def closed_block() -> list[str]:
         lines.append(
             f"  {t['coin']:<7}{t['side']:<6}{t['exit_reason'] or '?':<12}"
             f"entry {_n(t['entry_price'], 6)}  exit {_n(t['exit_price'], 6)}  "
-            f"R {_signed(t['r'], 3)}  net {_signed(t['net_pnl'], 4)}"
+            f"net {_signed(t['net_pnl'], 4)} USDT"
         )
         c = t["costs"]
         lines.append(
             f"         opened {t['opened_at']}  closed {t['closed_at']}\n"
-            f"         mfe {_signed(t['mfe_r'], 2)}  mae {_signed(t['mae_r'], 2)}  "
+            f"         mfe {_signed(_cash(t['mfe_r'], _risk(t)), 4)}  "
+            f"mae {_signed(_cash(t['mae_r'], _risk(t)), 4)}  "
             f"lev {_n(t['leverage'])}x  score {_n(t['score_at_entry'], 1)}  "
             f"fees {_n(c['entry_fee'], 4)}+{_n(c['exit_fee'], 4)}  "
             f"funding {_signed(c['funding'], 5)}"
@@ -127,27 +143,27 @@ def report_block() -> list[str]:
     lines = ["", "REPORT", _rule(),
              f"  closed trades    {a['closed']}",
              f"  win rate         {_unit(_n(a['win_rate'], 1), '%')}",
-             f"  avg win / loss   {_unit(_signed(a['avg_win_r'], 3), 'R')}"
-             f" / {_unit(_signed(a['avg_loss_r'], 3), 'R')}",
-             f"  expectancy       {_unit(_signed(a['expectancy_r'], 3), 'R per trade')}",
-             f"  total R          {_signed(a['total_r'], 2)}",
-             f"  max drawdown     {_unit(_signed(a['max_drawdown_r'], 2), 'R')}",
+             f"  avg win / loss   {_unit(_signed(a['avg_win_usdt'], 4), ' USDT')}"
+             f" / {_unit(_signed(a['avg_loss_usdt'], 4), ' USDT')}",
+             f"  expectancy       {_unit(_signed(a['expectancy_usdt'], 4), ' USDT per trade')}",
+             f"  net P&L          {_unit(_signed(a['net_pnl'], 4), ' USDT')}",
+             f"  max drawdown     {_unit(_signed(a['max_drawdown_usdt'], 4), ' USDT')}",
              f"  costs paid       {_n(a['costs_paid'], 4)} USDT",
              f"  equity vs start  {_n(a['balance'])} / {_n(a['starting_capital'])}"
              f"  ({_signed(a['return_pct'], 3)}%)"]
 
     if r["by_exit_reason"]:
         lines += ["", "  BY EXIT REASON",
-                  f"    {'reason':<14}{'n':>4}{'share':>9}{'avg R':>9}"
-                  f"{'total R':>10}{'avg MFE':>10}"]
+                  f"    {'reason':<14}{'n':>4}{'share':>9}{'avg P&L':>11}"
+                  f"{'total P&L':>12}{'avg MFE':>11}"]
         for b in r["by_exit_reason"]:
             lines.append(f"    {b['reason']:<14}{b['count']:>4}"
-                         f"{_n(b['share_pct'], 1, '--'):>8}%{_signed(b['avg_r'], 3, '--'):>9}"
-                         f"{_signed(b['total_r'], 2, '--'):>10}"
-                         f"{_signed(b['avg_mfe_r'], 2, '--'):>10}")
+                         f"{_n(b['share_pct'], 1, '--'):>8}%{_signed(b['avg_pnl'], 4, '--'):>11}"
+                         f"{_signed(b['total_pnl'], 4, '--'):>12}"
+                         f"{_signed(b['avg_mfe_usdt'], 4, '--'):>11}")
 
     lines += ["", "  BY SCORE BAND",
-              f"    {'band':<8}{'n':>4}{'win%':>9}{'expectancy':>13}{'total R':>10}"]
+              f"    {'band':<8}{'n':>4}{'win%':>9}{'expectancy R':>14}{'total R':>10}"]
     for b in r["by_score_band"]:
         lines.append(f"    {b['band']:<8}{b['count']:>4}{_n(b['win_rate'], 1, '--'):>9}"
                      f"{_signed(b['expectancy_r'], 3, '--'):>13}"

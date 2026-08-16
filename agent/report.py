@@ -66,6 +66,14 @@ def _costs(trade: dict) -> dict:
     }
 
 
+def _risk_of(trade: dict) -> float | None:
+    """The R unit in USDT for a trade, recovered from its own numbers."""
+    r, net = trade.get("r"), trade.get("net_pnl")
+    if not r or net is None:
+        return None
+    return net / r
+
+
 def trades() -> list[dict]:
     """Every closed trade, with the fields the report needs, newest first."""
     out = []
@@ -110,11 +118,21 @@ def _drawdown(rs: list[float]) -> float:
 
 
 def aggregate(rows: list[dict]) -> dict:
-    """Win rate, expectancy, total R, drawdown, costs — from the trade rows alone."""
+    """Win rate, expectancy, totals, drawdown, costs — from the trade rows alone.
+
+    Reported in USDT. R is still computed per trade and kept in the rows, because it
+    is the unit that compares trades of different sizes and the learning-loop
+    analyses group by it — but the headline figures are cash, which is what the
+    account actually gained or lost.
+    """
     scored = [t for t in rows if t["r"] is not None]
     rs = [t["r"] for t in scored]
     wins = [r for r in rs if r > 0]
     losses = [r for r in rs if r <= 0]
+
+    nets = [t["net_pnl"] for t in rows if t["net_pnl"] is not None]
+    net_wins = [n for n in nets if n > 0]
+    net_losses = [n for n in nets if n <= 0]
 
     acct = store.paper_account() or {}
     start = float(acct.get("starting_capital") or 0.0)
@@ -127,6 +145,11 @@ def aggregate(rows: list[dict]) -> dict:
         "avg_win_r": (sum(wins) / len(wins)) if wins else None,
         "avg_loss_r": (sum(losses) / len(losses)) if losses else None,
         "expectancy_r": (sum(rs) / len(rs)) if rs else None,
+        "avg_win_usdt": (sum(net_wins) / len(net_wins)) if net_wins else None,
+        "avg_loss_usdt": (sum(net_losses) / len(net_losses)) if net_losses else None,
+        "expectancy_usdt": (sum(nets) / len(nets)) if nets else None,
+        "net_pnl": sum(nets) if nets else None,
+        "max_drawdown_usdt": _drawdown(nets) if nets else None,
         # None, not 0.0, when nothing has closed. A total of "0R" is a measured
         # result meaning the wins cancelled the losses; an empty journal has no
         # result at all, and the UI must be able to say "no data" instead.
@@ -154,13 +177,23 @@ def by_exit_reason(rows: list[dict]) -> list[dict]:
     for reason, group in buckets.items():
         rs = [t["r"] for t in group if t["r"] is not None]
         mfes = [t["mfe_r"] for t in group if t["mfe_r"] is not None]
+        nets = [t["net_pnl"] for t in group if t["net_pnl"] is not None]
+        # MFE in cash needs the risk that was on at entry, which differs per trade,
+        # so it is converted per trade and then averaged — not averaged in R and
+        # scaled, which would be wrong the moment two trades risked different amounts.
+        mfe_cash = [t["mfe_r"] * t_risk for t in group
+                    if t["mfe_r"] is not None
+                    and (t_risk := _risk_of(t)) is not None]
         out.append({
             "reason": reason,
             "count": len(group),
             "share_pct": len(group) / len(rows) * 100.0 if rows else 0.0,
-            "total_r": sum(rs) if rs else 0.0,
+            "total_r": sum(rs) if rs else None,
             "avg_r": (sum(rs) / len(rs)) if rs else None,
             "avg_mfe_r": (sum(mfes) / len(mfes)) if mfes else None,
+            "total_pnl": sum(nets) if nets else None,
+            "avg_pnl": (sum(nets) / len(nets)) if nets else None,
+            "avg_mfe_usdt": (sum(mfe_cash) / len(mfe_cash)) if mfe_cash else None,
             "mfe_above_1r": sum(1 for m in mfes if m >= 1.0),
         })
     order = {r: i for i, r in enumerate(EXIT_REASONS)}

@@ -177,16 +177,13 @@
   "demo.col.reason": "Exit reason",
   "demo.col.count": "Trades",
   "demo.col.share": "Share",
-  "demo.col.avgR": "Avg R",
-  "demo.col.totalR": "Total R",
   "demo.col.avgMfe": "Avg MFE",
   "demo.report": "Report",
   "demo.byExit": "By exit reason",
   "demo.sampleShort": "Insufficient sample — no conclusions are drawn below",
   "demo.closed": "Closed trades",
   "demo.winRate": "Win rate",
-  "demo.expectancy": "Expectancy",
-  "demo.totalR": "Total R",
+  "demo.expectancy": "Expectancy / trade",
   "demo.maxDd": "Max drawdown",
   "demo.costs": "Costs paid",
   "demo.exit.tp1": "Take profit 1",
@@ -207,5 +204,8 @@
   "demo.col.sizeUsdt": "Size",
   "demo.contracts": "ctr",
   "demo.unitNote": "All amounts in USDT. Prices are the contract's quote price.",
-  "demo.last": "last"
+  "demo.last": "last",
+  "demo.netPnl": "Net P&L",
+  "demo.col.avgPnl": "Avg P&L",
+  "demo.col.totalPnl": "Total P&L"
 }
