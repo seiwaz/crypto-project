@@ -239,7 +239,9 @@ runuser -u "$SVC_USER" -- env \
   bash -lc "cd '$PREFIX' && ./run.sh setup" || die "./run.sh setup failed"
 
 step "Verification"
-runuser -u "$SVC_USER" -- env CRYPTO_SKILL_DIR="$SKILL_DIR" \
+# PYTHONPATH, because runuser does not start in $PREFIX and the app is imported as
+# a package from the install root rather than being pip-installed into the venv.
+runuser -u "$SVC_USER" -- env CRYPTO_SKILL_DIR="$SKILL_DIR" PYTHONPATH="$PREFIX" \
   "$PREFIX/.venv/bin/python" - <<'PY' || die "verification failed"
 import sys
 from agent import config, guard, skill
