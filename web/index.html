@@ -62,18 +62,31 @@
 
     <div class="filters" id="filters" role="group" aria-label="Filter by verdict"></div>
   </div>
+
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="tab" id="tabScreener" role="tab" aria-controls="panelScreener"
+            aria-selected="true" data-panel="screener" data-i18n="tab.screener">Screener</button>
+    <button class="tab" id="tabDemo" role="tab" aria-controls="panelDemo"
+            aria-selected="false" data-panel="demo" data-i18n="tab.demo">Demo trading</button>
+  </nav>
 </header>
 
 <main>
-  <div class="board" id="board"></div>
+  <section id="panelScreener" role="tabpanel" aria-labelledby="tabScreener">
+    <div class="board" id="board"></div>
 
-  <details class="unavailable" id="unavailable" hidden>
-    <summary>
-      <span data-i18n="unavail.title">Not scanned</span>
-      <span class="unavailable__why" id="unavailCount"></span>
-    </summary>
-    <div class="unavailable__grid" id="unavailGrid"></div>
-  </details>
+    <details class="unavailable" id="unavailable" hidden>
+      <summary>
+        <span data-i18n="unavail.title">Not scanned</span>
+        <span class="unavailable__why" id="unavailCount"></span>
+      </summary>
+      <div class="unavailable__grid" id="unavailGrid"></div>
+    </details>
+  </section>
+
+  <section id="panelDemo" role="tabpanel" aria-labelledby="tabDemo" hidden>
+    <div id="demoBody"></div>
+  </section>
 
   <p class="footer-note" id="footerNote" data-i18n="app.readonly">
     Read-only. This tool never places orders.

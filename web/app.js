@@ -21,6 +21,10 @@ const API = {
   manual:     (body) => fetchJSON('/api/manual-check', body),
   commentary: (body) => fetchJSON('/api/commentary', body),
   reassess:   () => fetchJSON('/api/llm/reassess', {}),
+  demo:       () => fetchJSON('/api/demo'),
+  demoReport: () => fetchJSON('/api/demo/report'),
+  demoCycle:  () => fetchJSON('/api/demo/cycle', {}),
+  demoReset:  () => fetchJSON('/api/demo/reset', {}),
 };
 
 async function fetchJSON(url, body) {
@@ -43,6 +47,9 @@ const state = {
   charts: new Map(),
   openCoins: new Set(JSON.parse(localStorage.getItem('openCoins') || '[]')),
   pollTimer: null,
+  tab: localStorage.getItem('tab') || 'screener',
+  demo: null,
+  report: null,
 };
 
 async function loadStrings(lang) {
@@ -817,8 +824,251 @@ function renderDrawer() {
   if (wl.margin_detection) body.append(el('p', { class: 'check__meta', dir: 'auto', text: wl.margin_detection }));
 }
 
+/* ------------------------------------------------------------------ demo */
+
+/* Sign carries the meaning, not colour: "+0.42" and "−0.42" are already distinct
+ * without it, so the class only reinforces what the glyph already says. */
+function signed(value, opts = {}) {
+  const node = num(value, opts);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    node.classList.add(value >= 0 ? 'pnl--up' : 'pnl--down');
+    if (value > 0) node.textContent = `+${node.textContent}`;
+  }
+  return node;
+}
+
+function demoAccount(acc) {
+  return el('div', { class: 'demo__account' }, [
+    stat(t('demo.equity'), num(acc.equity, { digits: 2, suffix: ' USDT' })),
+    stat(t('demo.balance'), num(acc.balance, { digits: 2 })),
+    stat(t('demo.openPnl'), signed(acc.open_pnl, { digits: 4 })),
+    stat(t('demo.usedMargin'), num(acc.used_margin, { digits: 2 })),
+    stat(t('demo.available'), num(acc.available_margin, { digits: 2 })),
+    stat(t('demo.return'), signed(acc.return_pct, { digits: 3, suffix: '%' })),
+  ]);
+}
+
+/* An empty slot is a legitimate state, so it is labelled with its cause rather than
+ * left blank. "No qualifying signal" points at the market; "insufficient margin"
+ * points at the sizing. Reading one as the other wastes a lot of time. */
+function slotReason(reason) {
+  if (!reason) return null;
+  const detail = reason.detail || {};
+  const body = [el('strong', { text: t(`demo.slot.${reason.code}`) })];
+  if (reason.code === 'insufficient_margin') {
+    body.push(el('span', { class: 'demo__hint' }, [
+      document.createTextNode(`${t('demo.slot.needs')} `),
+      num(detail.needs, { digits: 2 }),
+      document.createTextNode(` · ${t('demo.available')} `),
+      num(detail.available, { digits: 2 }),
+    ]));
+    body.push(el('p', { class: 'demo__note', text: t('demo.slot.slotsHint') }));
+  } else if (reason.code === 'heat_cap') {
+    body.push(el('span', { class: 'demo__hint' }, [
+      num(reason.heat, { digits: 2, suffix: '%' }),
+      document.createTextNode(` / `),
+      num(reason.cap, { digits: 1, suffix: '%' }),
+    ]));
+  } else if (reason.candidates) {
+    body.push(el('span', { class: 'demo__hint' }, [
+      num(reason.candidates), document.createTextNode(` ${t('demo.slot.candidates')}`),
+    ]));
+  }
+  return el('div', { class: 'demo__slotreason' }, body);
+}
+
+function demoSlots(d) {
+  const { slots, heat } = d;
+  const pips = el('div', { class: 'slots__pips' });
+  for (let i = 0; i < slots.total; i += 1) {
+    pips.append(el('span', {
+      class: `slots__pip${i < slots.filled ? ' slots__pip--filled' : ''}`,
+      attrs: { 'aria-hidden': 'true' },
+    }));
+  }
+  const heatPct = Math.min(100, (heat.used_pct / heat.cap_pct) * 100);
+  return el('section', { class: 'demo__slots' }, [
+    el('div', { class: 'slots__head' }, [
+      el('h3', { text: t('demo.slots') }),
+      el('span', { class: 'slots__count' }, [
+        num(slots.filled), document.createTextNode(` ${t('bar.of')} `), num(slots.total),
+      ]),
+    ]),
+    pips,
+    slotReason(slots.reason),
+    el('div', { class: 'heat' }, [
+      el('div', { class: 'heat__head' }, [
+        el('span', { text: t('demo.heat') }),
+        el('span', {}, [
+          signed(heat.used_pct, { digits: 2, suffix: '%' }),
+          document.createTextNode(` / `),
+          num(heat.cap_pct, { digits: 1, suffix: '%' }),
+        ]),
+      ]),
+      el('div', { class: 'heat__track' }, [
+        el('div', { class: 'heat__fill', attrs: { style: `inline-size:${heatPct}%` } }),
+      ]),
+    ]),
+    d.correlation_filter && !d.correlation_filter.available
+      ? el('p', { class: 'demo__warn', text: t('demo.corrUnavailable') })
+      : null,
+  ]);
+}
+
+function positionRow(p) {
+  const s = p.state;
+  const cells = [
+    el('td', {}, [el('div', { class: 'pos__coin', text: p.coin }),
+                  el('div', { class: 'pos__sym', text: p.symbol, dir: 'ltr' })]),
+    el('td', { class: `pos__side pos__side--${p.side}`,
+               text: t(`card.side.${p.side}`) }),
+    el('td', {}, [num(p.contracts, { digits: 1 }),
+                  el('div', { class: 'pos__sub' }, [
+                    num(s ? s.coins : null, { digits: 4 })])]),
+    el('td', {}, [num(p.entry_price, { digits: 6 })]),
+    el('td', {}, [num(s ? s.mark : null, { digits: 6 }),
+                  el('div', { class: 'pos__sub', text: p.mark_source || '' })]),
+    el('td', {}, [num(p.stop, { digits: 6 })]),
+    el('td', {}, [num(s ? s.liquidation_price : null, { digits: 6 })]),
+    el('td', {}, [num(p.leverage, { digits: 2, suffix: '×' })]),
+    el('td', {}, [num(p.margin, { digits: 2 })]),
+    el('td', {}, [signed(s ? s.unrealised_pnl : null, { digits: 4 }),
+                  el('div', { class: 'pos__sub' }, [
+                    signed(s ? s.unrealised_r : null, { digits: 3, suffix: 'R' })])]),
+    /* MFE gets its own column rather than hiding in a detail panel: a trade that ran
+     * to +1.4R and came back is a management failure, one that never moved is a
+     * thesis failure, and they are indistinguishable from P&L alone. */
+    el('td', {}, [signed(p.mfe_r, { digits: 2, suffix: 'R' }),
+                  el('div', { class: 'pos__sub' }, [
+                    signed(p.mae_r, { digits: 2, suffix: 'R' })])]),
+    el('td', {}, [num(s ? s.margin_ratio_pct : null, { digits: 2, suffix: '%' })]),
+    el('td', {}, [signed(p.funding_paid, { digits: 5 })]),
+  ];
+  const row = el('tr', {}, cells);
+  if (!s) row.classList.add('pos--stale');
+  return row;
+}
+
+function demoPositions(d) {
+  if (!d.positions.length) {
+    return el('div', { class: 'empty', text: t('demo.noPositions') });
+  }
+  const headers = ['demo.col.coin', 'demo.col.side', 'demo.col.size', 'demo.col.entry',
+                   'demo.col.mark', 'demo.col.stop', 'demo.col.liq', 'demo.col.lev',
+                   'demo.col.margin', 'demo.col.upnl', 'demo.col.mfe',
+                   'demo.col.marginRatio', 'demo.col.funding'];
+  return el('div', { class: 'table-wrap' }, [
+    el('table', { class: 'postable' }, [
+      el('thead', {}, [el('tr', {}, headers.map((k) => el('th', { text: t(k) })))]),
+      el('tbody', {}, d.positions.map(positionRow)),
+    ]),
+  ]);
+}
+
+function reportBlock(r) {
+  if (!r) return null;
+  const a = r.aggregate;
+  const kids = [el('h3', { text: t('demo.report') })];
+
+  if (!r.sample.sufficient) {
+    kids.push(el('p', { class: 'demo__warn' }, [
+      document.createTextNode(`${t('demo.sampleShort')} `),
+      num(r.sample.closed), document.createTextNode(' / '), num(r.sample.minimum),
+    ]));
+  }
+
+  kids.push(el('div', { class: 'demo__account' }, [
+    stat(t('demo.closed'), num(a.closed)),
+    stat(t('demo.winRate'), num(a.win_rate, { digits: 1, suffix: '%' })),
+    stat(t('demo.expectancy'), signed(a.expectancy_r, { digits: 3, suffix: 'R' })),
+    stat(t('demo.totalR'), signed(a.total_r, { digits: 2, suffix: 'R' })),
+    stat(t('demo.maxDd'), signed(a.max_drawdown_r, { digits: 2, suffix: 'R' })),
+    stat(t('demo.costs'), num(a.costs_paid, { digits: 4 })),
+  ]));
+
+  if (r.by_exit_reason.length) {
+    kids.push(el('h4', { text: t('demo.byExit') }));
+    kids.push(el('div', { class: 'table-wrap' }, [
+      el('table', { class: 'postable' }, [
+        el('thead', {}, [el('tr', {}, ['demo.col.reason', 'demo.col.count',
+          'demo.col.share', 'demo.col.avgR', 'demo.col.totalR', 'demo.col.avgMfe']
+          .map((k) => el('th', { text: t(k) })))]),
+        el('tbody', {}, r.by_exit_reason.map((b) => el('tr', {}, [
+          el('td', { text: t(`demo.exit.${b.reason}`) }),
+          el('td', {}, [num(b.count)]),
+          el('td', {}, [num(b.share_pct, { digits: 1, suffix: '%' })]),
+          el('td', {}, [signed(b.avg_r, { digits: 3, suffix: 'R' })]),
+          el('td', {}, [signed(b.total_r, { digits: 2, suffix: 'R' })]),
+          el('td', {}, [signed(b.avg_mfe_r, { digits: 2, suffix: 'R' })]),
+        ]))),
+      ]),
+    ]));
+  }
+  return el('section', { class: 'demo__report' }, kids);
+}
+
+function renderDemo() {
+  const host = document.getElementById('demoBody');
+  const d = state.demo;
+  if (!d) {
+    host.replaceChildren(el('div', { class: 'empty', text: t('demo.loading') }));
+    return;
+  }
+  host.replaceChildren(
+    el('section', { class: 'demo__head' }, [
+      el('div', {}, [
+        el('h2', { text: t('demo.title') }),
+        el('p', { class: 'demo__note', text: t('demo.subtitle') }),
+      ]),
+      el('div', { class: 'demo__actions' }, [
+        el('button', { class: 'btn', attrs: { id: 'demoCycle' }, text: t('demo.runCycle') }),
+        el('button', { class: 'btn btn--ghost', attrs: { id: 'demoReset' }, text: t('demo.reset') }),
+      ]),
+    ]),
+    demoAccount(d.account),
+    demoSlots(d),
+    demoPositions(d),
+    reportBlock(state.report),
+  );
+
+  document.getElementById('demoCycle').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = t('demo.running');
+    try { await API.demoCycle(); } finally { await refreshDemo(); }
+  });
+  document.getElementById('demoReset').addEventListener('click', async () => {
+    if (!window.confirm(t('demo.resetConfirm'))) return;
+    await API.demoReset();
+    await refreshDemo();
+  });
+}
+
+async function refreshDemo() {
+  try {
+    const [d, r] = await Promise.all([API.demo(), API.demoReport()]);
+    state.demo = d;
+    state.report = r;
+  } catch (err) {
+    document.getElementById('demoBody').replaceChildren(
+      el('div', { class: 'empty', text: `${t('error.load')} ${err.message || ''}` }));
+    return;
+  }
+  renderDemo();
+}
+
+function renderTabs() {
+  for (const btn of document.querySelectorAll('.tab')) {
+    const active = btn.dataset.panel === state.tab;
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.classList.toggle('tab--active', active);
+  }
+  document.getElementById('panelScreener').hidden = state.tab !== 'screener';
+  document.getElementById('panelDemo').hidden = state.tab !== 'demo';
+}
+
 function render() {
   applyDirection();
+  renderTabs();
   renderScan();
   renderFilters();
   renderBoard();
@@ -885,6 +1135,17 @@ function wireControls() {
     await refresh();
   });
 
+  for (const btn of document.querySelectorAll('.tab')) {
+    btn.addEventListener('click', async () => {
+      state.tab = btn.dataset.panel;
+      localStorage.setItem('tab', state.tab);
+      renderTabs();
+      /* The demo reads live marks, so it is fetched when opened rather than kept warm
+         behind a hidden panel — polling prices nobody is looking at is wasted work. */
+      if (state.tab === 'demo') await refreshDemo();
+    });
+  }
+
   const drawer = document.getElementById('drawer');
   document.getElementById('settingsToggle').addEventListener('click', () => { drawer.hidden = !drawer.hidden; });
   document.getElementById('drawerClose').addEventListener('click', () => { drawer.hidden = true; });
@@ -895,6 +1156,7 @@ function wireControls() {
   await loadStrings(state.lang);
   wireControls();
   await refresh();
+  if (state.tab === 'demo') await refreshDemo();
   if (state.data && state.data.scan && state.data.scan.running) startPolling();
   else state.pollTimer = setInterval(refresh, 60000);
 })();

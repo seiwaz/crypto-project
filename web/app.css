@@ -495,3 +495,178 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   position: absolute; inline-size: 1px; block-size: 1px;
   padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
+
+/* ------------------------------------------------------------------ tabs */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding-inline: clamp(0.75rem, 2vw, 1.5rem);
+  border-block-start: 1px solid var(--hairline);
+}
+
+.tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.6rem 0.9rem;
+}
+
+.tab:hover { color: var(--ink); }
+
+/* The active tab carries a weight change and an underline, not just a colour —
+   the same rule the verdict badges follow. */
+.tab--active {
+  border-block-end-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ------------------------------------------------------------------ demo */
+
+#panelDemo { padding: clamp(0.75rem, 2vw, 1.5rem); }
+
+.demo__head {
+  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  justify-content: space-between;
+  margin-block-end: 1rem;
+}
+
+.demo__head h2 { font-size: 1.05rem; margin: 0; }
+.demo__actions { display: flex; gap: 0.4rem; }
+.demo__note { color: var(--ink-muted); font-size: 0.78rem; margin: 0.2rem 0 0; }
+
+.demo__account {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  margin-block-end: 1rem;
+  padding: var(--card-pad);
+}
+
+.demo__slots {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-block-end: 1rem;
+  padding: var(--card-pad);
+}
+
+.slots__head {
+  align-items: baseline;
+  display: flex;
+  gap: var(--gap);
+  justify-content: space-between;
+}
+
+.slots__head h3 { font-size: 0.9rem; margin: 0; }
+.slots__count { color: var(--ink-2); font-size: 0.85rem; }
+
+.slots__pips { display: flex; gap: 0.35rem; margin-block: 0.6rem; }
+
+/* A filled slot is solid, an empty one is an outline. Shape, so the count survives
+   a greyscale print or a colour-vision deficiency. */
+.slots__pip {
+  block-size: 0.75rem;
+  border: 1.5px solid var(--rule);
+  border-radius: 3px;
+  flex: 1 1 0;
+  max-inline-size: 4rem;
+}
+
+.slots__pip--filled { background: var(--accent); border-color: var(--accent); }
+
+.demo__slotreason {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  margin-block-start: 0.5rem;
+}
+
+.demo__hint { color: var(--ink-2); }
+
+.demo__warn {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-inline-start: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  margin-block-start: 0.75rem;
+  padding: 0.5rem 0.7rem;
+}
+
+.heat { margin-block-start: 0.9rem; }
+
+.heat__head {
+  display: flex;
+  font-size: 0.8rem;
+  justify-content: space-between;
+}
+
+.heat__track {
+  background: var(--plane);
+  border-radius: 999px;
+  block-size: 0.4rem;
+  margin-block-start: 0.3rem;
+  overflow: hidden;
+}
+
+.heat__fill { background: var(--accent); block-size: 100%; }
+
+/* ------------------------------------------------------- positions table */
+
+.table-wrap {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* Wide tables scroll inside their own box; the page body must never scroll
+     sideways just because a column count grew. */
+  overflow-x: auto;
+}
+
+.postable { border-collapse: collapse; font-size: 0.8rem; inline-size: 100%; }
+
+.postable th {
+  color: var(--ink-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.6rem 0.7rem;
+  text-align: start;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.postable td {
+  border-block-start: 1px solid var(--hairline);
+  padding: 0.55rem 0.7rem;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.pos__coin { font-weight: 600; }
+.pos__sym, .pos__sub { color: var(--ink-muted); font-size: 0.72rem; }
+.pos__side--long { color: var(--up); }
+.pos__side--short { color: var(--down); }
+.pos--stale { opacity: 0.6; }
+
+.pnl--up { color: var(--up); }
+.pnl--down { color: var(--down); }
+
+.demo__report { margin-block-start: 1.5rem; }
+.demo__report h3 { font-size: 0.95rem; margin: 0 0 0.6rem; }
+.demo__report h4 { font-size: 0.82rem; margin: 1.2rem 0 0.5rem; }

@@ -29,7 +29,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote, parse_qs
 
-from . import config, discover, exchange, guard, llm, scanner, store
+from . import config, demo, discover, exchange, guard, llm, report, scanner, store
 
 log = logging.getLogger("server")
 
@@ -327,6 +327,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(config.load_watchlist())
         if path == "/api/llm":
             return self._json((config.load_settings().get("llm") or {}))
+        if path == "/api/demo":
+            return self._json(demo.state())
+        if path == "/api/demo/report":
+            return self._json(report.build())
 
         parts = [p for p in path.split("/") if p]
         # /api/coin/<COIN>[/series|/history]
@@ -395,6 +399,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/scan/cancel":
             scanner.request_cancel()
             return self._json({"cancelling": True})
+
+        # The demo mutates only local rows. There is no exchange write behind any of
+        # these — `demo` reads prices through the read-only allowlist and persists to
+        # SQLite, and no order endpoint is reachable from this process.
+        if path == "/api/demo/cycle":
+            cycle = demo.cycle()
+            filled = demo.try_fill_slots()
+            return self._json({"cycle": cycle, "fill": filled,
+                               "state": demo.state()})
+
+        if path == "/api/demo/reset":
+            cfg = demo.settings()
+            store.paper_init(exchange=cfg["exchange"], capital=cfg["capital"],
+                             slots=cfg["slots"], heat_cap_pct=cfg["heat_cap_pct"],
+                             reset=True)
+            store.set_kv("demo.last_fill", {})
+            return self._json(demo.state())
 
         if path == "/api/manual-check":
             coin = str(body.get("coin", "")).upper()
