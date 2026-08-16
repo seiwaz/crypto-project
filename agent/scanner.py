@@ -212,6 +212,11 @@ def scheduler_loop(stop: threading.Event) -> None:
     while not stop.is_set():
         settings = config.load_settings()
         interval = max(1, int(settings.get("scan_interval_minutes", 15))) * 60
+        # Gated like the demo loop, so `./run.sh scanner off` can quiet it without
+        # stopping the server and taking the dashboard down with it.
+        if not settings.get("scanner_enabled", True):
+            stop.wait(interval)
+            continue
         try:
             scan_once()
         except Exception:

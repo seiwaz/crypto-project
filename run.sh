@@ -8,6 +8,16 @@
 #   ./run.sh status     running?, PID, last scan, Ollama state, coin count
 #   ./run.sh logs [-f]
 #   ./run.sh scan-once  one scan in the foreground, for debugging
+#   ./run.sh journal    demo account, open positions, closed trades, report
+#   ./run.sh agents     what each agent is doing right now
+#   ./run.sh watch      timed observation run that writes a journal when it ends
+#   ./run.sh demo on|off       enable/disable the paper trader
+#   ./run.sh scanner on|off    enable/disable scheduled scanning
+#
+# Every process this project runs is owned by this script: the server (which hosts
+# the scanner and demo threads) and the watcher. `stop` stops all of them. Nothing
+# should ever be launched by hand — an unsupervised process still writing to the
+# database is how a journal ends up describing an account nobody is managing.
 #
 # The scan scheduler runs as a thread inside the server process rather than as a
 # second daemon: one process to supervise, one PID to reap, and no way for the two
@@ -24,6 +34,8 @@ VAR="$ROOT/var"
 LOGS="$VAR/logs"
 PIDFILE="$VAR/server.pid"
 LOGFILE="$LOGS/server.log"
+WATCHPID="$VAR/watch.pid"
+WATCHLOG="$LOGS/watch.log"
 
 BIND_HOST="${BIND_HOST:-127.0.0.1}"
 BIND_PORT="${BIND_PORT:-8787}"
@@ -58,17 +70,55 @@ ensure_venv() {
 # Returns 0 and echoes the PID when the server is genuinely running.
 # A PID file left behind by a killed process is cleaned up rather than trusted —
 # refusing to start because of a stale file is a bad way to greet someone.
-running_pid() {
-  [[ -f "$PIDFILE" ]] || return 1
-  local pid; pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+pid_from() {
+  # pid_from <pidfile> <command-substring>
+  local file="$1" match="$2"
+  [[ -f "$file" ]] || return 1
+  local pid; pid="$(cat "$file" 2>/dev/null || true)"
   if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-    rm -f "$PIDFILE"; return 1
+    rm -f "$file"; return 1
   fi
   # Confirm it is actually ours and not a recycled PID.
-  if ! ps -p "$pid" -o command= 2>/dev/null | grep -q 'agent.server'; then
-    rm -f "$PIDFILE"; return 1
+  if ! ps -p "$pid" -o command= 2>/dev/null | grep -q "$match"; then
+    rm -f "$file"; return 1
   fi
   printf '%s' "$pid"; return 0
+}
+
+running_pid() { pid_from "$PIDFILE" 'agent.server'; }
+watch_pid()   { pid_from "$WATCHPID" 'agent.watch'; }
+
+# stop_pid <pidfile> <label> — TERM, wait, then KILL.
+stop_pid() {
+  local file="$1" label="$2" pid
+  pid="$(cat "$file" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || { rm -f "$file"; return 1; }
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    kill -0 "$pid" 2>/dev/null || { rm -f "$file"; ok "$label stopped"; return 0; }
+    sleep 0.25
+  done
+  warn "$label did not exit gracefully — sending SIGKILL"
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$file"
+  ok "$label stopped"
+}
+
+# Flip a boolean under settings.demo / settings root, without a restart: both loops
+# re-read settings every cycle, so a toggle takes effect within one interval.
+set_flag() {
+  local path="$1" value="$2"
+  "$PY" - "$path" "$value" <<'PY'
+import json, sys, pathlib
+path, value = sys.argv[1], sys.argv[2] == "on"
+f = pathlib.Path("config/settings.json")
+s = json.loads(f.read_text(encoding="utf-8"))
+node, _, leaf = path.rpartition(".")
+target = s.setdefault(node, {}) if node else s
+target[leaf] = value
+f.write_text(json.dumps(s, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"{path} = {value}")
+PY
 }
 
 cmd_setup() {
@@ -177,19 +227,63 @@ cmd_start() {
 }
 
 cmd_stop() {
-  if ! pid="$(running_pid)"; then
-    say "not running"
+  # Stop every process this script owns. A watcher still running after `stop` is the
+  # exact problem this command exists to prevent: something hitting the API and
+  # writing to the database with nothing supervising it.
+  local stopped=0
+  if watch_pid >/dev/null; then stop_pid "$WATCHPID" "watch"; stopped=1; fi
+  if ! running_pid >/dev/null; then
+    [[ $stopped -eq 1 ]] || say "not running"
     return 0
   fi
-  kill "$pid" 2>/dev/null || true
-  for _ in $(seq 1 40); do
-    kill -0 "$pid" 2>/dev/null || { rm -f "$PIDFILE"; ok "stopped"; return 0; }
-    sleep 0.25
-  done
-  warn "did not exit gracefully — sending SIGKILL"
-  kill -9 "$pid" 2>/dev/null || true
-  rm -f "$PIDFILE"
-  ok "stopped"
+  stop_pid "$PIDFILE" "server"
+}
+
+cmd_watch() {
+  local action="${1:-status}" minutes="${2:-60}"
+  case "$action" in
+    start)
+      [[ -x "$PY" ]] || die "no virtualenv — run ./run.sh setup first"
+      watch_pid >/dev/null && die "watch already running (pid $(watch_pid))"
+      running_pid >/dev/null || die "server is not running — ./run.sh start first"
+      mkdir -p "$LOGS"
+      nohup "$PY" -m agent.watch "$minutes" >>"$WATCHLOG" 2>&1 &
+      printf '%s' "$!" > "$WATCHPID"
+      sleep 1
+      watch_pid >/dev/null || { rm -f "$WATCHPID"; die "watch failed — see $WATCHLOG"; }
+      ok "watch started (pid $(cat "$WATCHPID")) for ${minutes}m — log: $WATCHLOG"
+      ;;
+    stop)
+      watch_pid >/dev/null || { say "watch not running"; return 0; }
+      stop_pid "$WATCHPID" "watch"
+      ;;
+    status)
+      if pid="$(watch_pid)"; then ok "watch running (pid $pid)"; else say "watch not running"; fi
+      ;;
+    *) die "usage: ./run.sh watch {start [MINUTES]|stop|status}" ;;
+  esac
+}
+
+cmd_agents() {
+  say "${c_bold}Agents${c_reset}"
+  if pid="$(running_pid)"; then
+    ok "server      running (pid $pid)"
+  else
+    warn "server      stopped — scanner and demo both run inside it"
+  fi
+  [[ -x "$PY" ]] && "$PY" -c '
+from agent import config, demo
+s = config.load_settings()
+d = s.get("demo") or {}
+mark = lambda b: "on " if b else "off"
+print("  scanner     %s every %s min" % (mark(s.get("scanner_enabled", True)),
+                                         s.get("scan_interval_minutes", 15)))
+print("  demo        %s every %ss, %s slots" % (mark(d.get("enabled")),
+                                                d.get("cycle_seconds", 90),
+                                                d.get("slots", 5)))
+print("  strategy    %s - time stop %gh" % (s.get("profile"), demo.time_stop_hours()))
+'
+  if pid="$(watch_pid)"; then ok "watch       running (pid $pid)"; else say "  watch       stopped"; fi
 }
 
 cmd_status() {
@@ -276,8 +370,14 @@ case "${1:-}" in
   logs)      cmd_logs "${2:-}" ;;
   scan-once) cmd_scan_once "$@" ;;
   journal)   cmd_journal ;;
+  agents)    cmd_agents ;;
+  watch)     cmd_watch "${2:-status}" "${3:-60}" ;;
+  demo)      set_flag "demo.enabled" "${2:-}" ;;
+  scanner)   set_flag "scanner_enabled" "${2:-}" ;;
   *)
-    say "usage: ./run.sh {setup|start|stop|restart|status|logs [-f]|scan-once [COIN...]|journal}"
+    say "usage: ./run.sh {setup|start|stop|restart|status|agents|logs [-f]|"
+    say "                 scan-once [COIN...]|journal|watch {start [MIN]|stop|status}|"
+    say "                 demo {on|off}|scanner {on|off}}"
     exit 1
     ;;
 esac

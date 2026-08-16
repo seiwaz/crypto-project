@@ -68,5 +68,6 @@
     "cycle_seconds": 60,
     "time_stop_hours": null,
     "time_stop_min_profit_usdt": null
-  }
+  },
+  "scanner_enabled": true
 }
