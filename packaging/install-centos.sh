@@ -372,7 +372,9 @@ cat <<EOF
 
 ${c_bold}Installed${c_reset}
 
-  dashboard   http://127.0.0.1:$PORT   (loopback only — no firewall port is opened)
+  dashboard   $( [[ $PUBLIC -eq 1 ]] \
+      && echo "http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT   (PUBLIC — no authentication)" \
+      || echo "http://127.0.0.1:$PORT   (loopback only — no firewall port opened)" )
   files       $PREFIX
   account     $SVC_USER (no login shell)
   database    $PREFIX/var/screener.sqlite3
@@ -396,8 +398,19 @@ ${c_bold}First run${c_reset}
   Edit $PREFIX/config/coins.txt to change the watchlist, one ticker per line, then
   re-run setup.
 
-  To reach the dashboard from your workstation, forward the port rather than
-  binding it publicly — the server refuses any non-loopback bind:
+$( [[ $PUBLIC -eq 1 ]] && cat <<PUB
+  ${c_bold}This dashboard is exposed with no authentication.${c_reset} Anyone who can reach
+  port $PORT can reset the demo account, change capital and risk, and start scans.
+  It cannot place an exchange order and it serves no credentials. Restrict it:
 
-    ssh -N -L $PORT:127.0.0.1:$PORT $(id -un)@\$(hostname -f 2>/dev/null || hostname)
+    firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=YOUR.IP port port=$PORT protocol=tcp accept'
+
+PUB
+) || cat <<PRIV
+  To reach the dashboard from your workstation, forward the port rather than
+  binding it publicly — the server refuses any non-loopback bind unless
+  ALLOW_PUBLIC_BIND=1 is set:
+
+    ssh -N -L $PORT:127.0.0.1:$PORT root@\$(hostname -f 2>/dev/null || hostname)
+PRIV
 EOF
