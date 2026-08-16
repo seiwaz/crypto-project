@@ -44,9 +44,11 @@ log = logging.getLogger("toobit")
 
 NAME = "toobit"
 LABEL = "Toobit — USDT perpetuals"
-# The planner's exchange profile. Toobit is a true perp venue, so generic-perp is the
-# honest fit; per-contract leverage and maintenance margin are passed in as overrides.
-PLAN_EXCHANGE = "generic-perp"
+# The planner now models Toobit directly: published VIP-0 fees, an 8h funding period,
+# and a maintenance margin taken from real contracts rather than a generic 0.5%
+# assumption. It is slightly stricter than generic-perp — the true 0.06% taker fee
+# costs about half a score point — and that is the point of using it.
+PLAN_EXCHANGE = "toobit"
 
 DEFAULT_BASE = "https://api.toobit.com"
 USER_AGENT = "LocalScreener/1.0 (read-only)"
@@ -700,7 +702,11 @@ def build_snapshot(entry: dict, profile: str, count: int = 300) -> tuple[dict, d
 # (CRO 2.5%). Where the real figure is higher, the profile's assumption puts
 # liquidation further away than it actually is — the one direction that must not be
 # left uncorrected.
-GENERIC_PERP_MAINT_PCT = 0.5
+# What the toobit profile assumes. Real maintenance margin is per contract and per
+# tier — 0.25% on BTC, 0.667% on FIL, 2.5% on CRO — so anything above this still
+# needs the leverage correction below, just far less often than when the baseline
+# was generic-perp's 0.5%.
+PROFILE_MAINT_PCT = 0.667
 
 
 def safe_leverage_for(maint_pct: float, stop_pct: float, buffer: float) -> float:
@@ -782,7 +788,7 @@ def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
 
         maint = entry.get("maint_margin_pct")
         correction = None
-        if maint and maint > GENERIC_PERP_MAINT_PCT:
+        if maint and maint > PROFILE_MAINT_PCT:
             stop_pct = (plan.get("levels") or {}).get("stop_pct")
             leverage = (plan.get("sizing") or {}).get("leverage")
             if stop_pct and leverage:
@@ -790,7 +796,7 @@ def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
                 if leverage > safe:
                     correction = {
                         "reason": (f"Toobit's maintenance margin for this contract is "
-                                   f"{maint:g}%, above the {GENERIC_PERP_MAINT_PCT:g}% the "
+                                   f"{maint:g}%, above the {PROFILE_MAINT_PCT:g}% the "
                                    f"planner's generic-perp profile assumes. Leverage was "
                                    f"re-capped from {leverage:g}x to {safe:.2f}x so the "
                                    f"liquidation buffer holds at the real figure."),
@@ -809,7 +815,7 @@ def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
         "units_per_contract": entry.get("units_per_contract"),
         "max_leverage": venue_cap,
         "maint_margin_pct": entry.get("maint_margin_pct"),
-        "planner_maint_margin_pct": GENERIC_PERP_MAINT_PCT,
+        "planner_maint_margin_pct": PROFILE_MAINT_PCT,
         "leverage_correction": correction,
         "funding": snap.get("funding"),
     }

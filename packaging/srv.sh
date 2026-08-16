@@ -60,8 +60,19 @@ cmd_sync() {
   # coins only, and only when it differs, so a server-side edit is not clobbered.
   rsync -az -e "ssh ${SSH_OPTS[*]}" config/coins.txt "$USER@$HOST:$PREFIX/config/coins.txt"
 
-  remote "chown -R $SVC_USER:$SVC_USER '$PREFIX/agent' '$PREFIX/web' '$PREFIX/run.sh' '$PREFIX/config' 2>/dev/null; chmod +x '$PREFIX/run.sh'"
-  ok "code pushed"
+  # The skill too. It was patched locally once and the server kept the old copy,
+  # which is exactly the drift that produces two machines computing different plans
+  # from the same code.
+  SKILL_SRC="${CRYPTO_SKILL_DIR:-$HOME/.claude/skills/crypto-leverage-trade-plan}"
+  if [[ -d "$SKILL_SRC/scripts" ]]; then
+    rsync -az --delete -e "ssh ${SSH_OPTS[*]}" --exclude '__pycache__' \
+      "$SKILL_SRC/" "$USER@$HOST:$PREFIX/skill/"
+  else
+    warn "no skill at $SKILL_SRC — server copy left as it is"
+  fi
+
+  remote "chown -R $SVC_USER:$SVC_USER '$PREFIX/agent' '$PREFIX/web' '$PREFIX/run.sh' '$PREFIX/config' '$PREFIX/skill' 2>/dev/null; chmod +x '$PREFIX/run.sh'"
+  ok "code and skill pushed"
 
   step "Restart"
   remote "systemctl restart crypto-screener" || die "restart failed"
