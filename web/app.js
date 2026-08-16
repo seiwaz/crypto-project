@@ -951,9 +951,17 @@ function positionRow(p) {
                   el('div', { class: 'pos__sym', text: p.symbol, dir: 'ltr' })]),
     el('td', { class: `pos__side pos__side--${p.side}`,
                text: t(`card.side.${p.side}`) }),
-    el('td', {}, [num(p.contracts, { digits: 1 }),
-                  el('div', { class: 'pos__sub' }, [
-                    num(s ? s.coins : null, { digits: 4 })])]),
+    /* Toobit sizes an order in USDT, so the notional leads. Contracts and coins stay
+     * underneath: the contract count is what a venue ticket actually takes, and the
+     * two differ by the contract multiplier — 10x on FIL, 1000x on some others. */
+    el('td', {}, [
+      num(s ? s.notional : null, { digits: 2, suffix: ' USDT' }),
+      el('div', { class: 'pos__sub' }, [
+        num(p.contracts, { digits: 1 }),
+        el('span', { text: ` ${t('demo.contracts')} · ` }),
+        num(s ? s.coins : null, { digits: 4 }),
+      ]),
+    ]),
     el('td', {}, [num(p.entry_price, { digits: 6 })]),
     el('td', {}, [num(s ? s.mark : null, { digits: 6 }),
                   el('div', { class: 'pos__sub', text: p.mark_source || '' })]),
@@ -1001,7 +1009,7 @@ function demoPositions(d) {
   if (!d.positions.length) {
     return el('div', { class: 'empty', text: t('demo.noPositions') });
   }
-  const headers = ['demo.col.coin', 'demo.col.side', 'demo.col.size', 'demo.col.entry',
+  const headers = ['demo.col.coin', 'demo.col.side', 'demo.col.sizeUsdt', 'demo.col.entry',
                    'demo.col.mark', 'demo.col.levels', 'demo.col.liq', 'demo.col.lev',
                    'demo.col.marginFunding', 'demo.col.upnl', 'demo.col.mfe',
                    'demo.col.marginRatio'];

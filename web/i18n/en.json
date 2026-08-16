@@ -165,7 +165,6 @@
   "demo.slot.slotsHint": "Plans were sized as if each were the only position. Passing {code} to the planner shares the margin budget across concurrent trades.",
   "demo.col.coin": "Coin",
   "demo.col.side": "Side",
-  "demo.col.size": "Contracts / coins",
   "demo.col.entry": "Entry",
   "demo.col.mark": "Mark",
   "demo.col.liq": "Liquidation",
@@ -204,5 +203,7 @@
   "demo.filled": "✓ filled",
   "demo.stopAtBe": "stop at breakeven + costs",
   "demo.slot.circuit_breaker": "Circuit breaker tripped — no new positions",
-  "demo.exit.reduced": "Reduced at TP1"
+  "demo.exit.reduced": "Reduced at TP1",
+  "demo.col.sizeUsdt": "Size (USDT)",
+  "demo.contracts": "ctr"
 }

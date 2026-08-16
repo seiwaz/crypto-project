@@ -475,7 +475,7 @@ def _trail_stop(pos: dict, plan: dict, spec: dict) -> float | None:
     if not int(pos.get("tp1_filled") or 0):
         return None                       # trail only the runner, after TP1
     try:
-        rows = toobit.klines(pos["symbol"], _tf_to_interval(decision_tf(plan)),
+        rows = toobit.klines_cached(pos["symbol"], _tf_to_interval(decision_tf(plan)),
                              limit=120)
     except toobit.ToobitError:
         return None
@@ -601,7 +601,7 @@ def _close(pos: dict, spec: dict, price: float, reason: str) -> float:
 
 def _latest_candle(symbol: str) -> dict | None:
     try:
-        rows = toobit.klines(symbol, "15m", limit=2)
+        rows = toobit.klines_cached(symbol, "15m", limit=2)
     except toobit.ToobitError:
         return None
     return rows[-1] if rows else None

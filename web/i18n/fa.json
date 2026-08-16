@@ -185,7 +185,6 @@
   "demo.slot.slotsHint": "هر طرح چنان اندازه‌گیری شده که گویی تنها موقعیت باز است. دادن {code} به برنامه‌ریز، بودجهٔ وجه تضمین را میان معاملات هم‌زمان تقسیم می‌کند.",
   "demo.col.coin": "ارز",
   "demo.col.side": "جهت",
-  "demo.col.size": "قرارداد / سکه",
   "demo.col.entry": "ورود",
   "demo.col.mark": "قیمت نشانه",
   "demo.col.liq": "لیکوئید",
@@ -224,5 +223,7 @@
   "demo.filled": "✓ پر شد",
   "demo.stopAtBe": "حد ضرر روی نقطه سربه‌سر + هزینه‌ها",
   "demo.slot.circuit_breaker": "قطع‌کنندهٔ مدار فعال شد — موقعیت تازه‌ای باز نمی‌شود",
-  "demo.exit.reduced": "کاهش در حد سود ۱"
+  "demo.exit.reduced": "کاهش در حد سود ۱",
+  "demo.col.sizeUsdt": "حجم (تتر)",
+  "demo.contracts": "قرارداد"
 }

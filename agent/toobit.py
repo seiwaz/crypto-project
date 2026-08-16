@@ -198,6 +198,40 @@ def maintenance_margin_pct(contract: dict) -> float | None:
 # --------------------------------------------------------------------------------
 
 
+_KLINES_TTL = 60.0
+_klines_cache: dict[tuple[str, str, int], tuple[float, list]] = {}
+_klines_lock = threading.Lock()
+
+
+def klines_cached(symbol: str, interval: str, limit: int = 300) -> list[dict]:
+    """Candles, deduplicated across one scan pass.
+
+    Every profile names four timeframe roles, but they are not four distinct series:
+    intraday uses 4H for both `decision` and `atr`, so each coin was fetching the same
+    candles twice. The demo's monitoring loop re-fetches the same series every cycle
+    as well.
+
+    The TTL is deliberately shorter than any scan interval, so a later pass still sees
+    fresh candles — this removes duplicate work inside one pass, it does not serve
+    stale data to the next one.
+    """
+    key = (symbol, interval, limit)
+    now = time.time()
+    with _klines_lock:
+        hit = _klines_cache.get(key)
+        if hit and now - hit[0] < _KLINES_TTL:
+            return hit[1]
+    rows = klines(symbol, interval, limit)
+    with _klines_lock:
+        _klines_cache[key] = (time.time(), rows)
+        if len(_klines_cache) > 512:            # bounded; a scan touches ~150 keys
+            cutoff = time.time() - _KLINES_TTL
+            for k, (at, _) in list(_klines_cache.items()):
+                if at < cutoff:
+                    del _klines_cache[k]
+    return rows
+
+
 def klines(symbol: str, interval: str, limit: int = 300) -> list[dict]:
     """OHLCV as the skill's compute_indicators expects it.
 
@@ -236,30 +270,84 @@ def ticker(symbol: str) -> dict:
     return row if isinstance(row, dict) else {}
 
 
+# Batched market data.
+#
+# Both endpoints return every symbol in one response — 744 index prices, 778 funding
+# rates — so the cost of watching a portfolio is one request, not one per position.
+# Fetching per symbol made demo.state() take 8.3s with four positions open, on every
+# page poll, and it grew linearly with the number of slots.
+#
+# The TTLs differ because the data does: a mark moves continuously and is cached only
+# long enough to stop one operation fetching it repeatedly, while funding is fixed for
+# the whole 8-hour period and was being re-fetched every 60 seconds.
+_INDEX_TTL = 3.0
+_FUNDING_TTL = 300.0
+
+_index_cache: tuple[float, dict] = (0.0, {})
+_funding_cache: tuple[float, dict] = (0.0, {})
+_batch_lock = threading.Lock()
+
+
+def index_prices(refresh: bool = False) -> dict[str, dict]:
+    """Every index token -> {"edp": float, "index": float}, in one request."""
+    global _index_cache
+    with _batch_lock:
+        at, data = _index_cache
+        if not refresh and data and time.time() - at < _INDEX_TTL:
+            return data
+    raw = _get("/quote/v1/index")
+    out: dict[str, dict] = {}
+    if isinstance(raw, dict):
+        for field in ("index", "edp"):
+            block = raw.get(field)
+            if not isinstance(block, dict):
+                continue
+            for token, value in block.items():
+                try:
+                    out.setdefault(token, {})[field] = float(value)
+                except (TypeError, ValueError):
+                    continue
+    with _batch_lock:
+        _index_cache = (time.time(), out)
+    return out
+
+
+def funding_all(refresh: bool = False) -> dict[str, dict]:
+    """Every contract's funding rate, in one request."""
+    global _funding_cache
+    with _batch_lock:
+        at, data = _funding_cache
+        if not refresh and data and time.time() - at < _FUNDING_TTL:
+            return data
+    raw = _get("/api/v1/futures/fundingRate", {"limit": 1})
+    out: dict[str, dict] = {}
+    for row in raw if isinstance(raw, list) else []:
+        if not isinstance(row, dict) or "rate" not in row:
+            continue
+        try:
+            rate = float(row["rate"])
+        except (TypeError, ValueError):
+            continue
+        out[str(row.get("symbol"))] = {
+            "rate": rate,
+            "rate_pct": rate * 100.0,
+            "period": row.get("period"),
+            "next_funding_time": row.get("nextFundingTime"),
+            "rate_cap": row.get("fundingRateCap"),
+            "rate_floor": row.get("fundingRateFloor"),
+        }
+    with _batch_lock:
+        _funding_cache = (time.time(), out)
+    return out
+
+
 def funding_rate(symbol: str) -> dict | None:
     """Current funding rate. Public on Toobit — the check Nobitex could never settle."""
     try:
-        raw = _get("/api/v1/futures/fundingRate", {"symbol": symbol, "limit": 1})
+        return funding_all().get(symbol)
     except ToobitError as exc:
         log.debug("funding rate unavailable for %s: %s", symbol, exc)
         return None
-    row = raw[0] if isinstance(raw, list) and raw else raw
-    if not isinstance(row, dict) or "rate" not in row:
-        return None
-    try:
-        rate = float(row["rate"])
-    except (TypeError, ValueError):
-        return None
-    return {
-        "rate": rate,
-        "rate_pct": rate * 100.0,
-        "period": row.get("period"),
-        "next_funding_time": row.get("nextFundingTime"),
-        # Toobit clamps funding to ±2%. The paper broker shows it so a large accrued
-        # funding cost reads as a real venue limit rather than a simulation artefact.
-        "rate_cap": row.get("fundingRateCap"),
-        "rate_floor": row.get("fundingRateFloor"),
-    }
 
 
 # --------------------------------------------------------------------------------
@@ -357,6 +445,11 @@ FUNDING_CROWDED_PCT = 0.05
 # Without this a 47-coin scan pulled the same BTC candles 47 times.
 _btc_cache: dict[tuple[str, int], tuple[float, dict | None]] = {}
 _BTC_TTL = 120.0
+# Held across the check-fetch-store, not just the dict access. With a parallel scan
+# every worker starts at once, so an unlocked cache means all of them miss together
+# and fetch the same BTC candles — the cache would save nothing on the one pass where
+# it matters most.
+_btc_lock = threading.Lock()
 
 
 def _btc_bias(bias_tf: str, count: int) -> dict | None:
@@ -370,23 +463,24 @@ def _btc_bias(bias_tf: str, count: int) -> dict | None:
     if not interval:
         return None
     key = (interval, count)
-    hit = _btc_cache.get(key)
-    if hit and time.time() - hit[0] < _BTC_TTL:
-        return hit[1]
-    try:
-        rows = klines(BTC_SYMBOL, interval, count)
-    except ToobitError:
-        return None
-    if not rows:
-        return None
-    ind = skill.compute_indicators(rows)
-    close, ema200 = ind.get("last_close"), ind.get("ema200")
-    if close is None or ema200 is None:
-        return None
-    result = {"close": close, "ema200": ema200, "bullish": close > ema200,
-              "timeframe": bias_tf}
-    _btc_cache[key] = (time.time(), result)
-    return result
+    with _btc_lock:
+        hit = _btc_cache.get(key)
+        if hit and time.time() - hit[0] < _BTC_TTL:
+            return hit[1]
+        try:
+            rows = klines(BTC_SYMBOL, interval, count)
+        except ToobitError:
+            return None
+        if not rows:
+            return None
+        ind = skill.compute_indicators(rows)
+        close, ema200 = ind.get("last_close"), ind.get("ema200")
+        if close is None or ema200 is None:
+            return None
+        result = {"close": close, "ema200": ema200, "bullish": close > ema200,
+                  "timeframe": bias_tf}
+        _btc_cache[key] = (time.time(), result)
+        return result
 
 
 def resolve_manual_checks(checks: list[dict], *, coin: str, funding: dict | None,
@@ -567,8 +661,33 @@ def safe_leverage_for(maint_pct: float, stop_pct: float, buffer: float) -> float
     return 100.0 / denominator if denominator > 0 else 0.0
 
 
+# The planner's own default: no single position may tie up more than a quarter of
+# capital as margin.
+BASE_MAX_MARGIN_PCT = 25.0
+
+
+def margin_budget_pct(slots: int) -> float:
+    """Share the margin budget across the positions the account must carry.
+
+    This is what the skill's `--slots` flag does, expressed with the flag the
+    installed planner actually has. The skill is explicit that a leverage stuck at 1x
+    is almost always this: "the margin budget defaults to a single position, so on a
+    small account the notional never exceeds it and no leverage is needed".
+
+    It does not increase risk. Risk is quantity times stop distance, and neither
+    changes here — the same 1% of capital is at stake either way. What changes is how
+    much collateral is locked to hold that position, and therefore how far away
+    liquidation sits. The planner's own safety cap, 100 / (stop% x liq buffer), still
+    binds, so leverage can only rise until liquidation reaches the buffer the profile
+    demands - 4x the stop distance for intraday. That cap is what keeps this safe,
+    and it is the skill's, not ours.
+    """
+    return BASE_MAX_MARGIN_PCT / max(1, int(slots))
+
+
 def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
-            count: int = 300, hold_hours: float = 0.0) -> tuple[dict, dict, dict, dict]:
+            count: int = 300, hold_hours: float = 0.0,
+            slots: int = 1) -> tuple[dict, dict, dict, dict]:
     """Snapshot, then plan, for one Toobit contract.
 
     Returns (snapshot, plan, candles_by_role, side_info).
@@ -595,11 +714,13 @@ def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
         path = Path(tmp) / "snap.json"
         path.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
 
+        budget_pct = margin_budget_pct(slots)
+
         def build(cap, forced=None):
             return skill.plan(str(path), side, capital, profile=profile,
                               risk_pct=risk_pct, exchange=PLAN_EXCHANGE,
                               hold_hours=hold_hours, leverage_cap=cap,
-                              leverage=forced)
+                              leverage=forced, max_margin_pct=budget_pct)
 
         plan = build(venue_cap)
         plan = _repair_leverage_rounding(plan, build, capital, venue_cap)

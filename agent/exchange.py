@@ -9,7 +9,7 @@ An adapter provides:
     NAME, LABEL, PLAN_EXCHANGE
     discover(coins)            -> watchlist dict
     scannable(watchlist)       -> the entries worth spending calls on
-    analyze(entry, profile, *, capital, risk_pct, count, hold_hours)
+    analyze(entry, profile, *, capital, risk_pct, count, hold_hours, slots)
                                -> (snapshot, plan, candles_by_role, side_info)
     needs_credentials          -> bool
 """
@@ -43,8 +43,11 @@ class _NobitexAdapter:
 
     @staticmethod
     def analyze(entry, profile, *, capital, risk_pct, count=300, hold_hours=0.0,
-                account_level=None):
+                account_level=None, slots=1):
         from . import skill
+        # Nobitex plans stay single-position: its 5x cap and 9% maintenance margin
+        # leave no room to share a margin budget the way a 75x perp venue does.
+        del slots
         return skill.analyze(entry["symbol"], profile, capital=capital,
                              risk_pct=risk_pct, count=count, exchange=NOBITEX,
                              hold_hours=hold_hours, account_level=account_level)
@@ -72,10 +75,10 @@ class _ToobitAdapter:
 
     @staticmethod
     def analyze(entry, profile, *, capital, risk_pct, count=300, hold_hours=0.0,
-                account_level=None):
+                account_level=None, slots=1):
         from . import toobit
         return toobit.analyze(entry, profile, capital=capital, risk_pct=risk_pct,
-                              count=count, hold_hours=hold_hours)
+                              count=count, hold_hours=hold_hours, slots=slots)
 
 
 _ADAPTERS = {NOBITEX: _NobitexAdapter, TOOBIT: _ToobitAdapter}

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from . import config, exchange, skill, store
@@ -81,55 +82,88 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
     completed = failed = 0
     started = time.monotonic()
 
-    for entry in targets:
-        if _cancel.is_set():
-            store.finish_scan(scan_id, "cancelled", "cancelled by request")
-            log.info("scan %s cancelled after %d coins", scan_id, completed)
-            return scan_id
+    # Coins are independent, so the scan is only sequential because it was written
+    # that way. Toobit allows 3000 requests a minute and one coin costs about six, so
+    # a handful of workers is nowhere near the limit and turns a ~290s pass into well
+    # under a minute. Nobitex stays at one worker: its limit is ~55/min and the
+    # skill's client serialises with a 1.2s gap anyway, so concurrency there would
+    # only queue.
+    #
+    # Four, measured rather than assumed. Toobit throttles concurrent requests from
+    # one address, and throughput peaks and then collapses: 18 klines took 4.5s at 4
+    # workers, 5.4s at 6, and 9.9s at 10. More threads past that point buy nothing
+    # and make every request slower.
+    workers = 1 if venue.NAME == exchange.NOBITEX else max(
+        1, int(settings.get("scan_workers", 4)))
 
+    def analyse(entry):
+        """Network and CPU for one coin. No database writes — those stay on the
+        main thread so progress counters cannot interleave."""
         coin, symbol = entry["coin"], entry["symbol"]
-        store.update_scan(scan_id, current_coin=coin)
         capital, cap_error = capital_for(entry, settings, usdt_irt)
-
         if cap_error:
-            store.save_result(scan_id, coin, symbol=symbol, quote=entry.get("quote"),
-                              side=None, side_tied=False, snapshot=None, plan=None,
-                              capital_used=None, exchange=venue.NAME, error=cap_error)
-            failed += 1
-            store.update_scan(scan_id, failed=failed)
-            continue
-
+            return entry, capital, None, cap_error
         try:
-            snap, plan, candles, side_info = venue.analyze(
+            return entry, capital, venue.analyze(
                 entry, settings["profile"], capital=capital,
                 risk_pct=float(settings["risk_pct"]),
                 count=int(settings.get("candle_count", 300)),
                 hold_hours=float(settings.get("hold_hours", 0.0)),
-                account_level=settings.get("account_level"))
+                account_level=settings.get("account_level"),
+                slots=int((settings.get("demo") or {}).get("slots") or 1)), None
         except Exception as exc:  # per-coin failure must not end the scan
             log.warning("scan %s: %s failed: %s", scan_id, coin, exc)
+            return entry, capital, None, str(exc)[:500]
+
+    def record(entry, capital, result, error):
+        nonlocal completed, failed
+        coin, symbol = entry["coin"], entry["symbol"]
+        if error or result is None:
             store.save_result(scan_id, coin, symbol=symbol, quote=entry.get("quote"),
                               side=None, side_tied=False, snapshot=None, plan=None,
-                              capital_used=capital, exchange=venue.NAME, error=str(exc)[:500])
+                              capital_used=capital, exchange=venue.NAME, error=error)
             failed += 1
-            store.update_scan(scan_id, failed=failed)
-            continue
+            store.update_scan(scan_id, failed=failed, current_coin=coin)
+            return
 
+        snap, plan, candles, side_info = result
         store.save_result(scan_id, coin, symbol=symbol, quote=entry.get("quote"),
                           side=side_info["side"], side_tied=bool(side_info.get("tied")),
-                          snapshot=snap, plan=plan, capital_used=capital, exchange=venue.NAME)
-
+                          snapshot=snap, plan=plan, capital_used=capital,
+                          exchange=venue.NAME)
         dec = candles.get("decision")
         if dec:
             store.save_series(coin, "decision", scan_id, dec.get("timeframe"),
                               _trim_series(dec, int(settings.get("chart_candles", 180))))
-
         completed += 1
-        store.update_scan(scan_id, completed=completed)
+        store.update_scan(scan_id, completed=completed, current_coin=coin)
         if verbose:
             qual = (plan or {}).get("qualification") or {}
             print(f"  {coin:<7} {symbol:<13} {qual.get('verdict','?'):<10} "
                   f"score {qual.get('score','—')}  side {side_info['side']}")
+
+    if workers == 1:
+        for entry in targets:
+            if _cancel.is_set():
+                store.finish_scan(scan_id, "cancelled", "cancelled by request")
+                log.info("scan %s cancelled after %d coins", scan_id, completed)
+                return scan_id
+            record(*analyse(entry))
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scan") as pool:
+            futures = {pool.submit(analyse, e): e for e in targets}
+            try:
+                for future in as_completed(futures):
+                    if _cancel.is_set():
+                        for f in futures:
+                            f.cancel()
+                        store.finish_scan(scan_id, "cancelled", "cancelled by request")
+                        log.info("scan %s cancelled after %d coins", scan_id, completed)
+                        return scan_id
+                    record(*future.result())
+            finally:
+                for f in futures:
+                    f.cancel()
 
     elapsed = time.monotonic() - started
     store.finish_scan(scan_id, "done",

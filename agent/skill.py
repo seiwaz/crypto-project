@@ -189,11 +189,14 @@ def plan(snapshot_path: str, side: str, capital: float, *, profile: str,
          risk_pct: float, exchange: str = "nobitex", hold_hours: float = 0.0,
          account_level: int | None = None,
          leverage_cap: float | None = None,
-         leverage: float | None = None) -> dict:
+         leverage: float | None = None,
+         max_margin_pct: float | None = None) -> dict:
     args = ["plan", "--snapshot", snapshot_path, "--side", side,
             "--capital", f"{capital:.10g}", "--profile", profile,
             "--risk-pct", str(risk_pct), "--exchange", exchange,
             "--hold-hours", str(hold_hours), "--json"]
+    if max_margin_pct:
+        args += ["--max-margin-pct", f"{max_margin_pct:.6g}"]
     if account_level:
         args += ["--account-level", str(account_level)]
     if leverage_cap:

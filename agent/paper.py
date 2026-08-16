@@ -151,17 +151,12 @@ def mark_price(spec: dict) -> tuple[float | None, str]:
     token = spec.get("index_token")
     if token:
         try:
-            data = toobit._get("/quote/v1/index", {"symbol": token})
+            entry = toobit.index_prices().get(token) or {}
         except Exception:                                    # noqa: BLE001
-            data = None
-        if isinstance(data, dict):
-            for field, label in (("edp", "edp"), ("index", "index")):
-                block = data.get(field)
-                if isinstance(block, dict):
-                    try:
-                        return float(block[token]), label
-                    except (KeyError, TypeError, ValueError):
-                        continue
+            entry = {}
+        for field in ("edp", "index"):
+            if isinstance(entry.get(field), float):
+                return entry[field], field
     try:
         tick = toobit.ticker(spec["symbol"])
         price = float(tick.get("last") or tick.get("p"))
