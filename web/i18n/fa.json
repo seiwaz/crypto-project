@@ -231,5 +231,7 @@
   "demo.strategy": "راهبرد",
   "demo.timeStop": "حد زمانی پس از",
   "demo.below": "اگر کمتر از",
-  "demo.trades": "معامله"
+  "demo.trades": "معامله",
+  "demo.corrLocal": "پالایهٔ همبستگی: پیاده‌سازی محلی، کندل روزانه، آستانه",
+  "demo.corrCap": "بیشینهٔ هم‌جهت"
 }

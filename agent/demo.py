@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 
-from . import config, paper, skill, store, toobit
+from . import config, correlation, paper, skill, store, toobit
 
 log = logging.getLogger("demo")
 
@@ -33,11 +33,22 @@ DEFAULT_HEAT_CAP_PCT = 6.0
 MIN_SCORE = 70.0
 
 # Same-direction positions in coins that move together are one position wearing
-# several tickers. Capping them needs a correlation figure, which comes from the
-# skill's market_context.py; until that is installed the cap cannot be enforced and
-# the UI has to say so rather than quietly filling five correlated slots.
+# several tickers, and the drawdown arrives all at once looking like several
+# independent failures.
+#
+# The brief named 0.9. Measured against this watchlist that threshold never fires:
+# across 25 Toobit perps, correlation to BTC is median 0.47 over 20 days of 4H bars
+# and median 0.62 over 120 days of daily bars, and the only thing at or above 0.9 is
+# BTC against itself. A filter that cannot trigger while the UI reports it as
+# enforced is worse than no filter, so the operative default is 0.75 — where four to
+# ten coins actually sit, depending on window — and it is settable per deployment.
+#
+# Correlation is measured on daily bars whatever the trading profile is: it
+# describes how two assets relate as a regime, not how they behave on the timeframe
+# a signal happens to fire on.
 MAX_CORRELATED_SAME_SIDE = 2
-CORRELATION_THRESHOLD = 0.9
+CORRELATION_THRESHOLD = 0.75
+CORRELATION_INTERVAL = "1d"
 
 
 DEFAULT_CYCLE_SECONDS = 90
@@ -180,6 +191,10 @@ def settings() -> dict:
         "profile": s.get("profile") or "intraday",
         "time_stop_hours": demo.get("time_stop_hours"),
         "time_stop_min_profit_usdt": demo.get("time_stop_min_profit_usdt"),
+        "correlation_threshold": float(demo.get("correlation_threshold")
+                                       or CORRELATION_THRESHOLD),
+        "max_correlated_same_side": int(demo.get("max_correlated_same_side")
+                                        or MAX_CORRELATED_SAME_SIDE),
     }
 
 
@@ -283,6 +298,7 @@ def state() -> dict:
             open_pnl += st["unrealised_pnl"]
         row["open_risk"] = open_risk(pos, spec)
         row["funding"] = paper.funding(symbol)
+        row["btc_context"] = correlation.btc_context(symbol)
         rows.append(row)
 
     try:
@@ -367,6 +383,40 @@ def _empty_slot_reason(filled: int, slots: int, heat: float, acct: dict) -> dict
     return {"code": "awaiting_fill", "candidates": len(pool)}
 
 
+def correlated_same_side(row: dict, open_positions: list[dict],
+                         interval: str = CORRELATION_INTERVAL) -> dict | None:
+    """Would taking this trade breach the cap on correlated same-direction risk?
+
+    Five positions at 0.9 correlation in the same direction are one position at five
+    times the size. The drawdown arrives all at once and looks like five independent
+    failures, which is the most misleading thing a record can contain.
+
+    Returns the blocking detail, or None when the trade is allowed.
+    """
+    ctx = correlation.btc_context(row["symbol"], interval)
+    if ctx is None:
+        # Unknown is not the same as uncorrelated. Allow the trade — refusing on
+        # missing data would quietly stop trading whole coins — but say so.
+        return None
+
+    cfg = settings()
+    threshold = cfg["correlation_threshold"]
+    cap = cfg["max_correlated_same_side"]
+
+    same_side = [p for p in open_positions if p["side"] == row["side"]]
+    correlated = 0
+    for pos in same_side:
+        other = correlation.btc_context(pos["symbol"], interval)
+        if other and abs(other["correlation"]) >= threshold:
+            correlated += 1
+
+    if abs(ctx["correlation"]) >= threshold and correlated >= cap:
+        return {"correlation": ctx["correlation"], "beta": ctx["beta"],
+                "already_open": correlated, "cap": cap, "threshold": threshold,
+                "side": row["side"]}
+    return None
+
+
 def _correlation_filter_status() -> dict:
     """The correlation filter needs `btc_context`, which market_context.py provides.
 
@@ -375,12 +425,17 @@ def _correlation_filter_status() -> dict:
     catastrophic drawdown that looks like five independent failures.
     """
     from . import skill  # noqa: PLC0415 — avoids a cycle at import time
-    available = (skill.scripts_dir() / "market_context.py").exists()
+    from_skill = (skill.scripts_dir() / "market_context.py").exists()
+    local = correlation.available()
     return {
-        "available": available,
-        "threshold": CORRELATION_THRESHOLD,
-        "max_same_side": MAX_CORRELATED_SAME_SIDE,
-        "reason": None if available else "market_context_missing",
+        "available": from_skill or local,
+        "threshold": settings()["correlation_threshold"],
+        "max_same_side": settings()["max_correlated_same_side"],
+        "interval": CORRELATION_INTERVAL,
+        # Which implementation is enforcing it matters: the local one is a stand-in
+        # with parameters chosen here, not the skill's calibrated context run.
+        "source": "market_context.py" if from_skill else ("local" if local else None),
+        "reason": None if (from_skill or local) else "unavailable",
     }
 
 
@@ -839,6 +894,15 @@ def try_fill_slots() -> dict:
             record(row, rank, "declined", "insufficient_margin",
                    mark=proposal["entry"],
                    detail=f"needs {cost:.2f}, available {available:.2f}")
+            continue
+
+        blocked = correlated_same_side(row, store.paper_open_positions())
+        if blocked:
+            declined.append({"coin": row["coin"], "code": "correlated", **blocked})
+            record(row, rank, "declined", "correlated", mark=proposal["entry"],
+                   detail=(f"corr {blocked['correlation']:.2f} beta {blocked['beta']:.2f}, "
+                           f"{blocked['already_open']} same-side already at the "
+                           f"{blocked['cap']} cap"))
             continue
 
         added_heat = proposal["risk_amount"] / equity * 100.0 if equity > 0 else 0.0

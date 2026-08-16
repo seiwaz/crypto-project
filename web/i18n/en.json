@@ -211,5 +211,7 @@
   "demo.strategy": "Strategy",
   "demo.timeStop": "time stop after",
   "demo.below": "if below",
-  "demo.trades": "trades"
+  "demo.trades": "trades",
+  "demo.corrLocal": "Correlation filter: local stand-in, daily bars, threshold",
+  "demo.corrCap": "max same-direction"
 }

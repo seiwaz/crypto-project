@@ -150,6 +150,31 @@ row["fetched_at"] = "2099-01-01T00:00:00+00:00"   # a scan newer than the close
 results.append(check("eligible again on a fresher scan",
                      [r["coin"] for r in demo.qualifying_signals()], ["FIL"]))
 
+print("10. Correlated same-direction positions are capped")
+from agent import correlation
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+correlation.btc_context = lambda sym, interval=None, window=None: {
+    "symbol": sym, "correlation": 0.95, "beta": 1.4, "alpha_pct": 0.0, "bars": 120}
+cand = {"coin": "NEW", "symbol": "NEW-SWAP-USDT", "side": "short", "score": 90.0}
+
+results.append(check("allowed with none open",
+                     demo.correlated_same_side(cand, []), None))
+
+def fake(side, n):
+    return [{"coin": f"C{i}", "symbol": f"C{i}-SWAP-USDT", "side": side} for i in range(n)]
+
+results.append(check("allowed with one correlated same-side",
+                     demo.correlated_same_side(cand, fake("short", 1)), None))
+blocked = demo.correlated_same_side(cand, fake("short", 2))
+results.append(check("blocked at the cap of two", bool(blocked), True))
+results.append(check("reports the count", blocked and blocked["already_open"], 2))
+results.append(check("opposite side does not count",
+                     demo.correlated_same_side(cand, fake("long", 4)), None))
+
+correlation.btc_context = lambda sym, interval=None, window=None: None
+results.append(check("unknown correlation does not block",
+                     demo.correlated_same_side(cand, fake("short", 4)), None))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

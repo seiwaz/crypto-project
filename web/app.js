@@ -970,10 +970,20 @@ function demoSlots(d) {
         el('div', { class: 'heat__fill', attrs: { style: `inline-size:${heatPct}%` } }),
       ]),
     ]),
+    /* Three states, not two. Unavailable is a warning; enforced by the local
+       stand-in is a note, because the thresholds are chosen here rather than
+       calibrated by the skill; enforced by market_context.py needs no comment. */
     d.correlation_filter && !d.correlation_filter.available
       ? el('p', { class: 'demo__warn' },
            sentenceWithCode('demo.corrUnavailable', 'market_context.py'))
-      : null,
+      : (d.correlation_filter && d.correlation_filter.source === 'local'
+          ? el('p', { class: 'demo__note' }, [
+              document.createTextNode(`${t('demo.corrLocal')} `),
+              num(d.correlation_filter.threshold, { digits: 2 }),
+              document.createTextNode(`, ${t('demo.corrCap')} `),
+              num(d.correlation_filter.max_same_side),
+            ])
+          : null),
   ]);
 }
 
