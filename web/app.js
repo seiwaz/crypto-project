@@ -830,11 +830,36 @@ function renderDrawer() {
  * without it, so the class only reinforces what the glyph already says. */
 function signed(value, opts = {}) {
   const node = num(value, opts);
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    node.classList.add(value >= 0 ? 'pnl--up' : 'pnl--down');
-    if (value > 0) node.textContent = `+${node.textContent}`;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return node;
+  /* A value that rounds away to nothing is neither a gain nor a loss. Without this,
+   * an MFE of -0.003R printed as "−0R" — a minus sign on a zero, which reads as a
+   * loss that is not there. */
+  const shown = parseFloat(node.textContent);
+  if (shown === 0) {
+    node.textContent = node.textContent.replace(/^[-−+]/, '');
+    return node;
   }
+  node.classList.add(value > 0 ? 'pnl--up' : 'pnl--down');
+  if (value > 0) node.textContent = `+${node.textContent}`;
   return node;
+}
+
+/* Build a sentence that contains a literal code fragment — a CLI flag, a filename —
+ * with that fragment in its own LTR run.
+ *
+ * Bidi control characters embedded in the translation file were tried first and are
+ * not reliable: inside a Persian paragraph "--slots" still rendered as "slots--",
+ * because the leading hyphens are neutral and get reordered. An element with an
+ * explicit dir is unambiguous, and unlike an invisible U+2066 it is visible to
+ * whoever edits the string next. */
+function sentenceWithCode(key, code) {
+  const parts = t(key).split('{code}');
+  const nodes = [document.createTextNode(parts[0] || '')];
+  if (parts.length > 1) {
+    nodes.push(el('code', { class: 'code', text: code, dir: 'ltr' }));
+    nodes.push(document.createTextNode(parts[1] || ''));
+  }
+  return nodes;
 }
 
 function demoAccount(acc) {
@@ -862,7 +887,8 @@ function slotReason(reason) {
       document.createTextNode(` · ${t('demo.available')} `),
       num(detail.available, { digits: 2 }),
     ]));
-    body.push(el('p', { class: 'demo__note', text: t('demo.slot.slotsHint') }));
+    body.push(el('p', { class: 'demo__note' },
+                  sentenceWithCode('demo.slot.slotsHint', '--slots')));
   } else if (reason.code === 'heat_cap') {
     body.push(el('span', { class: 'demo__hint' }, [
       num(reason.heat, { digits: 2, suffix: '%' }),
@@ -899,8 +925,10 @@ function demoSlots(d) {
     el('div', { class: 'heat' }, [
       el('div', { class: 'heat__head' }, [
         el('span', { text: t('demo.heat') }),
+        /* Heat is an amount of risk, not a gain — showing it with a "+" and the
+           profit colour made 3.88% of equity at risk read as money made. */
         el('span', {}, [
-          signed(heat.used_pct, { digits: 2, suffix: '%' }),
+          num(heat.used_pct, { digits: 2, suffix: '%' }),
           document.createTextNode(` / `),
           num(heat.cap_pct, { digits: 1, suffix: '%' }),
         ]),
@@ -910,7 +938,8 @@ function demoSlots(d) {
       ]),
     ]),
     d.correlation_filter && !d.correlation_filter.available
-      ? el('p', { class: 'demo__warn', text: t('demo.corrUnavailable') })
+      ? el('p', { class: 'demo__warn' },
+           sentenceWithCode('demo.corrUnavailable', 'market_context.py'))
       : null,
   ]);
 }
@@ -931,7 +960,12 @@ function positionRow(p) {
     el('td', {}, [num(p.stop, { digits: 6 })]),
     el('td', {}, [num(s ? s.liquidation_price : null, { digits: 6 })]),
     el('td', {}, [num(p.leverage, { digits: 2, suffix: '×' })]),
-    el('td', {}, [num(p.margin, { digits: 2 })]),
+    /* Funding rides under margin rather than taking a column of its own: at 13
+       columns the last one fell outside the viewport, and an accrued cost nobody can
+       see is the same as not showing it. Both are collateral-side figures. */
+    el('td', {}, [num(p.margin, { digits: 2 }),
+                  el('div', { class: 'pos__sub' }, [
+                    signed(p.funding_paid, { digits: 5 })])]),
     el('td', {}, [signed(s ? s.unrealised_pnl : null, { digits: 4 }),
                   el('div', { class: 'pos__sub' }, [
                     signed(s ? s.unrealised_r : null, { digits: 3, suffix: 'R' })])]),
@@ -942,7 +976,6 @@ function positionRow(p) {
                   el('div', { class: 'pos__sub' }, [
                     signed(p.mae_r, { digits: 2, suffix: 'R' })])]),
     el('td', {}, [num(s ? s.margin_ratio_pct : null, { digits: 2, suffix: '%' })]),
-    el('td', {}, [signed(p.funding_paid, { digits: 5 })]),
   ];
   const row = el('tr', {}, cells);
   if (!s) row.classList.add('pos--stale');
@@ -955,8 +988,8 @@ function demoPositions(d) {
   }
   const headers = ['demo.col.coin', 'demo.col.side', 'demo.col.size', 'demo.col.entry',
                    'demo.col.mark', 'demo.col.stop', 'demo.col.liq', 'demo.col.lev',
-                   'demo.col.margin', 'demo.col.upnl', 'demo.col.mfe',
-                   'demo.col.marginRatio', 'demo.col.funding'];
+                   'demo.col.marginFunding', 'demo.col.upnl', 'demo.col.mfe',
+                   'demo.col.marginRatio'];
   return el('div', { class: 'table-wrap' }, [
     el('table', { class: 'postable' }, [
       el('thead', {}, [el('tr', {}, headers.map((k) => el('th', { text: t(k) })))]),

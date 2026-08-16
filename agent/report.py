@@ -112,8 +112,11 @@ def aggregate(rows: list[dict]) -> dict:
         "avg_win_r": (sum(wins) / len(wins)) if wins else None,
         "avg_loss_r": (sum(losses) / len(losses)) if losses else None,
         "expectancy_r": (sum(rs) / len(rs)) if rs else None,
-        "total_r": sum(rs) if rs else 0.0,
-        "max_drawdown_r": _drawdown(rs),
+        # None, not 0.0, when nothing has closed. A total of "0R" is a measured
+        # result meaning the wins cancelled the losses; an empty journal has no
+        # result at all, and the UI must be able to say "no data" instead.
+        "total_r": sum(rs) if rs else None,
+        "max_drawdown_r": _drawdown(rs) if rs else None,
         "costs_paid": sum(t["costs"]["total"] for t in rows),
         "starting_capital": start,
         "balance": balance,

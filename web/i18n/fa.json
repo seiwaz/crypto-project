@@ -173,7 +173,7 @@
   "demo.return": "بازدهی",
   "demo.slots": "جایگاه‌ها",
   "demo.heat": "ریسک کل پرتفوی",
-  "demo.corrUnavailable": "پالایهٔ همبستگی در دسترس نیست — چون market_context.py نصب نشده، سقفی برای موقعیت‌های هم‌جهتِ همبسته اعمال نمی‌شود.",
+  "demo.corrUnavailable": "پالایهٔ همبستگی در دسترس نیست — چون {code} نصب نشده، سقفی برای موقعیت‌های هم‌جهتِ همبسته اعمال نمی‌شود.",
   "demo.noPositions": "موقعیت بازی وجود ندارد.",
   "demo.slot.insufficient_margin": "وجه تضمین کافی برای باز کردن موقعیت دیگر نیست",
   "demo.slot.heat_cap": "سقف ریسک پرتفوی پر شده — موقعیت بعدی از آن عبور می‌کند",
@@ -182,7 +182,7 @@
   "demo.slot.declined": "نامزدها رد شدند",
   "demo.slot.needs": "نیاز دارد",
   "demo.slot.candidates": "نامزد",
-  "demo.slot.slotsHint": "هر طرح چنان اندازه‌گیری شده که گویی تنها موقعیت باز است. دادن ‎--slots‎ به برنامه‌ریز، بودجهٔ وجه تضمین را میان معاملات هم‌زمان تقسیم می‌کند.",
+  "demo.slot.slotsHint": "هر طرح چنان اندازه‌گیری شده که گویی تنها موقعیت باز است. دادن {code} به برنامه‌ریز، بودجهٔ وجه تضمین را میان معاملات هم‌زمان تقسیم می‌کند.",
   "demo.col.coin": "ارز",
   "demo.col.side": "جهت",
   "demo.col.size": "قرارداد / سکه",
@@ -217,5 +217,6 @@
   "demo.exit.liquidated": "لیکوئید شد",
   "demo.exit.time_stop": "حد زمانی",
   "demo.exit.review_exit": "خروج پس از بازبینی",
-  "demo.exit.unknown": "نامشخص"
+  "demo.exit.unknown": "نامشخص",
+  "demo.col.marginFunding": "وجه تضمین / فاندینگ"
 }

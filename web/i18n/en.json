@@ -153,7 +153,7 @@
   "demo.return": "Return",
   "demo.slots": "Slots",
   "demo.heat": "Portfolio heat",
-  "demo.corrUnavailable": "Correlation filter unavailable — market_context.py is not installed, so same-direction correlated positions cannot be capped.",
+  "demo.corrUnavailable": "Correlation filter unavailable — {code} is not installed, so same-direction correlated positions cannot be capped.",
   "demo.noPositions": "No open positions.",
   "demo.slot.insufficient_margin": "Not enough margin to open another position",
   "demo.slot.heat_cap": "Heat cap reached — a further position would exceed it",
@@ -162,7 +162,7 @@
   "demo.slot.declined": "Candidates declined",
   "demo.slot.needs": "needs",
   "demo.slot.candidates": "candidates",
-  "demo.slot.slotsHint": "Plans were sized as if each were the only position. Passing --slots to the planner shares the margin budget across concurrent trades.",
+  "demo.slot.slotsHint": "Plans were sized as if each were the only position. Passing {code} to the planner shares the margin budget across concurrent trades.",
   "demo.col.coin": "Coin",
   "demo.col.side": "Side",
   "demo.col.size": "Contracts / coins",
@@ -197,5 +197,6 @@
   "demo.exit.liquidated": "Liquidated",
   "demo.exit.time_stop": "Time stop",
   "demo.exit.review_exit": "Review exit",
-  "demo.exit.unknown": "Unknown"
+  "demo.exit.unknown": "Unknown",
+  "demo.col.marginFunding": "Margin / funding"
 }
