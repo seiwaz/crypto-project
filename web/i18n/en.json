@@ -199,7 +199,7 @@
   "demo.tp2": "TP2",
   "demo.filled": "✓ filled",
   "demo.stopAtBe": "stop at breakeven + costs",
-  "demo.slot.circuit_breaker": "Circuit breaker tripped — no new positions",
+  "demo.slot.circuit_breaker": "Trading halted — circuit breaker",
   "demo.exit.reduced": "Reduced at TP1",
   "demo.col.sizeUsdt": "Size",
   "demo.contracts": "ctr",
@@ -213,5 +213,11 @@
   "demo.below": "if below",
   "demo.trades": "trades",
   "demo.corrLocal": "Correlation filter: local stand-in, daily bars, threshold",
-  "demo.corrCap": "max same-direction"
+  "demo.corrCap": "max same-direction",
+  "demo.history": "Closed trade history",
+  "demo.col.exitPrice": "Exit",
+  "demo.col.netPnl": "Net",
+  "demo.col.held": "Held",
+  "demo.col.score": "Score",
+  "demo.col.closedAt": "Closed"
 }

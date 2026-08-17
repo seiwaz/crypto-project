@@ -219,7 +219,7 @@
   "demo.tp2": "حد سود ۲",
   "demo.filled": "✓ پر شد",
   "demo.stopAtBe": "حد ضرر روی نقطه سربه‌سر + هزینه‌ها",
-  "demo.slot.circuit_breaker": "قطع‌کنندهٔ مدار فعال شد — موقعیت تازه‌ای باز نمی‌شود",
+  "demo.slot.circuit_breaker": "معامله متوقف شد — قطع‌کنندهٔ مدار",
   "demo.exit.reduced": "کاهش در حد سود ۱",
   "demo.col.sizeUsdt": "حجم",
   "demo.contracts": "قرارداد",
@@ -233,5 +233,11 @@
   "demo.below": "اگر کمتر از",
   "demo.trades": "معامله",
   "demo.corrLocal": "پالایهٔ همبستگی: پیاده‌سازی محلی، کندل روزانه، آستانه",
-  "demo.corrCap": "بیشینهٔ هم‌جهت"
+  "demo.corrCap": "بیشینهٔ هم‌جهت",
+  "demo.history": "تاریخچهٔ معاملات بسته‌شده",
+  "demo.col.exitPrice": "خروج",
+  "demo.col.netPnl": "خالص",
+  "demo.col.held": "مدت",
+  "demo.col.score": "امتیاز",
+  "demo.col.closedAt": "بسته شد"
 }

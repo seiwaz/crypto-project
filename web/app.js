@@ -1099,6 +1099,41 @@ function reportBlock(r) {
     stat(t('demo.costs'), num(a.costs_paid, { digits: 4 })),
   ]));
 
+  /* Every closed trade, most recent first. The aggregates above are computed from
+   * exactly these rows, so anything surprising up there can be traced to a trade
+   * down here rather than taken on trust. */
+  if (r.trades && r.trades.length) {
+    kids.push(el('h4', { text: t('demo.history') }));
+    const cols = ['demo.col.coin', 'demo.col.side', 'demo.col.reason',
+                  'demo.col.entry', 'demo.col.exitPrice', 'demo.col.netPnl',
+                  'demo.col.mfe', 'demo.col.held', 'demo.col.lev', 'demo.col.score',
+                  'demo.col.closedAt'];
+    kids.push(el('div', { class: 'table-wrap' }, [
+      el('table', { class: 'postable' }, [
+        el('thead', {}, [el('tr', {}, cols.map((k) => el('th', { text: t(k) })))]),
+        el('tbody', {}, r.trades.map((tr) => {
+          const risk = tr.r ? (tr.net_pnl / tr.r) : null;
+          return el('tr', {}, [
+            el('td', {}, [el('div', { class: 'pos__coin', text: tr.coin })]),
+            el('td', { class: `pos__side pos__side--${tr.side}`,
+                       text: t(`card.side.${tr.side}`) }),
+            el('td', { text: t(`demo.exit.${tr.exit_reason || 'unknown'}`) }),
+            el('td', {}, [num(tr.entry_price, { digits: 6 })]),
+            el('td', {}, [num(tr.exit_price, { digits: 6 })]),
+            el('td', {}, [signed(tr.net_pnl, { digits: 4 })]),
+            el('td', {}, [signed(inUsdt(tr.mfe_r, risk), { digits: 4 }),
+                          el('div', { class: 'pos__sub' }, [
+                            signed(inUsdt(tr.mae_r, risk), { digits: 4 })])]),
+            el('td', {}, [num(tr.hours_held, { digits: 1, suffix: 'h' })]),
+            el('td', {}, [num(tr.leverage, { digits: 2, suffix: '×' })]),
+            el('td', {}, [num(tr.score_at_entry, { digits: 1 })]),
+            el('td', { class: 'pos__sub', text: (tr.closed_at || '').replace('T', ' ').slice(0, 16) }),
+          ]);
+        })),
+      ]),
+    ]));
+  }
+
   if (r.by_exit_reason.length) {
     kids.push(el('h4', { text: t('demo.byExit') }));
     kids.push(el('div', { class: 'table-wrap' }, [

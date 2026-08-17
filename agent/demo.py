@@ -40,6 +40,10 @@ MAX_SLOTS = 20
 # across most of the watchlist.
 MIN_RISK_PCT = 0.2
 
+# How long a tripped breaker holds. Long enough to interrupt a bad run, short enough
+# that the account is not halted for a day by a cluster of small losses.
+BREAKER_COOLDOWN_HOURS = 6.0
+
 # Same-direction positions in coins that move together are one position wearing
 # several tickers, and the drawdown arrives all at once looking like several
 # independent failures.
@@ -206,7 +210,16 @@ def settings() -> dict:
         "auto_slots": bool(demo.get("auto_slots")),
         "max_slots": int(demo.get("max_slots") or MAX_SLOTS),
         "min_risk_pct": float(demo.get("min_risk_pct") or MIN_RISK_PCT),
+        "breaker_cooldown_hours": float(demo.get("breaker_cooldown_hours")
+                                       or BREAKER_COOLDOWN_HOURS),
     }
+
+
+def clear_breaker() -> dict:
+    """Lift the trading halt now, by marking everything closed so far as spent."""
+    store.set_kv("demo.breaker_cleared_at", store.now_iso())
+    return {"cleared_at": store.get_kv("demo.breaker_cleared_at"),
+            "breaker": circuit_breaker()}
 
 
 def take_count() -> int:
@@ -1001,19 +1014,37 @@ def try_fill_slots() -> dict:
 
 
 def circuit_breaker() -> dict | None:
-    """Has the account taken enough damage today to stop opening new positions?
+    """Has the account taken enough damage recently to stop opening new positions?
 
-    Counts only the current run of losses: one winner clears it, which is the point —
-    the breaker is for a losing streak, not a lifetime tally.
+    It expires. The first version counted the loss streak with no time limit and
+    said a winner would clear it — but a tripped breaker stops new positions, so no
+    trade can close, so the streak can never be broken. It deadlocked the account
+    permanently: seven straight losses against a limit of three, and every TAKE
+    declined for hours with nothing able to change it.
+
+    A trading halt is meant to interrupt a bad run, not end trading. So only losses
+    inside the cooldown window count, which means the breaker lifts by itself once
+    the account has sat out that long. `./run.sh demo clear-breaker` lifts it sooner.
     """
     acct = store.paper_account()
     if not acct:
         return None
-    profile = settings()["profile"]
+    cfg = settings()
+    profile = cfg["profile"]
     max_losses, drawdown_fraction = CIRCUIT_BREAKER.get(profile, (3, 0.05))
+    window_h = cfg["breaker_cooldown_hours"]
+
+    cleared_at = store.get_kv("demo.breaker_cleared_at") or ""
+    cutoff = paper.now_ts() - window_h * 3600
 
     streak = 0
     for trade in store.paper_closed_positions():          # newest first
+        closed_at = str(trade.get("closed_at") or "")
+        if cleared_at and closed_at <= cleared_at:
+            break                                          # manually cleared
+        ts = _iso_to_ts(closed_at)
+        if ts is not None and ts < cutoff:
+            break                                          # older than the window
         pnl = trade.get("realised_pnl")
         if pnl is None or float(pnl) > 0:
             break
@@ -1026,7 +1057,7 @@ def circuit_breaker() -> dict | None:
 
     if streak >= max_losses:
         return {"code": "consecutive_losses", "losses": streak, "limit": max_losses,
-                "profile": profile}
+                "profile": profile, "cooldown_hours": window_h}
     if lost_usdt >= limit_usdt:
         return {"code": "equity_drawdown", "lost_usdt": lost_usdt,
                 "limit_usdt": limit_usdt, "profile": profile}
@@ -1084,6 +1115,14 @@ def _proposal(row: dict, equity: float) -> dict | None:
         "tp2": levels.get("tp2"),
         "plan": plan,
     }
+
+
+def _iso_to_ts(value: str) -> float | None:
+    from datetime import datetime                           # noqa: PLC0415
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except (TypeError, ValueError):
+        return None
 
 
 def _btc_bias_label() -> str | None:

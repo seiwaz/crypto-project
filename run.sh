@@ -372,7 +372,13 @@ case "${1:-}" in
   journal)   cmd_journal ;;
   agents)    cmd_agents ;;
   watch)     cmd_watch "${2:-status}" "${3:-60}" ;;
-  demo)      set_flag "demo.enabled" "${2:-}" ;;
+  demo)
+    case "${2:-}" in
+      clear-breaker)
+        "$PY" -c 'from agent import demo; import json; print(json.dumps(demo.clear_breaker(), indent=1, default=str))' ;;
+      on|off) set_flag "demo.enabled" "$2" ;;
+      *) die "usage: ./run.sh demo {on|off|clear-breaker}" ;;
+    esac ;;
   scanner)   set_flag "scanner_enabled" "${2:-}" ;;
   *)
     say "usage: ./run.sh {setup|start|stop|restart|status|agents|logs [-f]|"
