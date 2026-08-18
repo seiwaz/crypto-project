@@ -191,7 +191,8 @@ def plan(snapshot_path: str, side: str, capital: float, *, profile: str,
          leverage_cap: float | None = None,
          leverage: float | None = None,
          max_margin_pct: float | None = None,
-         tp1_r: float | None = None, tp2_r: float | None = None) -> dict:
+         tp1_r: float | None = None, tp2_r: float | None = None,
+         atr_mult: float | None = None) -> dict:
     args = ["plan", "--snapshot", snapshot_path, "--side", side,
             "--capital", f"{capital:.10g}", "--profile", profile,
             "--risk-pct", str(risk_pct), "--exchange", exchange,
@@ -205,6 +206,10 @@ def plan(snapshot_path: str, side: str, capital: float, *, profile: str,
         args += ["--tp1-r", f"{tp1_r:.6g}"]
     if tp2_r:
         args += ["--tp2-r", f"{tp2_r:.6g}"]
+    # The stop multiplier decides R, and therefore whether the target is reachable in
+    # the holding period at all. The profile default assumes the profile's own hold.
+    if atr_mult:
+        args += ["--atr-mult", f"{atr_mult:.6g}"]
     if account_level:
         args += ["--account-level", str(account_level)]
     if leverage_cap:

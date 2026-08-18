@@ -105,8 +105,11 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
     risk_pct = demo_mod.derived_risk_pct()
     tp1_r = settings.get("tp1_r") or None
     tp2_r = settings.get("tp2_r") or None
+    atr_mult = settings.get("atr_mult") or None
     log.info("scan %s sizing: %d slots, %.3f%% risk, tp1=%s tp2=%s",
              scan_id, slots, risk_pct, tp1_r or "profile", tp2_r or "profile")
+    if atr_mult:
+        log.info("scan %s stop: %.2f x ATR (profile default overridden)", scan_id, atr_mult)
 
     def analyse(entry):
         """Network and CPU for one coin. No database writes — those stay on the
@@ -122,7 +125,7 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
                 count=int(settings.get("candle_count", 300)),
                 hold_hours=float(settings.get("hold_hours", 0.0)),
                 account_level=settings.get("account_level"),
-                slots=slots, tp1_r=tp1_r, tp2_r=tp2_r), None
+                slots=slots, tp1_r=tp1_r, tp2_r=tp2_r, atr_mult=atr_mult), None
         except Exception as exc:  # per-coin failure must not end the scan
             log.warning("scan %s: %s failed: %s", scan_id, coin, exc)
             return entry, capital, None, str(exc)[:500]
