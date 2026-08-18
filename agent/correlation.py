@@ -132,3 +132,73 @@ def available() -> bool:
         return btc_context(BTC_SYMBOL) is not None
     except Exception:                                          # noqa: BLE001
         return False
+
+
+# --------------------------------------------------------------------------------
+# BTC regime
+# --------------------------------------------------------------------------------
+
+_REGIME_TTL = 900.0
+_regime_cache: tuple[float, dict] = (0.0, {})
+
+
+def btc_regime(interval: str = "4h", window: int = 300) -> dict | None:
+    """Which way BTC is trending, for the gate the missing context run would apply.
+
+    The skill specifies two gates this stands in for — "trade opposes a strong_trend"
+    and BTC alignment "opposed_strong" — and both live in market_context.py, which is
+    not installed. Their absence is measurable rather than theoretical: with them
+    missing the agent took 25 shorts in 30 trades while BTC sat above its 4H EMA200
+    and rose 2.66% over 48 hours, and those shorts lost 5.65 USDT against the longs'
+    gain of 0.74.
+
+    Direction is taken from price against EMA200 plus the recent move, both from the
+    skill's own compute_indicators so "BTC is bullish" means the same thing here as
+    everywhere else in the app.
+    """
+    global _regime_cache
+    now = time.time()
+    with _lock:
+        at, data = _regime_cache
+        if data and now - at < _REGIME_TTL:
+            return data
+
+    try:
+        rows = toobit.klines_cached(BTC_SYMBOL, interval, window)
+    except toobit.ToobitError:
+        return None
+    if len(rows) < 20:
+        return None
+
+    # Guarded: this feeds a gate in the fill loop, and a gate that raises would stop
+    # the agent trading entirely rather than merely failing to veto.
+    from . import skill                                       # noqa: PLC0415
+    try:
+        ind = skill.compute_indicators(rows)
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("BTC regime unavailable: %s", exc)
+        return None
+    close, ema200 = ind.get("last_close"), ind.get("ema200")
+    if close is None or ema200 is None:
+        return None
+
+    closes = [r["close"] for r in rows]
+    look = min(12, len(closes) - 1)
+    move_pct = (closes[-1] - closes[-1 - look]) / closes[-1 - look] * 100.0
+
+    above = close > ema200
+    # "Up" needs agreement between where price sits and where it has been going. One
+    # without the other is a range, and a range should not veto either direction.
+    if above and move_pct > 0.5:
+        label = "up"
+    elif not above and move_pct < -0.5:
+        label = "down"
+    else:
+        label = "range"
+
+    out = {"label": label, "above_ema200": above, "move_pct": move_pct,
+           "close": close, "ema200": ema200, "interval": interval,
+           "source": "local stand-in for market_context.py"}
+    with _lock:
+        _regime_cache = (time.time(), out)
+    return out

@@ -219,5 +219,7 @@
   "demo.col.netPnl": "Net",
   "demo.col.held": "Held",
   "demo.col.score": "Score",
-  "demo.col.closedAt": "Closed"
+  "demo.col.closedAt": "Closed",
+  "demo.exit.gave_back": "Gave back",
+  "demo.slot.counter_trend": "Against the BTC trend"
 }

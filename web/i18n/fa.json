@@ -239,5 +239,7 @@
   "demo.col.netPnl": "خالص",
   "demo.col.held": "مدت",
   "demo.col.score": "امتیاز",
-  "demo.col.closedAt": "بسته شد"
+  "demo.col.closedAt": "بسته شد",
+  "demo.exit.gave_back": "بازپس‌دهی سود",
+  "demo.slot.counter_trend": "خلاف روند بیت‌کوین"
 }

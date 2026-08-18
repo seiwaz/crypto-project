@@ -26,7 +26,8 @@ from . import store
 # differences anyone would act on.
 MIN_SAMPLE = 30
 
-EXIT_REASONS = ("tp2", "tp1", "stopped", "liquidated", "time_stop", "review_exit")
+EXIT_REASONS = ("tp2", "tp1", "gave_back", "stopped", "liquidated", "time_stop",
+                "review_exit")
 
 
 def _net_pnl(trade: dict) -> float | None:

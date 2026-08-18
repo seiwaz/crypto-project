@@ -44,6 +44,35 @@ MIN_RISK_PCT = 0.2
 # that the account is not halted for a day by a cluster of small losses.
 BREAKER_COOLDOWN_HOURS = 6.0
 
+# --- Counter-trend gate -------------------------------------------------------
+#
+# Stands in for the skill's "trade opposes a strong_trend" and BTC "opposed_strong"
+# gates, which live in market_context.py and are not installed. Their absence was
+# measured, not assumed: 25 of the first 30 trades were shorts taken while BTC sat
+# above its 4H EMA200 and rose 2.66% over 48h. Those shorts lost 5.65 USDT; the five
+# longs made 0.74. Direction, not exit timing, was the dominant loss.
+#
+# Only coins that actually follow BTC are gated. A coin at 0.2 correlation is not
+# fighting the trend in any meaningful sense, so vetoing it would cost signals for
+# nothing.
+COUNTER_TREND_MIN_CORRELATION = 0.45
+
+# --- Give-back exit (OFF by default — the data rejected it) --------------------
+#
+# The hypothesis was that trades peak early and hand the gain back, so a retrace from
+# MFE should be protected. Replayed against the first 30 closed trades it does not
+# hold: only 6 reached the 0.35R arm level, and for 5 of those 6 the trade's actual
+# close beat what the give-back would have kept — FIL closed +0.467R against a
+# protected +0.256R, MORPHO +0.364R against +0.291R.
+#
+# The losses do not come from surrendering winners. They come from the 24 trades that
+# never went anywhere at all: median MFE +0.125R, and not one of 30 reached 1.0R
+# against a TP1 set at 1.5R. Left available and off, because the reasoning may hold
+# on a different profile or a trending market — but nothing here supports it today.
+GIVE_BACK_ENABLED = False
+GIVE_BACK_ARM_R = 0.35
+GIVE_BACK_FRACTION = 0.6
+
 # Same-direction positions in coins that move together are one position wearing
 # several tickers, and the drawdown arrives all at once looking like several
 # independent failures.
@@ -212,7 +241,35 @@ def settings() -> dict:
         "min_risk_pct": float(demo.get("min_risk_pct") or MIN_RISK_PCT),
         "breaker_cooldown_hours": float(demo.get("breaker_cooldown_hours")
                                        or BREAKER_COOLDOWN_HOURS),
+        "counter_trend_gate": demo.get("counter_trend_gate", True),
+        "give_back_enabled": demo.get("give_back_enabled", GIVE_BACK_ENABLED),
+        "give_back_arm_r": float(demo.get("give_back_arm_r") or GIVE_BACK_ARM_R),
+        "give_back_fraction": float(demo.get("give_back_fraction")
+                                    or GIVE_BACK_FRACTION),
     }
+
+
+def counter_trend(row: dict) -> dict | None:
+    """Is this trade fighting the prevailing BTC trend?
+
+    Returns the blocking detail, or None to allow. A missing regime or an unknown
+    correlation allows the trade: this gate exists to stop a measured, systematic
+    error, not to halt trading whenever data is thin.
+    """
+    if not settings()["counter_trend_gate"]:
+        return None
+    regime = correlation.btc_regime()
+    if not regime or regime["label"] == "range":
+        return None
+    ctx = correlation.btc_context(row["symbol"])
+    if not ctx or abs(ctx["correlation"]) < COUNTER_TREND_MIN_CORRELATION:
+        return None
+    fighting = (regime["label"] == "up" and row["side"] == "short") or \
+               (regime["label"] == "down" and row["side"] == "long")
+    if not fighting:
+        return None
+    return {"regime": regime["label"], "btc_move_pct": regime["move_pct"],
+            "correlation": ctx["correlation"], "side": row["side"]}
 
 
 def clear_breaker() -> dict:
@@ -636,6 +693,7 @@ def _cycle_one(pos: dict) -> dict:
     # Terminal exits first. TP1 is deliberately excluded here — it is a partial, and
     # treating it as an exit would close the whole position at the point the plan
     # says to take half off and let the rest run.
+    r_now = st.get("unrealised_r")
     hit = paper.exit_reason(
         pos["side"], high, low,
         stop=pos.get("stop"), tp1=None, tp2=pos.get("tp2"),
@@ -656,6 +714,19 @@ def _cycle_one(pos: dict) -> dict:
                 "exit_price": pos["tp1"], "realised": realised,
                 "balance_delta": balance_delta + realised}
 
+    # Protect a favourable excursion that is decaying, rather than waiting for the
+    # time stop to hand it back in full.
+    cfg = settings()
+    mfe = pos.get("mfe_r")
+    if (cfg["give_back_enabled"] and r_now is not None and mfe is not None
+            and float(mfe) >= cfg["give_back_arm_r"]
+            and r_now <= float(mfe) * (1.0 - cfg["give_back_fraction"])):
+        realised = _close(pos, spec, mark, "gave_back")
+        return {"coin": pos["coin"], "action": "CLOSE", "reason": "gave_back",
+                "mfe_r": float(mfe), "unrealised_r": r_now,
+                "exit_price": mark, "realised": realised,
+                "balance_delta": balance_delta + realised}
+
     moved = _trail_stop(pos, plan, spec)
 
     # Time stop, measured in hours and compared in USDT.
@@ -663,7 +734,6 @@ def _cycle_one(pos: dict) -> dict:
     # Both halves must hold: long enough, and not going anywhere. A position that has
     # made its floor is left alone however long it has been open — the stop is for
     # trades that are idle, not for trades that are merely slow.
-    r_now = st.get("unrealised_r")
     hours_held = (paper.now_ts() - float(pos["opened_ts"])) / 3600.0
     limit_hours = time_stop_hours()
     floor_usdt = time_stop_floor_usdt(pos)
@@ -973,6 +1043,14 @@ def try_fill_slots() -> dict:
             record(row, rank, "declined", "insufficient_margin",
                    mark=proposal["entry"],
                    detail=f"needs {cost:.2f}, available {available:.2f}")
+            continue
+
+        against = counter_trend(row)
+        if against:
+            declined.append({"coin": row["coin"], "code": "counter_trend", **against})
+            record(row, rank, "declined", "counter_trend",
+                   detail=(f"BTC {against['regime']} {against['btc_move_pct']:+.2f}%, "
+                           f"{row['side']} at corr {against['correlation']:.2f}"))
             continue
 
         blocked = correlated_same_side(row, store.paper_open_positions())
