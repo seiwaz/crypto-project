@@ -43,8 +43,9 @@ class _NobitexAdapter:
 
     @staticmethod
     def analyze(entry, profile, *, capital, risk_pct, count=300, hold_hours=0.0,
-                account_level=None, slots=1):
+                account_level=None, slots=1, tp1_r=None, tp2_r=None):
         from . import skill
+        del tp1_r, tp2_r          # Nobitex plans keep the profile's own targets
         # Nobitex plans stay single-position: its 5x cap and 9% maintenance margin
         # leave no room to share a margin budget the way a 75x perp venue does.
         del slots
@@ -75,10 +76,11 @@ class _ToobitAdapter:
 
     @staticmethod
     def analyze(entry, profile, *, capital, risk_pct, count=300, hold_hours=0.0,
-                account_level=None, slots=1):
+                account_level=None, slots=1, tp1_r=None, tp2_r=None):
         from . import toobit
         return toobit.analyze(entry, profile, capital=capital, risk_pct=risk_pct,
-                              count=count, hold_hours=hold_hours, slots=slots)
+                              count=count, hold_hours=hold_hours, slots=slots,
+                              tp1_r=tp1_r, tp2_r=tp2_r)
 
 
 _ADAPTERS = {NOBITEX: _NobitexAdapter, TOOBIT: _ToobitAdapter}

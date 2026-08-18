@@ -748,7 +748,8 @@ def margin_budget_pct(slots: int) -> float:
 
 def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
             count: int = 300, hold_hours: float = 0.0,
-            slots: int = 1) -> tuple[dict, dict, dict, dict]:
+            slots: int = 1, tp1_r: float | None = None,
+            tp2_r: float | None = None) -> tuple[dict, dict, dict, dict]:
     """Snapshot, then plan, for one Toobit contract.
 
     Returns (snapshot, plan, candles_by_role, side_info).
@@ -781,7 +782,8 @@ def analyze(entry: dict, profile: str, *, capital: float, risk_pct: float,
             return skill.plan(str(path), side, capital, profile=profile,
                               risk_pct=risk_pct, exchange=PLAN_EXCHANGE,
                               hold_hours=hold_hours, leverage_cap=cap,
-                              leverage=forced, max_margin_pct=budget_pct)
+                              leverage=forced, max_margin_pct=budget_pct,
+                              tp1_r=tp1_r, tp2_r=tp2_r)
 
         plan = build(venue_cap)
         plan = _repair_leverage_rounding(plan, build, capital, venue_cap)

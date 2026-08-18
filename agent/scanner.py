@@ -103,7 +103,10 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
     from . import demo as demo_mod                             # noqa: PLC0415
     slots = demo_mod.target_slots()
     risk_pct = demo_mod.derived_risk_pct()
-    log.info("scan %s sizing: %d slots, %.3f%% risk per trade", scan_id, slots, risk_pct)
+    tp1_r = settings.get("tp1_r") or None
+    tp2_r = settings.get("tp2_r") or None
+    log.info("scan %s sizing: %d slots, %.3f%% risk, tp1=%s tp2=%s",
+             scan_id, slots, risk_pct, tp1_r or "profile", tp2_r or "profile")
 
     def analyse(entry):
         """Network and CPU for one coin. No database writes — those stay on the
@@ -119,7 +122,7 @@ def scan_once(coins: list[str] | None = None, *, verbose: bool = False) -> int:
                 count=int(settings.get("candle_count", 300)),
                 hold_hours=float(settings.get("hold_hours", 0.0)),
                 account_level=settings.get("account_level"),
-                slots=slots), None
+                slots=slots, tp1_r=tp1_r, tp2_r=tp2_r), None
         except Exception as exc:  # per-coin failure must not end the scan
             log.warning("scan %s: %s failed: %s", scan_id, coin, exc)
             return entry, capital, None, str(exc)[:500]

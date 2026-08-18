@@ -190,13 +190,21 @@ def plan(snapshot_path: str, side: str, capital: float, *, profile: str,
          account_level: int | None = None,
          leverage_cap: float | None = None,
          leverage: float | None = None,
-         max_margin_pct: float | None = None) -> dict:
+         max_margin_pct: float | None = None,
+         tp1_r: float | None = None, tp2_r: float | None = None) -> dict:
     args = ["plan", "--snapshot", snapshot_path, "--side", side,
             "--capital", f"{capital:.10g}", "--profile", profile,
             "--risk-pct", str(risk_pct), "--exchange", exchange,
             "--hold-hours", str(hold_hours), "--json"]
     if max_margin_pct:
         args += ["--max-margin-pct", f"{max_margin_pct:.6g}"]
+    # The profile's TP1 is 1.5R on intraday, which this venue never reached in 30
+    # trades. Overridable so the target can be set from what the instrument actually
+    # travels rather than from a constant.
+    if tp1_r:
+        args += ["--tp1-r", f"{tp1_r:.6g}"]
+    if tp2_r:
+        args += ["--tp2-r", f"{tp2_r:.6g}"]
     if account_level:
         args += ["--account-level", str(account_level)]
     if leverage_cap:
