@@ -142,6 +142,61 @@ _REGIME_TTL = 900.0
 _regime_cache: tuple[float, dict] = (0.0, {})
 
 
+def coin_regime(symbol: str, interval: str = "4h",
+                window: int = 300) -> dict | None:
+    """The instrument's own trend — price against its EMA200 plus the recent move.
+
+    This is the skill's "trend regime" gate, which is about the thing being traded.
+    It is a separate question from BTC alignment, and conflating the two produced a
+    filter that was exactly backwards: it blocked shorts on coins below their own
+    EMA200 with deeply negative alpha (FIL -13.6%, DOT -36.5%, CRO -29.1%) purely
+    because they follow BTC, while permitting shorts on coins outperforming it
+    (WLD +61.7%, INJ +49.8%). Shorting a weak instrument while BTC rises is a
+    relative-weakness trade, not a counter-trend one.
+    """
+    key = ("regime", symbol, interval, window)
+    now = time.time()
+    with _lock:
+        hit = _cache.get(key)
+        if hit and now - hit[0] < _REGIME_TTL:
+            return hit[1]
+
+    try:
+        rows = toobit.klines_cached(symbol, interval, window)
+    except toobit.ToobitError:
+        return None
+    if len(rows) < 20:
+        return None
+
+    from . import skill                                       # noqa: PLC0415
+    try:
+        ind = skill.compute_indicators(rows)
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("regime unavailable for %s: %s", symbol, exc)
+        return None
+    close, ema200 = ind.get("last_close"), ind.get("ema200")
+    if close is None or ema200 is None:
+        return None
+
+    closes = [r["close"] for r in rows]
+    look = min(12, len(closes) - 1)
+    move_pct = (closes[-1] - closes[-1 - look]) / closes[-1 - look] * 100.0
+    above = close > ema200
+
+    if above and move_pct > 0.5:
+        label = "up"
+    elif not above and move_pct < -0.5:
+        label = "down"
+    else:
+        label = "range"
+
+    out = {"symbol": symbol, "label": label, "above_ema200": above,
+           "move_pct": move_pct, "structure": ind.get("structure")}
+    with _lock:
+        _cache[key] = (time.time(), out)
+    return out
+
+
 def btc_regime(interval: str = "4h", window: int = 300) -> dict | None:
     """Which way BTC is trending, for the gate the missing context run would apply.
 

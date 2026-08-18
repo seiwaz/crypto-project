@@ -250,26 +250,45 @@ def settings() -> dict:
 
 
 def counter_trend(row: dict) -> dict | None:
-    """Is this trade fighting the prevailing BTC trend?
+    """Is this trade fighting the trend of the instrument it is trading?
 
-    Returns the blocking detail, or None to allow. A missing regime or an unknown
-    correlation allows the trade: this gate exists to stop a measured, systematic
-    error, not to halt trading whenever data is thin.
+    The instrument's own trend decides, not BTC's. Gating on correlation to BTC was
+    measured to be backwards — it blocked shorts on coins below their own EMA200 with
+    alpha of -13% to -36%, while allowing shorts on coins outperforming BTC by 50-60%.
+    A weak alt in a rising market is a relative-weakness short, which is a reason to
+    take the trade rather than to refuse it.
+
+    BTC still matters, but only where it should: as a veto on a coin with no trend of
+    its own that simply tracks a strongly trending BTC.
+
+    Returns the blocking detail, or None to allow. Missing data allows the trade.
     """
     if not settings()["counter_trend_gate"]:
         return None
-    regime = correlation.btc_regime()
-    if not regime or regime["label"] == "range":
-        return None
+
+    own = correlation.coin_regime(row["symbol"])
+    if own and own["label"] != "range":
+        fighting = (own["label"] == "up" and row["side"] == "short") or \
+                   (own["label"] == "down" and row["side"] == "long")
+        if fighting:
+            return {"reason": "own_trend", "regime": own["label"],
+                    "move_pct": own["move_pct"], "side": row["side"]}
+        return None            # trading with its own trend — BTC does not override
+
+    # No trend of its own: fall back to BTC, and only for coins that really follow it.
+    btc = correlation.btc_regime()
     ctx = correlation.btc_context(row["symbol"])
-    if not ctx or abs(ctx["correlation"]) < COUNTER_TREND_MIN_CORRELATION:
+    if not btc or btc["label"] == "range" or not ctx:
         return None
-    fighting = (regime["label"] == "up" and row["side"] == "short") or \
-               (regime["label"] == "down" and row["side"] == "long")
+    if abs(ctx["correlation"]) < CORRELATION_THRESHOLD:
+        return None
+    fighting = (btc["label"] == "up" and row["side"] == "short") or \
+               (btc["label"] == "down" and row["side"] == "long")
     if not fighting:
         return None
-    return {"regime": regime["label"], "btc_move_pct": regime["move_pct"],
-            "correlation": ctx["correlation"], "side": row["side"]}
+    return {"reason": "btc_proxy", "regime": btc["label"],
+            "move_pct": btc["move_pct"], "correlation": ctx["correlation"],
+            "side": row["side"]}
 
 
 def clear_breaker() -> dict:
