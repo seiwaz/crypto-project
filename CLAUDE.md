@@ -82,6 +82,21 @@ knows this and excludes them.
   it has no SSH access and must never be given any. A human interactive session is the
   only place SSH is used, and only when something needs a one-off manual fix outside
   the normal push-and-let-the-timer-deploy-it flow.
+- **The cloud routine must use `https://trade.ssptco.com` (added 2026-08-19), not the
+  raw IP.** Anthropic's cloud agent sandbox egress proxy only tunnels outbound
+  HTTPS/443 to arbitrary hosts — plain HTTP on a non-standard port (`:8787`) is
+  rejected outright ("non-CONNECT request"), confirmed by a real failed test run
+  (`curl`, an explicit proxy request, and `WebFetch` all failed the same way). `nginx`
+  on the server now reverse-proxies `trade.ssptco.com` → `127.0.0.1:8787` with a
+  Let's Encrypt cert (`certbot --nginx`, auto-renews, expires 2026-11-17 absent
+  renewal). Config at `/etc/nginx/conf.d/trade.ssptco.com.conf` — do not repurpose
+  `mail.ssptco.com` or `www.ssptco.com` on this box, both are real, live services
+  (mail server and the actual company website on a *different* host respectively);
+  this server hosts several unrelated domains/services (Odoo, Nextcloud, Zabbix, a
+  mail server, a couple of client sites) — check for collisions before touching nginx
+  config here. From the Mac or any normal network, both the raw IP:8787 and
+  `https://trade.ssptco.com` work identically; only the cloud sandbox needs the HTTPS
+  hostname specifically.
 - Reaching the host from the Mac's browser/other tools may need a static route around
   a local VPN that otherwise intercepts the traffic:
   `sudo route -n add -host 94.74.166.123 192.168.3.1` (the user runs this, not Claude).
