@@ -89,7 +89,37 @@ GIVE_BACK_FRACTION = 0.6
 # a signal happens to fire on.
 MAX_CORRELATED_SAME_SIDE = 2
 CORRELATION_THRESHOLD = 0.75
-CORRELATION_INTERVAL = "1d"
+
+# Correlation timeframe. Daily is the more stable estimate — measured across 25
+# Toobit perps, median correlation to BTC is 0.62 on daily bars against 0.47 on 4H,
+# because shorter bars carry more idiosyncratic noise and drag the estimate down.
+# 4H is set here by request; it makes the filter weaker, not stronger, so the
+# threshold may need lowering to compensate.
+CORRELATION_INTERVAL = "4h"
+
+# Timeframe for the instrument's own trend filter. 1H reacts sooner than the 4H
+# decision timeframe, so it vetoes earlier and more often.
+TREND_FILTER_INTERVAL = "1h"
+
+# Entries are attempted only this often. Management still runs every cycle.
+ENTRY_INTERVAL_SECONDS = 1200
+
+# --- Maker entries ------------------------------------------------------------
+#
+# Entering with a resting limit slightly better than the market pays the maker fee
+# (0.0200%) instead of the taker fee (0.0600%), which matters here: fees were 53.9%
+# of gross P&L over the first 30 trades.
+#
+# The saving is not free, and simulating it as though it were would be the single
+# most flattering lie this broker could tell. A limit that does not fill is a trade
+# not taken, and the ones that fail to fill are disproportionately the trades that
+# ran away in your favour — so the fills you keep are biased toward the trades that
+# came back. Worse, as the skill puts it, an unfilled limit "can fill *because* the
+# thesis died". Both are modelled: the order rests, fills only if price actually
+# trades through it, and is cancelled if it has not filled within the timeout.
+MAKER_ENTRY_ENABLED = True
+MAKER_OFFSET_PCT = 0.1
+MAKER_TIMEOUT_MINUTES = 30.0
 
 
 DEFAULT_CYCLE_SECONDS = 90
@@ -146,15 +176,27 @@ def scheduler_loop(stop_event) -> None:
     Errors are logged and swallowed: a dropped VPN or a rate limit must not kill the
     loop and silently freeze every open position.
     """
+    last_entry_at = 0.0
     while not stop_event.is_set():
         cfg = settings()
         if cfg["enabled"]:
             try:
                 out = cycle()
                 closed = [r for r in out["results"] if r.get("action") == "CLOSE"]
-                # Refill in the same pass, so a freed slot is taken by the current
-                # highest-scoring candidate rather than waiting for the next cycle.
-                filled = try_fill_slots()
+                # Two clocks, not one.
+                #
+                # Managing a position is urgent — a stop or target can be passed in
+                # any minute, so that runs every cycle. Opening one is not: the
+                # candidate list only changes when a scan completes, so attempting
+                # entries every minute re-evaluates the same signals ~20 times and
+                # can open a position on a plan whose prices are already stale.
+                # Entries therefore run on their own, slower timer aligned with the
+                # scan cadence.
+                filled = {"opened": [], "declined": [], "slots_free": 0}
+                now = paper.now_ts()
+                if now - last_entry_at >= cfg["entry_interval_seconds"] or closed:
+                    last_entry_at = now
+                    filled = try_fill_slots()
                 if closed or filled["opened"]:
                     log.info("demo cycle: %d closed (%s), %d opened (%s)",
                              len(closed), ", ".join(f"{c['coin']}:{c['reason']}"
@@ -242,6 +284,14 @@ def settings() -> dict:
         "breaker_cooldown_hours": float(demo.get("breaker_cooldown_hours")
                                        or BREAKER_COOLDOWN_HOURS),
         "counter_trend_gate": demo.get("counter_trend_gate", True),
+        "correlation_interval": demo.get("correlation_interval") or CORRELATION_INTERVAL,
+        "trend_filter_interval": demo.get("trend_filter_interval") or TREND_FILTER_INTERVAL,
+        "entry_interval_seconds": int(demo.get("entry_interval_seconds")
+                                      or ENTRY_INTERVAL_SECONDS),
+        "maker_entry": demo.get("maker_entry", MAKER_ENTRY_ENABLED),
+        "maker_offset_pct": float(demo.get("maker_offset_pct") or MAKER_OFFSET_PCT),
+        "maker_timeout_minutes": float(demo.get("maker_timeout_minutes")
+                                       or MAKER_TIMEOUT_MINUTES),
         "give_back_enabled": demo.get("give_back_enabled", GIVE_BACK_ENABLED),
         "give_back_arm_r": float(demo.get("give_back_arm_r") or GIVE_BACK_ARM_R),
         "give_back_fraction": float(demo.get("give_back_fraction")
@@ -266,7 +316,8 @@ def counter_trend(row: dict) -> dict | None:
     if not settings()["counter_trend_gate"]:
         return None
 
-    own = correlation.coin_regime(row["symbol"])
+    own = correlation.coin_regime(row["symbol"],
+                                  settings()["trend_filter_interval"])
     if own and own["label"] != "range":
         fighting = (own["label"] == "up" and row["side"] == "short") or \
                    (own["label"] == "down" and row["side"] == "long")
@@ -446,7 +497,8 @@ def state() -> dict:
             open_pnl += st["unrealised_pnl"]
         row["open_risk"] = open_risk(pos, spec)
         row["funding"] = paper.funding(symbol)
-        row["btc_context"] = correlation.btc_context(symbol)
+        row["btc_context"] = correlation.btc_context(
+            symbol, settings()["correlation_interval"])
         rows.append(row)
 
     try:
@@ -539,7 +591,7 @@ def _empty_slot_reason(filled: int, slots: int, heat: float, acct: dict) -> dict
 
 
 def correlated_same_side(row: dict, open_positions: list[dict],
-                         interval: str = CORRELATION_INTERVAL) -> dict | None:
+                         interval: str | None = None) -> dict | None:
     """Would taking this trade breach the cap on correlated same-direction risk?
 
     Five positions at 0.9 correlation in the same direction are one position at five
@@ -548,6 +600,7 @@ def correlated_same_side(row: dict, open_positions: list[dict],
 
     Returns the blocking detail, or None when the trade is allowed.
     """
+    interval = interval or settings()["correlation_interval"]
     ctx = correlation.btc_context(row["symbol"], interval)
     if ctx is None:
         # Unknown is not the same as uncorrelated. Allow the trade — refusing on
@@ -651,6 +704,16 @@ def cycle() -> dict:
     results = []
     balance = float(acct["balance"])
 
+    for pending in store.paper_pending_positions():
+        try:
+            outcome = _work_pending(pending)
+        except (paper.PaperError, toobit.ToobitError) as exc:
+            log.warning("pending %s failed: %s", pending["coin"], exc)
+            continue
+        if outcome:
+            balance += outcome.pop("balance_delta", 0.0)
+            results.append(outcome)
+
     for pos in store.paper_open_positions():
         try:
             outcome = _cycle_one(pos)
@@ -680,6 +743,39 @@ def bars_held(pos: dict, plan: dict) -> int:
     minutes = _TF_MINUTES.get(decision_tf(plan), 240)
     elapsed_min = (paper.now_ts() - float(pos["opened_ts"])) / 60.0
     return int(elapsed_min // minutes)
+
+
+def _work_pending(pos: dict) -> dict | None:
+    """Fill a resting limit if price traded through it, or cancel it on timeout."""
+    cfg = settings()
+    spec = paper.contract_spec(pos["symbol"])
+    limit = float(pos["limit_price"])
+    candle = _latest_candle(pos["symbol"])
+    mark, _ = paper.mark_price(spec)
+    if mark is None:
+        return None
+
+    low = min(candle["low"], mark) if candle else mark
+    high = max(candle["high"], mark) if candle else mark
+    touched = low <= limit if pos["side"] == "long" else high >= limit
+
+    if touched:
+        fee = paper.fee(paper.notional(float(pos["contracts"]), limit, spec),
+                        maker=True)
+        store.paper_update(pos["id"], status="open", entry_price=limit,
+                           opened_ts=paper.now_ts(), entry_fee=fee)
+        store.paper_event(pos["id"], "open", amount=-fee,
+                          detail=f"maker fill at {limit:.8g}")
+        return {"coin": pos["coin"], "action": "FILL", "price": limit,
+                "fee": fee, "balance_delta": -fee}
+
+    age_min = (paper.now_ts() - float(pos["placed_ts"] or paper.now_ts())) / 60.0
+    if age_min >= cfg["maker_timeout_minutes"]:
+        store.paper_cancel(pos["id"], "unfilled")
+        store.paper_event(pos["id"], "cancel",
+                          detail=f"limit {limit:.8g} unfilled after {age_min:.0f}m")
+        return {"coin": pos["coin"], "action": "CANCEL", "reason": "unfilled"}
+    return None
 
 
 def _cycle_one(pos: dict) -> dict:
@@ -1249,14 +1345,27 @@ def _open(row: dict, proposal: dict, slot: int, rank: int = 0,
         raw = (proposal["entry"] - plan_entry) / plan_entry * 100.0
         slippage = raw if row["side"] == "long" else -raw
 
+    cfg = settings()
+    status, limit_price, entry_fee = "open", None, proposal["entry_fee"]
+    if cfg["maker_entry"]:
+        # Better than market: below for a long, above for a short.
+        off = cfg["maker_offset_pct"] / 100.0
+        limit_price = (proposal["entry"] * (1 - off) if row["side"] == "long"
+                       else proposal["entry"] * (1 + off))
+        limit_price = paper.round_to_tick(limit_price, proposal["spec"]["tick_size"])
+        status = "pending"
+        entry_fee = 0.0                      # charged on fill, at the maker rate
+
     pid = store.paper_open(
+        status=status, limit_price=limit_price, placed_ts=paper.now_ts(),
+        maker=1 if cfg["maker_entry"] else 0,
         coin=row["coin"], symbol=row["symbol"], exchange=row["exchange"],
         side=row["side"], slot=slot,
         contracts=proposal["contracts"], entry_price=proposal["entry"],
         leverage=proposal["leverage"], margin=proposal["margin"],
         risk_amount=proposal["risk_amount"],
         stop=proposal["stop"], tp1=proposal["tp1"], tp2=proposal["tp2"],
-        opened_ts=paper.now_ts(), entry_fee=proposal["entry_fee"],
+        opened_ts=paper.now_ts(), entry_fee=entry_fee,
         scan_id=row.get("scan_id"), score=row.get("score"),
         verdict=row.get("verdict"),
         plan_json=json.dumps(proposal["plan"], ensure_ascii=False),
@@ -1265,9 +1374,13 @@ def _open(row: dict, proposal: dict, slot: int, rank: int = 0,
         btc_bias=_btc_bias_label(),
         takes_available=pool_size,
     )
-    # The entry fee leaves the account the moment the position opens, exactly as it
-    # would on the venue.
-    acct = store.paper_account()
-    store.paper_set_balance(float(acct["balance"]) - proposal["entry_fee"])
-    store.paper_event(pid, "open", detail=f"slot {slot}, score {row.get('score')}")
+    if status == "open":
+        # The entry fee leaves the account the moment the position opens.
+        acct = store.paper_account()
+        store.paper_set_balance(float(acct["balance"]) - entry_fee)
+        store.paper_event(pid, "open", detail=f"slot {slot}, score {row.get('score')}")
+    else:
+        store.paper_event(pid, "place", detail=(
+            f"maker limit {limit_price:.8g} ({cfg['maker_offset_pct']:g}% better "
+            f"than {proposal['entry']:.8g}), slot {slot}, score {row.get('score')}"))
     return pid

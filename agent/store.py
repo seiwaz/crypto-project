@@ -310,6 +310,12 @@ _MIGRATIONS = (
     ("paper_positions", "mae_at", "TEXT"),
     ("paper_positions", "mfe_hours", "REAL"),
     ("paper_positions", "mae_hours", "REAL"),
+    # Maker entries wait at a limit rather than crossing the spread, so a position
+    # now has a life before it is filled — and may never be.
+    ("paper_positions", "limit_price", "REAL"),
+    ("paper_positions", "placed_at", "TEXT"),
+    ("paper_positions", "placed_ts", "REAL"),
+    ("paper_positions", "maker", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -643,16 +649,33 @@ _OPEN_FIELDS = (
     "leverage", "margin", "risk_amount", "stop", "tp1", "tp2", "opened_ts",
     "entry_fee", "scan_id", "score", "verdict", "plan_json", "context_json",
     "plan_entry", "entry_slippage_pct", "btc_bias", "takes_available",
+    "limit_price", "placed_ts", "maker", "status",
 )
 
 
 def paper_open(**fields) -> int:
-    cols = [f for f in _OPEN_FIELDS if f in fields]
-    sql = (f"INSERT INTO paper_positions (status, opened_at, {', '.join(cols)}) "
-           f"VALUES ('open', ?, {', '.join('?' for _ in cols)})")
+    """Insert a position. `status` may be 'open' or 'pending' for a resting limit."""
+    status = fields.pop("status", "open")
+    cols = [f for f in _OPEN_FIELDS if f in fields and f != "status"]
+    sql = (f"INSERT INTO paper_positions (status, opened_at, placed_at, {', '.join(cols)}) "
+           f"VALUES (?, ?, ?, {', '.join('?' for _ in cols)})")
     with tx() as conn:
-        cur = conn.execute(sql, (now_iso(), *(fields[c] for c in cols)))
+        cur = conn.execute(sql, (status, now_iso(), now_iso(),
+                                 *(fields[c] for c in cols)))
         return int(cur.lastrowid)
+
+
+def paper_pending_positions() -> list[dict]:
+    return [dict(r) for r in _rows(
+        "SELECT * FROM paper_positions WHERE status = 'pending' ORDER BY placed_ts")]
+
+
+def paper_cancel(position_id: int, reason: str) -> None:
+    """A limit that never filled leaves no trade, only a record that it was tried."""
+    with tx() as conn:
+        conn.execute("UPDATE paper_positions SET status = 'cancelled', "
+                     "closed_at = ?, exit_reason = ? WHERE id = ?",
+                     (now_iso(), reason, position_id))
 
 
 def paper_update(position_id: int, **fields) -> None:
