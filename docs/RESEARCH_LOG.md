@@ -315,3 +315,40 @@ Quantitative/published backtests, liquidation and margin-call mechanics per exch
 documentation, and the Nobitex fee-schedule re-verification flagged in Round 1 §4
 remain undone — this round covered the specific issue the watchlist expansion surfaced,
 not a full scheduled Round 3 pass.
+
+## Round 4 (user-directed, 2026-08-20) — switch to a 5–30 minute holding strategy
+
+**Change requested:** the user stated the intended strategy holds 5–30 minutes, and
+asked for (1) immediate entry on a TAKE signal rather than waiting up to 20 minutes,
+(2) position management every 30s instead of 60s, (3) the web UI refreshing every 3s
+on every tab without a manual reload.
+
+**Applied via `config/strategy-tuning.json`** (settings-only, no restart):
+- `profile: "scalp"` — was `"intraday"`. Switches ATR TF/mult, decision TF (15m vs
+  4H), targets (TP1 1.0R/TP2 2.0R vs 1.5R/3.0R), stop range, and the direction-score
+  check set (adds session VWAP, narrower RSI band, threshold 5/6 vs 6/8).
+- `scan_interval_minutes: 5` (was 20) and `demo.entry_interval_seconds: 300` (was
+  1200, kept matched to the scan cadence per the code's own reasoning — entries
+  shouldn't act on a scan older than the current one) — as close to "immediate" as
+  the batch-scan architecture supports without a deeper redesign to per-coin
+  continuous monitoring.
+- `demo.cycle_seconds: 30` (was 60) — position management cadence.
+- `demo.time_stop_hours: 0.5` (30 minutes, was 48) — the literal cap requested.
+- `demo.maker_timeout_minutes: 2` (was 30) — a 30-minute resting limit order made no
+  sense against a 30-minute total hold budget; shortened rather than disabling
+  maker entries outright, to keep most of the fee saving (fees were 53.9% of gross
+  P&L pre-maker-entry, Round 1 §4) while not eating the whole window waiting to fill.
+
+**Web UI (`web/app.js`):** the Demo tab already polled every 3s while visible — the
+gap was the Screener tab, which dropped to a 60s idle poll once no scan was running.
+Unified both to a 3s `SCREENER_POLL_MS` constant.
+
+**Risk flagged before applying, not blocking on:** this project's very first sample
+(pre any fix) failed specifically because the hold window was too short for the
+stop/target distance — 84.8% of trades hit a time-stop instead of a real level, and
+the fix that resolved it (`6ad4eef`) *widened* the hold to 48h. A 30-minute cap is
+far tighter than anything tested since. If the account starts closing everything on
+`time_stop` again, this is the first place to look — not a new bug, a repeat of an
+already-diagnosed one at a much smaller timescale. No reset needed to apply this: 0
+trades had closed since the same-day account reset, so the fresh sample starts
+consistently under scalp settings from trade #1.

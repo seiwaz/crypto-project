@@ -1,1 +1,10 @@
-{}
+{
+  "profile": "scalp",
+  "scan_interval_minutes": 5,
+  "demo": {
+    "cycle_seconds": 30,
+    "entry_interval_seconds": 300,
+    "time_stop_hours": 0.5,
+    "maker_timeout_minutes": 2
+  }
+}

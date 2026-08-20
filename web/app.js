@@ -1272,13 +1272,15 @@ async function refresh() {
   }
 }
 
+const SCREENER_POLL_MS = 3000;
+
 function startPolling() {
   clearInterval(state.pollTimer);
   state.pollTimer = setInterval(async () => {
     await refresh();
     if (!(state.data && state.data.scan && state.data.scan.running)) {
       clearInterval(state.pollTimer);
-      state.pollTimer = setInterval(refresh, 60000);
+      state.pollTimer = setInterval(refresh, SCREENER_POLL_MS);
     }
   }, 2500);
 }
@@ -1345,5 +1347,5 @@ function wireControls() {
   });
   if (state.tab === 'demo') await refreshDemo();
   if (state.data && state.data.scan && state.data.scan.running) startPolling();
-  else state.pollTimer = setInterval(refresh, 60000);
+  else state.pollTimer = setInterval(refresh, SCREENER_POLL_MS);
 })();
