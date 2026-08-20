@@ -326,6 +326,49 @@ def _merge(rows):
 # --------------------------------------------------------------------------------
 
 
+def _ichimoku(highs, lows, end_idx, period):
+    """(period-high + period-low) / 2, the shared building block for Tenkan/Kijun/
+    Senkou B, using only bars up to and including end_idx."""
+    if end_idx < period - 1:
+        return None
+    window_h = highs[end_idx - period + 1: end_idx + 1]
+    window_l = lows[end_idx - period + 1: end_idx + 1]
+    return (max(window_h) + min(window_l)) / 2
+
+
+def ichimoku_cloud(highs, lows):
+    """Tenkan-sen, Kijun-sen, and the cloud that actually applies to the current bar.
+
+    Senkou Span A/B are computed from data as of 26 bars ago and plotted 26 bars
+    *forward* — so the cloud boundary sitting under today's candle was calculated
+    using the state of the market 26 bars back, not today's. Getting this backwards
+    (using today's high/low window instead) is the single most common Ichimoku
+    implementation bug and silently produces a cloud that lags by half a cycle.
+    Needs ~78 bars of history (26 lookback + 52 for Senkou B) before it resolves.
+    """
+    n = len(highs)
+    last = n - 1
+    tenkan = _ichimoku(highs, lows, last, 9)
+    kijun = _ichimoku(highs, lows, last, 26)
+
+    cloud_idx = last - 26
+    span_a = span_b = None
+    if cloud_idx >= 0:
+        ct = _ichimoku(highs, lows, cloud_idx, 9)
+        ck = _ichimoku(highs, lows, cloud_idx, 26)
+        cb = _ichimoku(highs, lows, cloud_idx, 52)
+        if ct is not None and ck is not None and cb is not None:
+            span_a, span_b = (ct + ck) / 2, cb
+
+    out = {"tenkan": tenkan, "kijun": kijun,
+           "cloud_span_a": span_a, "cloud_span_b": span_b}
+    if span_a is not None and span_b is not None:
+        out["cloud_top"] = max(span_a, span_b)
+        out["cloud_bottom"] = min(span_a, span_b)
+        out["cloud_bullish"] = span_a > span_b   # "green" cloud
+    return out
+
+
 def compute_indicators(rows):
     highs = [r["high"] for r in rows]
     lows = [r["low"] for r in rows]
@@ -334,6 +377,7 @@ def compute_indicators(rows):
     sw_h, sw_l = tp.find_swings(highs, lows)
     a = tp.atr(highs, lows, closes, 14)
     last = closes[-1]
+    ichimoku = ichimoku_cloud(highs, lows)
 
     def structure():
         if len(sw_h) < 2 or len(sw_l) < 2:
@@ -367,6 +411,7 @@ def compute_indicators(rows):
         "structure": structure(),
         "volume_bias": ("up" if up > down * 1.1 else
                         "down" if down > up * 1.1 else "balanced"),
+        **ichimoku,
     }
 
 
@@ -415,6 +460,20 @@ def score_direction(profile, tfs):
             above = dec["last_close"] > vwap
             add("price vs session VWAP", above, not above,
                 f"close {dec['last_close']:.6g} vs VWAP {vwap:.6g}")
+
+    # Ichimoku cloud (2026-08-20, requested to sharpen direction confirmation). Only
+    # scored when price is clearly outside the cloud - inside the cloud is Ichimoku's
+    # own definition of "no trade," and forcing a long/short guess there would be
+    # exactly the overconfidence this scoring exists to avoid. Threshold left
+    # unchanged rather than raised: this adds a vote to the same pool other checks
+    # draw from, it doesn't replace one, so the bar to qualify isn't getting harder.
+    top, bot = dec.get("cloud_top"), dec.get("cloud_bottom")
+    if top is not None and bot is not None and dec.get("last_close") is not None:
+        close = dec["last_close"]
+        if close > top or close < bot:
+            add("price vs Ichimoku cloud", close > top, close < bot,
+                f"close {close:.6g} vs cloud [{bot:.6g}, {top:.6g}]"
+                f"{' (bullish/green)' if dec.get('cloud_bullish') else ' (bearish/red)'}")
 
     add("BTC / dominance alignment", None, None, "MANUAL - not derivable from OHLCV")
     if profile != "scalp":

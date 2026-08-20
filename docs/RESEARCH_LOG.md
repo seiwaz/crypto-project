@@ -409,3 +409,41 @@ worth watching in the account's slot utilization, not assumed away.
 case, which was already floating in one direction. Added test 6b for the new
 loss-side behavior specifically (position stays open while underwater past the
 deadline; its real stop still closes it when hit) — 30/30 passing.
+
+## Round 7 (user-directed, 2026-08-20) — add Ichimoku Cloud to the direction score
+
+**Change requested:** add Ichimoku as another input to the TAKE decision.
+
+**Implemented in `skill/scripts/nobitex_api.py`** (shared by both venues, so this
+also reaches the Nobitex-side skill, not just Toobit demo trading):
+- `ichimoku_cloud()`: Tenkan (9), Kijun (26), and the cloud (Senkou Span A/B) that
+  actually applies to the *current* bar — computed from data as of 26 bars back and
+  read forward, not from the current rolling window. Getting the 26-bar displacement
+  backwards is the most common Ichimoku implementation bug and silently produces a
+  cloud that lags by half a cycle; verified against live BTC/ETH/ORDI data before
+  deploying (all three currently trade above a "green" cloud, log below).
+- New check in `score_direction()`: "price vs Ichimoku cloud." Only added when price
+  is clearly outside the cloud — inside the cloud is Ichimoku's own definition of "no
+  signal," and the check is skipped rather than forced, matching how every other
+  check here already handles inconclusive data.
+- **Threshold left unchanged** (5/scalp, 6/intraday-swing) rather than raised. This
+  adds a vote to the pool other checks already draw from; raising the threshold too
+  would have made qualifying strictly harder right after Round 5/6 finally got real
+  signals flowing again. `auto_checks` goes from up to 8 to up to 9 as a result.
+- Documented in `references/indicators.md` §16, including the confluence-quality
+  caveat from §15: Tenkan/Kijun are themselves rolling-extreme averages, so they're
+  correlated with the existing EMA checks rather than fully independent evidence —
+  cloud position is the most distinct signal Ichimoku offers here, which is why
+  that's what got wired in rather than a Tenkan/Kijun cross.
+
+**Verified live** (BTC, ETH, ORDI via `toobit.build_snapshot`, scalp profile):
+all three resolved a real cloud reading and the check fired correctly, e.g. BTC —
+tenkan 71818.95, kijun 70848.15, cloud [68522.9, 69400.25], close 71919.2 → bullish,
+`auto_checks` 8→9, threshold unchanged at 5. No crashes on any of the three.
+
+**Not yet measured:** whether this indicator actually improves outcomes here — it's
+wired in as one more vote in an existing, validated framework, not separately
+backtested against this account's own history the way Round 1's stop-width change
+was. Watch score distributions and TAKE rate over the next batch of trades for a
+sudden shift, and whether Ichimoku-favorable trades outperform the rest once there's
+a large enough sample to split on it.

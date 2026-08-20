@@ -21,7 +21,8 @@ asks *why*, when you need an exact formula, or when teaching the method.
 13. [Liquidation maps](#13-liquidation-maps)
 14. [BTC correlation and dominance](#14-btc-correlation-and-dominance)
 15. [Trend quality: Choppiness Index / Efficiency Ratio](#15-trend-quality-not-just-direction-choppiness-index--efficiency-ratio) — advisory, not yet automated
-16. [Persian glossary](#persian-glossary)
+16. [Ichimoku Cloud](#16-ichimoku-cloud-ichimoku-kinko-hyo) — live in the score
+17. [Persian glossary](#persian-glossary)
 
 ---
 
@@ -468,6 +469,47 @@ later than it started.
 12 bars) is loose enough that a genuinely choppy market can still print "up" or "down."
 A Choppiness Index or Efficiency Ratio check alongside it would catch that case without
 replacing it — direction and quality are different questions and both should pass.
+
+---
+
+## 16. Ichimoku Cloud (Ichimoku Kinko Hyo)
+
+Added 2026-08-20, live in the automated score. Five lines built from rolling
+high/low midpoints, no closes involved directly:
+
+```
+Tenkan-sen (conversion)  = (9-period high + 9-period low) / 2
+Kijun-sen (base)         = (26-period high + 26-period low) / 2
+Senkou Span A (leading)  = (Tenkan + Kijun) / 2,  plotted 26 bars forward
+Senkou Span B (leading)  = (52-period high + 52-period low) / 2, plotted 26 bars forward
+Chikou Span (lagging)    = current close, plotted 26 bars back
+```
+
+**The cloud (Kumo)** is the band between Span A and Span B. Price above it is
+bullish, below it is bearish, inside it is Ichimoku's own definition of "no trade" —
+the system here follows that convention exactly: the check only fires when price is
+clearly outside the cloud, and is skipped (not forced to guess) when price is inside
+it, the same pattern every other check here uses when its own data is inconclusive.
+Cloud color matters too: Span A above Span B ("green") reinforces a bullish read;
+Span B above Span A ("red") reinforces bearish — both are recorded alongside the
+check's observed value.
+
+**The one thing implementations get wrong:** Span A/B are *plotted 26 bars ahead* of
+the data used to compute them, which means the cloud boundary sitting under *today's*
+candle was actually calculated from the market as it stood 26 bars ago, not today's
+high/low. Computing "today's cloud" from today's rolling window instead of the
+26-bars-back one silently produces a cloud that lags by half a cycle and will
+misread the current regime. Needs roughly 78 bars of history (26 back, plus 52 more
+to compute Span B at that point) before it resolves at all — on a fast timeframe like
+scalp's 15m decision TF that's under 20 hours of data, comfortably inside the 300
+candles this system already fetches.
+
+**Where it sits relative to the EMA-trend checks already here:** Tenkan/Kijun are
+themselves rolling-extreme averages, so they're directionally correlated with the
+EMA50/EMA200 checks rather than fully independent evidence (see §15's confluence-
+quality note — genuinely different methods matter more than more of the same kind).
+The cloud position specifically is the most distinct signal Ichimoku offers here,
+which is why that's what got wired in rather than a Tenkan/Kijun cross.
 
 ---
 

@@ -147,15 +147,22 @@ python3 scripts/trade_plan.py indicators --csv eth_4h.csv
 The snapshot does the arithmetic; your job is to read it, add the manual checks, and
 state the tally explicitly so the decision is auditable.
 
-**Scalp (6 checks, need ≥ 5):** price vs EMA200 on 1H · EMA50 vs EMA200 · price vs
-session VWAP · structure HH/HL or LH/LL on 15m · RSI(14) 45–65 long / 35–55 short ·
-BTC aligned or neutral.
+**Scalp (need ≥ 5 of up to 9 automated):** price vs EMA200 on 1H · EMA50 vs EMA200 ·
+price vs session VWAP · structure HH/HL or LH/LL on 15m · price vs EMA50 on 15m ·
+RSI(14) 45–65 long / 35–55 short · volume bias (last 10 candles) · price vs Ichimoku
+cloud (`references/indicators.md` §16 — skipped, not forced, when price sits inside
+the cloud) · BTC aligned or neutral.
 
-**Intraday / swing (8 checks, need ≥ 6):** price vs daily EMA200 · EMA50 vs EMA200 ·
-structure on the decision TF · price vs EMA50 on the decision TF · RSI 45–70 long /
-30–55 short · volume confirms (RVOL ≥ 1.5, see `references/indicators.md` §6 —
-`rvol20` is computed by the snapshot but not yet auto-gated, so check it explicitly) ·
-BTC and dominance not against · funding not crowded against you.
+**Intraday / swing (need ≥ 6 of up to 9 automated):** price vs daily EMA200 · EMA50
+vs EMA200 · structure on the decision TF · price vs EMA50 on the decision TF · RSI
+45–70 long / 30–55 short · volume confirms (RVOL ≥ 1.5, see `references/
+indicators.md` §6 — `rvol20` is computed by the snapshot but not yet auto-gated, so
+check it explicitly) · price vs Ichimoku cloud · BTC and dominance not against ·
+funding not crowded against you.
+
+The threshold stayed where it was when Ichimoku was added (5 for scalp, 6 for
+intraday/swing) — it's one more vote in the same pool, not a replacement, so
+qualifying isn't getting harder just because there's another check available.
 
 BTC correlation is regime-dependent, not a fixed property of a coin — measured
 crash-tail correlation runs far above the calm-market number (`references/
