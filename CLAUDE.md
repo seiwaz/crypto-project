@@ -187,14 +187,46 @@ thrashing":**
   exchange for automated execution without the user's explicit, separate approval in
   an interactive session — propose and wait, always. The cloud routine has no
   exchange credentials and must never be given any.
-- **Email notifications (requested 2026-08-19, not yet wired up):** the user wants an
-  email to seiwaz@gmail.com whenever a run produces something real — a checkpoint
-  logged, a change applied, or a change reverted — not on plain no-op runs. This needs
-  a Gmail MCP connector attached to the routine's `mcp_connections`
-  (`https://claude.ai/customize/connectors`); as of this writing no such connector was
-  available, so it's pending the user connecting one. Once attached, add a final step
-  to the routine's prompt that sends the run's summary by email, gated on the same
-  "something happened" condition already used for git commits.
+- **Email notifications: wired up 2026-08-19.** Gmail MCP connector
+  (`fd75ca4e-f9f5-4863-bf81-71cacb334024`) is attached to the routine, gated to only
+  send on a real checkpoint or an applied/reverted change — not on plain no-op runs.
+  The routine's report data source is also now push-based, not a direct fetch: the
+  cloud sandbox's egress proxy only allows HTTPS to a fixed domain allowlist (confirmed
+  via a real `EGRESS_BLOCKED` error, even after fixing an earlier separate HTTP-vs-HTTPS
+  issue with an nginx+Let's Encrypt reverse proxy at `trade.ssptco.com` — that fix was
+  necessary but not sufficient). The server now pushes a live report snapshot into
+  `docs/live-report.json` in this repo every ~10 min via
+  `crypto-report-push.timer`/`.service` (script `/opt/crypto-screener-deploy/push-
+  report.sh`, using a separate write-scoped GitHub deploy key at `/opt/crypto-screener-
+  deploy/report_push_key` — the routine itself still never gets SSH or push credentials,
+  it only reads the file from its own checkout).
+- **Known live bugs, found 2026-08-20, not yet both fixed:**
+  1. **Fixed:** `agent/toobit.py: resolve_manual_checks()` resolved the "BTC / dominance
+     alignment" direction check from BTC's own trend for *every* coin, regardless of
+     that coin's own behavior — the same mistake `demo.counter_trend()` already proved
+     backwards (commit `7356609`) and fixed, but never backported to the scoring path.
+     Since this fed the score itself, not just an entry gate, it silently capped
+     opportunities across the whole watchlist on every scan. See `docs/RESEARCH_LOG.md`
+     Round 3 for the full writeup and live verification (two consecutive full-watchlist
+     scans went from 0 TAKEs to 7 immediately after the fix; all 7 filled as real
+     positions the same session).
+  2. **Not fixed:** `POST /api/settings` fails with `OSError: Read-only file system` —
+     the systemd unit's `ProtectSystem=strict` + `ReadWritePaths=/opt/crypto-screener/
+     var` only allows writes to `var/`, but `config.save_settings()` writes to
+     `config/settings.json`. Doesn't affect the autonomous tuning pipeline (the deploy
+     timer's `strategy-tuning.json` merge runs outside the systemd sandbox), but the
+     dashboard's own "change settings" UI/API is silently broken. Needs `config/` added
+     to `ReadWritePaths` in the systemd unit, or the write moved elsewhere.
+  3. **Worth watching, not fully root-caused:** after the 2026-08-20 restart to deploy
+     the scoring fix, `demo.scheduler_loop`'s background thread appeared alive (thread
+     count matched) but produced no activity — no log lines, no KV updates — for
+     15+ minutes, despite `demo.enabled: true`. A manual `/api/demo/cycle` call worked
+     instantly and correctly (opened all 7 pending positions), and a second clean
+     service restart resolved it — the loop has run normally since. Possibly caused by
+     unusual overlapping-scan load during that session's manual testing (three `/api/
+     scan` calls in quick succession, one cancelled mid-flight) rather than a code bug;
+     no exception or deadlock was found in logs. If it recurs without heavy manual
+     testing, treat as a real bug and dig into `scanner.py`/`correlation.py`'s locking.
 
 ## What needs to continue (pick this up without being re-asked)
 
