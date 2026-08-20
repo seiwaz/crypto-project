@@ -844,6 +844,24 @@ def _cycle_one(pos: dict) -> dict:
 
     moved = _trail_stop(pos, plan, spec)
 
+    # Active management for a position currently in profit, at the user's request
+    # (2026-08-20): re-check the setup every cycle rather than once per 8h funding
+    # period (_review, below) — an 8h cadence can't matter to a 30-minute scalp hold.
+    # Still favoured -> let it float past the time-stop deadline instead of cutting a
+    # working trade off early. No longer favoured -> take the profit now rather than
+    # risk giving it back waiting for a level. Losing positions are untouched here;
+    # they already float unconditionally per the time-stop rule below.
+    pnl_now = st.get("unrealised_pnl")
+    still_favoured = False
+    if pnl_now is not None and pnl_now > 0:
+        still_favoured, signal_reason = _profit_signal_check(pos)
+        if signal_reason is not None:
+            realised = _close(pos, spec, mark, "signal_exit")
+            return {"coin": pos["coin"], "action": "CLOSE", "reason": "signal_exit",
+                    "detail": signal_reason, "unrealised_usdt": pnl_now,
+                    "exit_price": mark, "realised": realised,
+                    "balance_delta": balance_delta + realised}
+
     # Time stop, measured in hours and compared in USDT.
     #
     # Floating, at the user's request (2026-08-20): the clock only closes a position
@@ -854,12 +872,13 @@ def _cycle_one(pos: dict) -> dict:
     # terms — the real stop-loss or a take-profit. This trades one risk for another:
     # a losing position is no longer bounded by time, only by its stop distance, so it
     # can occupy a slot/margin for longer than before. Watch for that trade-off rather
-    # than assuming it away.
+    # than assuming it away. A profitable position whose setup still checks out
+    # (still_favoured, just above) is exempted the same way — the clock doesn't cut a
+    # trade off early just because it hasn't cleared the fixed USDT floor yet.
     hours_held = (paper.now_ts() - float(pos["opened_ts"])) / 3600.0
     limit_hours = time_stop_hours()
     floor_usdt = time_stop_floor_usdt(pos)
-    pnl_now = st.get("unrealised_pnl")
-    if (hours_held >= limit_hours and pnl_now is not None
+    if (not still_favoured and hours_held >= limit_hours and pnl_now is not None
             and 0 <= pnl_now < floor_usdt):
         realised = _close(pos, spec, mark, "time_stop")
         return {"coin": pos["coin"], "action": "CLOSE", "reason": "time_stop",
@@ -880,7 +899,8 @@ def _cycle_one(pos: dict) -> dict:
             "mark_source": mark_source, "bars_held": held,
             "hours_held": round(hours_held, 2), "limit_hours": limit_hours,
             "stop_moved": moved, "unrealised_usdt": pnl_now,
-            "floor_usdt": floor_usdt, "balance_delta": balance_delta}
+            "floor_usdt": floor_usdt, "floating_on_signal": still_favoured,
+            "balance_delta": balance_delta}
 
 
 def _touched(side: str, high: float, low: float, level: float | None) -> bool:
@@ -978,6 +998,32 @@ def _tf_to_interval(tf: str) -> str:
     return {"1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
             "1H": "1h", "2H": "2h", "4H": "4h", "6H": "6h", "12H": "12h",
             "1D": "1d", "1W": "1w"}.get(tf, "4h")
+
+
+def _profit_signal_check(pos: dict) -> tuple[bool, str | None]:
+    """For a position currently in profit: is the setup that justified it still there?
+
+    Reuses the same latest-scan verdict/score `_review` checks, but on every cycle
+    instead of once per 8h funding period — a 30-minute scalp hold can't wait 8 hours
+    for a stale re-check to matter.
+
+    Returns `(still_favoured, close_reason)`. Three outcomes, not two: a confirmed
+    TAKE is `(True, None)` and licenses floating past the time-stop deadline; a
+    confirmed non-TAKE is `(False, "reason")` and closes immediately. Missing scan
+    data is `(False, None)` — deliberately *not* the same as a confirmed TAKE. Failing
+    open into "still favoured" here would suppress the ordinary floor-based time-stop
+    for every position that simply lacks a fresh scan row, which is the common case,
+    not an edge case — this was caught by the existing test suite regressing before
+    the fix. Missing data means "no opinion," so it falls through to the unmodified
+    time-stop logic below rather than either forcing a close or forcing a float.
+    """
+    row = store.result_for(pos["coin"], pos["exchange"])
+    if not row:
+        return False, None
+    verdict, score = row.get("verdict"), row.get("score")
+    if verdict == "TAKE" and score is not None and float(score) >= MIN_SCORE:
+        return True, None
+    return False, f"verdict is now {verdict} ({score}) while in profit"
 
 
 def _review(pos: dict) -> str | None:

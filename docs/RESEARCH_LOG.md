@@ -447,3 +447,39 @@ backtested against this account's own history the way Round 1's stop-width chang
 was. Watch score distributions and TAKE rate over the next batch of trades for a
 sudden shift, and whether Ichimoku-favorable trades outperform the rest once there's
 a large enough sample to split on it.
+
+## Round 8 (user-directed, 2026-08-20) — active management for profitable positions
+
+**Change requested:** for a position currently in profit, re-check the indicators/
+conditions every cycle (30s). If the setup still supports more upside, let the
+position float past the time-stop deadline instead of cutting it off. If the
+conditions have turned, close it — don't wait for price to give the gain back.
+
+**Implemented in `agent/demo.py`**: new `_profit_signal_check(pos)`, called from
+`_cycle_one` only when `unrealised_pnl > 0`. Reuses the same latest-scan verdict/
+score lookup `_review()` already used for the funding-period check, but on every
+cycle instead of once per 8h — an 8h cadence can't matter to a ~30-minute hold.
+Three outcomes:
+- Confirmed TAKE → position is exempted from the time-stop this cycle (floats).
+- Confirmed non-TAKE → closes immediately as `signal_exit`, in profit, without
+  waiting for the clock or a real level.
+- No scan row at all → falls through to the *unmodified* time-stop logic.
+
+**A real bug caught by the existing test suite before this ever deployed:** the
+first version treated "no scan data" the same as "confirmed still favoured" (failed
+open to floating). That's wrong and more consequential than it sounds — most cycles
+for most positions won't have a scan newer than the position's own age (scans run
+every 5 min, cycles every 30s), so failing open would have silently suppressed the
+ordinary floor-based time-stop for the common case, not an edge case. Existing test
+5 caught this immediately (a position that should have time-stopped stayed open
+indefinitely instead). Fixed by making `_profit_signal_check` return a genuine
+three-state result (`still_favoured` is only `True` on a *confirmed* TAKE, not on
+an absence of data) rather than a two-state one.
+
+**Tested:** `tests/test_demo_lifecycle.py` now covers all three outcomes explicitly
+(6c/6d/6e) plus the pre-existing 31 checks — 34/34 passing. `signal_exit` added to
+`agent/report.py`'s `EXIT_REASONS` ordering so it groups correctly in reports.
+
+**Scope, as requested:** this only applies to positions currently in profit. Losing
+positions are untouched — they already float unconditionally per Round 6, governed
+only by their real stop-loss.

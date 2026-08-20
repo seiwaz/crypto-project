@@ -112,6 +112,34 @@ price['v'] = stop; demo.cycle()   # the real stop still fires - floating isn't "
 t = store.paper_closed_positions()[0]
 results.append(check("real stop still closes it", t['exit_reason'], 'stopped'))
 
+import agent.demo as D
+BELOW_FLOOR = ENTRY * 1.008   # ~0.2R profit - below the 0.5R floor, above zero
+
+print("6c. A profitable position below the floor floats when confirmed still favoured")
+pid, stop, tp1, tp2 = fresh(opened_ago_s=(demo.time_stop_hours() + 1) * 3600)
+price['v'] = BELOW_FLOOR
+D.store.result_for = lambda coin, ex: {"verdict": "TAKE", "score": 85.0}
+demo.cycle()
+results.append(check("still open, floating on a confirmed TAKE", len(store.paper_open_positions()), 1))
+
+print("6d. A profitable position closes on signal_exit the moment the verdict turns")
+pid, stop, tp1, tp2 = fresh(opened_ago_s=(demo.time_stop_hours() + 1) * 3600)
+price['v'] = BELOW_FLOOR
+D.store.result_for = lambda coin, ex: {"verdict": "SKIP", "score": 41.0}
+demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("exit reason", t['exit_reason'], 'signal_exit'))
+results.append(check("closed in profit, not held for the clock", t['realised_pnl'] > 0, True))
+
+print("6e. Missing scan data does not override the ordinary time-stop either way")
+pid, stop, tp1, tp2 = fresh(opened_ago_s=(demo.time_stop_hours() + 1) * 3600)
+price['v'] = BELOW_FLOOR
+D.store.result_for = lambda coin, ex: None   # no fresh scan data - no opinion, not a float
+demo.cycle()
+t = store.paper_closed_positions()[0]
+results.append(check("falls through to the ordinary time_stop", t['exit_reason'], 'time_stop'))
+D.store.result_for = lambda coin, ex: None   # reset for the tests that follow
+
 print("7. Review exit when the verdict is no longer TAKE")
 pid, *_ = fresh()
 store.paper_update(pid, funding_periods=1)
