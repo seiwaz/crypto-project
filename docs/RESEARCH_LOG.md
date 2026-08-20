@@ -241,8 +241,77 @@ rather than applied silently, per your instruction to flag changes to core code 
 | Automated RVOL gate in `nobitex_api.py` | Live-skill script change, untested | Hold for a dedicated pass |
 | Signal max-age ceiling | Low — doesn't change which trades qualify, only guards against a stalled scanner | Low-risk; could ship independently |
 
-## Round 3 — Expert validation (pending)
+## Round 3 — Critical validation: the BTC-alignment scoring bug (2026-08-20)
 
-To cover: quantitative/published backtests, liquidation and margin-call mechanics per
-exchange documentation, and a critical re-check of Round 1 and 2 assumptions against
-more specialized sources — including the Nobitex fee-schedule flag raised in Round 1 §4.
+Triggered by the watchlist expansion (47 → 69 coins, same day): every coin across two
+full scans came back SKIP, several with scores in the high 70s/80s/90s. That pattern —
+decent scores, but the direction-confirmation gate (needs ≥6/8 checks agreeing) never
+clearing — was suspicious enough on its own to warrant checking whether the gate itself
+was miscalibrated rather than the market genuinely offering nothing, so this round did
+both: external research on multi-indicator confirmation systems, and a direct code
+audit of how the 8 checks are actually computed for the live Toobit scans.
+
+### The bug
+
+`agent/skill.py`'s docstring claims "the Toobit adapter imports [`score_direction`]
+rather than growing a second copy... so both venues score a chart identically." True
+for 6 of 8 checks — but the 2 the skill marks MANUAL ("BTC / dominance alignment",
+"funding rate not crowded") get resolved with Toobit-specific logic in
+`agent/toobit.py: resolve_manual_checks()`, and that resolution is where the actual bug
+lived. The BTC-alignment check was resolved for **every non-BTC coin using only BTC's
+own trend** — `long: btc["bullish"], short: not btc["bullish"]` — regardless of what
+that specific coin was doing.
+
+This is the *exact* mistake this project already found and fixed once, in a different
+place: `agent/demo.py`'s `counter_trend()` gate used to veto trades based on BTC's trend
+alone, and commit `7356609` proved that backwards — it blocked shorts on coins already
+in their own downtrend purely because BTC was rising, and passed shorts on coins
+outperforming BTC. That fix was never backported to `resolve_manual_checks()`, which
+kept applying the disproven logic silently, inside the *score itself*, on every single
+scan, for every non-BTC coin — not as an optional gate someone could see and question,
+but baked into whether a coin could ever reach the 6/8 threshold at all.
+
+### External confirmation
+
+Two searches, both converging on the same conclusion already reached internally:
+
+**Requiring near-unanimous multi-indicator agreement is a known trap** ("indicator
+paralysis") — most practitioners find 2-3 *independent* factors sufficient, and
+critically, "the strongest confluence combines factors from genuinely different
+methods rather than several versions of the same one." Three of this system's six
+automated checks (price vs EMA200, EMA50 vs EMA200, price vs EMA50) are variations on
+one trend read, not independent evidence — inflating the effective bar past what "6 of
+8" suggests, since a genuinely mixed/transitional period can easily split three
+correlated EMA reads against each other.
+
+**Blanket BTC-trend gating for altcoins is a recognized anti-pattern.** Published
+practice screens for *relative strength* — "coins showing higher lows while BTC makes
+lower lows... being strongest candidates" — treating divergence from BTC as a signal
+worth taking, not a disqualifier. A check that forces every altcoin's directional score
+to agree with BTC's own bias does the opposite: it structurally can't reward the exact
+relative-strength setups professional screening looks for.
+
+### The fix (applied 2026-08-20)
+
+`resolve_manual_checks()` now resolves the BTC-alignment check from the **instrument's
+own trend first** (`correlation.coin_regime()`, decision-timeframe), falling back to
+BTC's trend only when the coin has no clear trend of its own — the same philosophy as
+`demo.counter_trend()`, applied where it was missing. Verified against live data before
+deploying: AXS was trending +7.91% on its own 4h chart at the time, while BTC sat below
+its 1D EMA200 — under the old code AXS's BTC-check was forced to favour short despite
+its own uptrend; under the fix it correctly favours long. FIL and GALA, which had no
+clear trend of their own at the same moment, correctly still fall back to BTC's bias —
+the fix narrows the bug's blast radius rather than removing the BTC signal outright.
+
+**Effect on the account:** this changes which trades qualify going forward, similar in
+kind to the ATR/hold-window fix in Round 1 (`6ad4eef`) that reset the sample. Only 6
+trades have closed since the 2026-08-17 reset — worth deciding with the user whether to
+reset again now that a real scoring bug (not a parameter tweak) has been fixed, rather
+than deciding that unilaterally here.
+
+### Round 3 — still pending
+
+Quantitative/published backtests, liquidation and margin-call mechanics per exchange
+documentation, and the Nobitex fee-schedule re-verification flagged in Round 1 §4
+remain undone — this round covered the specific issue the watchlist expansion surfaced,
+not a full scheduled Round 3 pass.

@@ -540,13 +540,25 @@ def _btc_bias(bias_tf: str, count: int) -> dict | None:
         return result
 
 
-def resolve_manual_checks(checks: list[dict], *, coin: str, funding: dict | None,
+def resolve_manual_checks(checks: list[dict], *, coin: str, symbol: str,
+                          decision_interval: str, funding: dict | None,
                           btc: dict | None) -> list[dict]:
     """Fill in the two checks the skill marks MANUAL, where Toobit can settle them.
 
     Anything not genuinely settled stays MANUAL. In particular the skill's check is
     "BTC / dominance alignment" and Toobit gives no dominance figure, so the observed
     string says plainly that only the BTC leg was resolved.
+
+    The BTC leg resolves to the *instrument's own* trend first, falling back to BTC's
+    only when the coin has no trend of its own. Gating every coin's score on BTC's
+    trend regardless of its own behaviour was tried and measured backwards elsewhere
+    in this codebase (`demo.counter_trend`, commit 7356609): it blocked shorts on
+    coins already falling in their own downtrend purely because BTC was rising, and
+    passed shorts on coins outperforming BTC. This check reused the old logic and
+    silently applied that same bias to every scan's score, not just the demo's entry
+    gate — worth fixing in one place since both draw from this function. A coin with
+    no clear trend of its own genuinely has nothing else to go on, which is the only
+    case BTC's trend is used here.
     """
     out = []
     for check in checks:
@@ -555,18 +567,30 @@ def resolve_manual_checks(checks: list[dict], *, coin: str, funding: dict | None
             out.append(check)
             continue
 
-        if name.startswith("BTC / dominance") and btc:
+        if name.startswith("BTC / dominance"):
             if coin.upper() == "BTC":
                 out.append({**check, "long": True, "short": True,
                             "resolved_by": "toobit",
                             "observed": "this is BTC — alignment is self-referential"})
-            else:
+                continue
+            from . import correlation  # noqa: PLC0415 - avoids a toobit<->correlation import cycle
+            own = correlation.coin_regime(symbol, decision_interval)
+            if own and own["label"] != "range":
+                up = own["label"] == "up"
+                out.append({**check, "long": up, "short": not up,
+                            "resolved_by": "toobit",
+                            "observed": (f"{coin} own {decision_interval} trend: "
+                                         f"{own['label']} ({own['move_pct']:+.2f}%)")})
+            elif btc:
                 out.append({**check, "long": btc["bullish"], "short": not btc["bullish"],
                             "resolved_by": "toobit",
                             "observed": (
+                                f"{coin} has no clear trend of its own; falling back to "
                                 f"BTC {'above' if btc['bullish'] else 'below'} EMA200 on "
                                 f"{btc['timeframe']} ({btc['close']:.6g} vs "
                                 f"{btc['ema200']:.6g}); dominance not covered")})
+            else:
+                out.append(check)
             continue
 
         if name.startswith("funding rate") and funding:
@@ -672,8 +696,10 @@ def build_snapshot(entry: dict, profile: str, count: int = 300) -> tuple[dict, d
     snap["btc_bias"] = btc
 
     ds = skill.score_direction(profile, tfs)
-    ds["checks"] = resolve_manual_checks(ds["checks"], coin=entry["coin"],
-                                         funding=funding, btc=btc)
+    ds["checks"] = resolve_manual_checks(
+        ds["checks"], coin=entry["coin"], symbol=symbol,
+        decision_interval=tfs.get("decision", {}).get("resolution") or "4h",
+        funding=funding, btc=btc)
     # Recount: checks the venue just settled are now automated, not manual.
     auto = [c for c in ds["checks"] if c["long"] is not None]
     manual = [c for c in ds["checks"] if c["long"] is None]
