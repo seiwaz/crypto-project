@@ -651,3 +651,50 @@ the sync rule. No code, no test, and no deploy needed — this was a documentati
 round; the compile-check/restart deploy pipeline doesn't touch `SKILL.md` or
 `references/*.md`, which are read fresh from disk, so no server-side action is
 required for this to take effect for anyone reading the skill.
+
+## Round 13 (user-reported, 2026-08-20) — the same coin could be opened twice at once
+
+**Report:** while checking open positions live, found two separate WIF positions open
+simultaneously (ids 436 and 438, different slots, opened 2.5 minutes apart from
+consecutive scans 380 and 381) — doubling WIF's single-name risk beyond the
+one-slot-per-coin design the slot/heat model assumes.
+
+**Root cause: `qualifying_signals()`'s re-entry guard (`agent/demo.py`, the
+`open_coins` set) only read `store.paper_open_positions()`, which filters
+`status = 'open'`.** This account trades with `maker_entry` on, so a qualifying signal
+doesn't fill immediately — it places a resting limit order at `status = 'pending'`
+(`agent/store.py: paper_open`/`paper_pending_positions`) that only flips to `'open'`
+once price actually trades through it (`_work_pending`), or gets cancelled after
+`maker_timeout_minutes` (2 min) unfilled. While a coin's own order sits in that
+pending window, it is invisible to `open_coins` — so a fresh scan a few minutes later
+(inside that same 2-minute window) saw the coin as "not open" and queued a second
+entry for it. `correlated_same_side()`'s cap check (`agent/demo.py`, called from
+`try_fill_slots`) had the identical gap — it was also passed only
+`store.paper_open_positions()`.
+
+Both gaps share one cause: a pending position already carries the real committed risk
+(`margin`/`risk_amount`/`stop`/`tp1`/`tp2` are all set at placement time in `_open()`,
+identically for `status='open'` and `status='pending'` — only the fill/fee timing
+differs) but neither guard treated it as "already have exposure to this coin/cohort"
+until it filled.
+
+**Fixed:** both guards now union `paper_open_positions()` with
+`paper_pending_positions()` before checking. `qualifying_signals()`'s `open_coins`
+and the `correlated_same_side()` call in `try_fill_slots()` both changed.
+
+**Known, deliberately not fixed this round:** `state()`'s `slots.filled` and the
+displayed `heat.used_pct` still count `paper_open_positions()` only, not pending. This
+means capacity/heat can still be briefly undercounted *across separate
+`try_fill_slots()` calls* while a maker order is pending (bounded to the 2-minute
+maker-timeout window, and only ever an undercount, never an overcount, since heat is
+correctly added within a single call before any placement in that call). This is a
+narrower, lower-severity version of the same class of gap — worth a look if it's ever
+seen to matter in practice, but the fix in this round already closes the specific,
+demonstrated failure (the same coin doubled up), and widening `state()`'s displayed
+position list to include unfilled orders is a separate, UI-facing change with its own
+trade-offs (showing a resting order as if it were a filled position with
+mark-to-market PnL would be misleading) that wasn't part of what broke here.
+
+**Tested:** added test 9c to `tests/test_demo_lifecycle.py` — a coin with a pending
+(not yet open) order is correctly excluded from `qualifying_signals()`. 42/42 checks
+passing (40 prior + 2 new, since 9c has two assertions).

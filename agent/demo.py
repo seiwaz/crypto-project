@@ -665,7 +665,16 @@ def qualifying_signals() -> list[dict]:
     missing ties keep their scan order instead of being broken on a guess.
     """
     cfg = settings()
+    # Both open (filled) and pending (resting maker limit, not yet filled) positions
+    # block a re-entry into the same coin. `paper_open_positions()` alone missed the
+    # pending ones — found 2026-08-20, live: a coin's own resting limit order doesn't
+    # make it into `status = 'open'` until it fills, so a scan a few minutes later
+    # (still inside the up-to-maker_timeout_minutes pending window) saw the coin as
+    # "not open" and queued a second entry for it. This account did exactly that on
+    # WIF — two live positions in the same coin at once, doubling its single-name risk
+    # beyond the one-slot-per-coin design the slot/heat model assumes.
     open_coins = {p["coin"] for p in store.paper_open_positions()}
+    open_coins |= {p["coin"] for p in store.paper_pending_positions()}
     closed_at = store.paper_last_close_times()
     out = []
     for row in store.latest_results(cfg["exchange"]):
@@ -1234,7 +1243,10 @@ def try_fill_slots() -> dict:
                            f"{row['side']} at corr {against['correlation']:.2f}"))
             continue
 
-        blocked = correlated_same_side(row, store.paper_open_positions())
+        # Same reasoning as the open_coins guard above: a pending order carries the
+        # same committed risk as an open one and must count toward the cap.
+        blocked = correlated_same_side(
+            row, store.paper_open_positions() + store.paper_pending_positions())
         if blocked:
             declined.append({"coin": row["coin"], "code": "correlated", **blocked})
             record(row, rank, "declined", "correlated", mark=proposal["entry"],

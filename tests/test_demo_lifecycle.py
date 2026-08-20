@@ -224,6 +224,27 @@ tied_row["side_tied"] = 0
 results.append(check("same signal qualifies once side_tied clears",
                      [r["coin"] for r in demo.qualifying_signals()], ["TIEDCOIN"]))
 
+print("9c. A coin with a still-pending (unfilled maker) order is not re-entered")
+# The bug (found live 2026-08-20): qualifying_signals()'s open_coins guard only read
+# paper_open_positions(), which filters status='open'. A resting maker limit order
+# sits at status='pending' until it fills, so it was invisible to the guard - a scan
+# a few minutes later (still inside the maker-timeout window) saw the coin as "not
+# open" and queued a second entry. This account did exactly that on WIF live.
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+row = {"coin": "WIF", "symbol": "WIF-SWAP-USDT", "exchange": "toobit", "side": "long",
+       "verdict": "TAKE", "score": 80.0, "fetched_at": "2099-01-01T00:00:00+00:00",
+       "plan_json": None, "scan_id": 1}
+demo.store.latest_results = lambda ex: [row]
+results.append(check("eligible before any order exists",
+                     [r["coin"] for r in demo.qualifying_signals()], ["WIF"]))
+
+store.paper_open(status='pending', limit_price=0.16, placed_ts=paper.now_ts(),
+    coin='WIF', symbol='WIF-SWAP-USDT', exchange='toobit', side='long', slot=1,
+    contracts=10, entry_price=0.16, leverage=5.0, margin=1.0, risk_amount=RISK,
+    stop=0.15, tp1=0.17, tp2=0.18, opened_ts=paper.now_ts(), entry_fee=0.0)
+results.append(check("blocked while its own order is still pending, not yet open",
+                     [r["coin"] for r in demo.qualifying_signals()], []))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
