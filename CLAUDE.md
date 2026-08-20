@@ -177,7 +177,7 @@ thrashing":**
 - The routine never has, and must never be given, exchange credentials of any kind.
   This stays paper-trading-only regardless of what looks promising.
 
-## Current state (updated 2026-08-20 — keep this section current, don't let it rot)
+## Current state (updated 2026-08-21 — keep this section current, don't let it rot)
 
 - **Demo account:** running since the 2026-08-20 reset after the Round 3
   BTC-alignment fix; check `/api/demo/report` for the live closed-trade count before
@@ -190,7 +190,7 @@ thrashing":**
   enough trades close under Round 10's fix to judge it on its own. No further reset
   has been done since Round 10; consider whether one is warranted before trusting
   aggregate stats too far.
-- **Live trading configuration, as of Round 10 (all via `config/strategy-tuning.json`
+- **Live trading configuration, as of Round 13 (all via `config/strategy-tuning.json`
   unless noted as a code change):**
   - `profile: "scalp"` (5-15m entries, 15m decision TF, 1H bias) — switched from
     `intraday` at the user's request for a 5-30 minute holding strategy (Round 4).
@@ -235,6 +235,31 @@ thrashing":**
     only in the server's live `settings.json` (`demo.reset_password`), never in this
     public repo, never returned by `/api/settings`. Ask the user for it if a reset is
     ever needed from a fresh session; don't guess or search for it in files.
+  - `agent/paper.py: exit_reason()` (Round 11, 2026-08-20, **critical, capital-
+    affecting bug in the paper account**) used a `low <= level <= high` range-
+    containment check for stop/tp1/tp2, when only a one-sided comparison is correct
+    (`low <= stop` for a long, etc — `liq` right next to it was already written this
+    way). The bug: once price moved cleanly past a stop and stayed there, the most
+    recent candle's own high no longer reached back up to the old stop level, so the
+    check silently stopped firing *forever*, even with the position sitting far past
+    its stop. Found live (UNI and ARB both sitting ~170 minutes past their stop,
+    never closing); both closed within seconds of the fix deploying, both net
+    positive since TP1 had already banked before the drift. Fixed with direct
+    one-sided comparisons; 4 new unit tests added directly against `exit_reason()`.
+    Full writeup: `docs/RESEARCH_LOG.md` Round 11.
+  - `qualifying_signals()`'s re-entry guard and `correlated_same_side()`'s cap check
+    (Round 13, 2026-08-20) only read `store.paper_open_positions()`
+    (`status='open'`), missing resting maker limit orders sitting at
+    `status='pending'` until they fill — so a coin's own still-unfilled order didn't
+    block a second entry into that same coin from a later scan, inside the same
+    `maker_timeout_minutes` (2 min) window. Caught live: two simultaneous WIF
+    positions from consecutive scans. Both guards now union open + pending
+    positions. **Known, deliberately not fixed:** `state()`'s displayed
+    `slots.filled`/`heat.used_pct` still count open-only, so capacity/heat can be
+    briefly undercounted *across separate `try_fill_slots()` calls* while an order is
+    pending — bounded to that same 2-minute window, and a narrower version of the
+    same class of gap, not the specific bug that was demonstrated and fixed. Full
+    writeup: `docs/RESEARCH_LOG.md` Round 13.
 - **Round 10 findings (213-trade review, mixed pre/post-fix sample):** the headline
   finding was **zero of 213 trades were short** — traced to `skill.side_from_direction()`
   defaulting to long on any tie or near-tie instead of a symmetric margin-based
@@ -253,6 +278,17 @@ thrashing":**
   signal above the pass bar; ZRO, WLD, UNI, MORPHO, KAS, INJ, PENGU, TIA, JTO, ASTER
   were the worst-performing coins, ENA, EIGEN, ONDO, SUI, IMX, JUP the best. Full
   writeup in `docs/RESEARCH_LOG.md` Round 10.
+- **Round 12 (2026-08-20, docs-only):** researched the "risk-free trade" concept
+  (breakeven-stop-after-partial-exit, cited sources in `docs/RESEARCH_LOG.md`) and
+  confirmed Round 10's TP1-lock (`_reduce_at_tp1` locking the runner's stop at the
+  TP1 fill price, not breakeven) is a correct, more conservative variant of the
+  standard mechanism — no code change needed. It did find `skill/SKILL.md` had
+  drifted: it still described the *old* pre-Round-10 "breakeven + accumulated costs"
+  rule. Fixed `SKILL.md`'s management-rules line and added `skill/references/risk-
+  math.md` §10 (the three stop-placement variants, their floors/trade-offs,
+  citations). Synced to `~/.claude/skills/crypto-leverage-trade-plan/`. A reminder
+  that skill docs can silently drift from what `agent/demo.py` actually does —
+  worth a periodic side-by-side check, not just when directly asked.
 - **Research:** Round 1 (retrospective — fixes shipped in commits `459c994` through
   `a515b5d`) and Round 2 (public-source: correlation crash-asymmetry, trend quality vs.
   direction, RVOL threshold gap, event-risk/signal-freshness gaps) are done, written up
@@ -325,19 +361,32 @@ thrashing":**
      scan` calls in quick succession, one cancelled mid-flight) rather than a code bug;
      no exception or deadlock was found in logs. If it recurs without heavy manual
      testing, treat as a real bug and dig into `scanner.py`/`correlation.py`'s locking.
+  4. **Fixed, later the same day:** the `exit_reason()` range-containment bug
+     (Round 11) and the pending-order same-coin double-entry bug (Round 13) — both
+     detailed as bullets under "Live trading configuration" above rather than
+     repeated here. Both were found the same way: checking live positions/trades
+     against what the code should be doing, not from a report or metric alone —
+     worth remembering as the pattern that keeps finding real bugs in this system.
 
 ## What needs to continue (pick this up without being re-asked)
 
 1. Keep letting the demo account run; the autonomous routine may reset gates/params
    via `strategy-tuning.json` or code, but nothing should reset the *account itself*
    (capital, trade history) without a clear reason — that restarts the sample.
-2. Watch how the Round 10 fixes actually play out with a real sample: does short-side
-   trading actually appear now (check `by side` in `/api/demo/report`'s trades — it
-   should no longer be 100% long), and does the tighter TP1-lock stop cause more
-   runner stop-outs right after TP1 than the old breakeven stop did (a real trade-off
-   the round's log flagged, not yet measured). Worth a deliberate account reset once
-   there's confidence the current configuration is stable, so the next sample isn't
-   mixing pre/post-Round-10 trades the way the 213-trade review had to.
+2. Watch how the Round 10 fixes actually play out with a real sample. **Partially
+   confirmed 2026-08-20/21:** shorts are being generated again at the scan level (a
+   live watchlist scan showed 33 long / 5 short across 38 coins, one short reaching
+   WATCH) — the market itself has just been broadly bullish, which is why closed and
+   open demo trades have stayed long-heavy; this is not the Round 10 bug recurring.
+   If short trades ever go conspicuously quiet again, re-check `side_from_direction`
+   and `DIRECTION_MARGIN` before assuming it's just the market. Still unmeasured:
+   whether the tighter TP1-lock stop causes more runner stop-outs right after TP1
+   than the old breakeven stop did (the round's log flagged this trade-off, not yet
+   measured with real data). Given Rounds 11 and 13 also changed live behavior since
+   the account was last reset (2026-08-20, post-Round-3), worth a deliberate account
+   reset once there's confidence the current configuration (through Round 13) is
+   stable, so the next sample isn't mixing trades opened under materially different
+   bug-fix states the way the 213-trade review had to.
 3. The expert-validation research pass originally planned as "Round 3" got superseded
    same-day by the urgent BTC-alignment scoring bug (which ended up *being* Round 3 —
    see `docs/RESEARCH_LOG.md`). That validation pass — quant/published backtests,
@@ -389,3 +438,18 @@ thrashing":**
   memory, unlike `SKILL.md`/`references/*.md` which are read fresh from disk every
   time. The deploy pipeline handles this automatically now (see the Sync rule), but
   if ever deploying by hand, don't assume a skill script change is "just docs."
+- Level checks in `agent/paper.py: exit_reason()` (stop/tp1/tp2/liq) must be
+  **one-sided** comparisons (`low <= stop` for a long), never `low <= level <= high`
+  range containment — a real bug (fixed Round 11), not a rare edge case: once price
+  moves cleanly past a level and the most recent candle's own high/low no longer
+  reaches back to it, a range check silently stops firing forever, even with the
+  position sitting far past the level. If a stop/TP is ever reported as "not
+  working" again, check this pattern hasn't crept back in before looking elsewhere.
+- A resting maker limit order (`status='pending'` in `paper_positions`) carries the
+  same committed risk as a filled one (`margin`/`risk_amount`/stop/targets are all
+  set at placement, not at fill) but is easy to leave out of a guard that only reads
+  `store.paper_open_positions()` (`status='open'` only) — that gap let the same coin
+  be entered twice at once before Round 13 fixed `qualifying_signals()`'s
+  `open_coins` and `correlated_same_side()`'s cap check to union open + pending.
+  Any *new* guard or capacity check written against open positions should ask
+  whether a still-pending order needs to count too.
