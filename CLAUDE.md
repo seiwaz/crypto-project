@@ -118,18 +118,39 @@ SSH password to any file in this repo, in any commit, ever — `.env`/`.env.loca
 gitignored for this reason and must stay that way. This applies even to files meant to
 be temporary or "just for reference."
 
-## Autonomous optimization (policy set 2026-08-19 — supersedes the earlier "hold for
-review" stance; that stance is intentionally overridden, not forgotten)
+## Autonomous optimization — STOPPED (2026-08-20, supersedes the 2026-08-19 "full
+autonomy" grant below; do not re-enable without the user explicitly asking)
 
-The user explicitly asked for **full autonomy, running indefinitely**: the cloud
-routine `crypto-demo-performance-check` (`trig_01D72wvtJHdgeYxyMGEcRPs7`, every 6h) may
-research, diagnose, and ship both parameter tuning (`config/strategy-tuning.json`) and
-new code/skill logic (`agent/demo.py`, `skill/`) on its own, without a human review gate
-per change. This was a deliberate reversal after I (Claude) raised the overfitting risk
-explicitly and the user confirmed they wanted full autonomy anyway — see this
-project's conversation history around 2026-08-19 if the reasoning ever needs
-revisiting, but treat the policy itself as settled, not open to re-litigating each
-session.
+**The cloud routine `crypto-demo-performance-check` (`trig_01D72wvtJHdgeYxyMGEcRPs7`)
+is disabled (`enabled: false`) as of 2026-08-20.** The user's own words: "stop routine
+and do not use it, I will continue the develop and verifies by claude code myself."
+Development and verification now happen through interactive Claude Code sessions
+(like the one that made Rounds 4-10) with the user directing changes directly, not
+through the unattended cloud routine. Practically:
+- Don't trigger the routine (`RemoteTrigger action: "run"`) for anything.
+- Don't re-enable it (`enabled: true`) unless the user asks for that specifically —
+  disabling was a deliberate policy reversal, not a temporary pause for a bug.
+- It cannot be deleted from this session (`RemoteTrigger` has no delete action) — if
+  the user wants it gone entirely, point them to `https://claude.ai/code/routines`.
+- **Known unresolved issue, irrelevant now but worth knowing if this is ever
+  revisited:** the routine's last three scheduled runs (2026-08-20, 00:43/06:43/12:43
+  UTC) all failed identically with `403 Resource not accessible by integration` on
+  every write attempt (`git push` and the GitHub MCP fallback both) — its GitHub App
+  connector had read-only access, not write. It correctly detected this each time,
+  pushed a notification, and made no fabricated changes. Grant "Contents: Read &
+  write" at `https://claude.ai/admin-settings/claude-tag` (or reconnect the connector)
+  before ever re-enabling it, or it will just fail the same way again.
+
+### Prior policy, for the record (2026-08-19 — no longer in effect)
+
+The user had explicitly asked for **full autonomy, running indefinitely**: the
+routine could research, diagnose, and ship both parameter tuning
+(`config/strategy-tuning.json`) and new code/skill logic (`agent/demo.py`, `skill/`)
+on its own, without a human review gate per change. That was itself a deliberate
+reversal after I (Claude) raised the overfitting risk explicitly and the user
+confirmed they wanted full autonomy anyway. The full-autonomy grant is what's been
+superseded now, not the original overfitting-risk conversation — see this project's
+history around 2026-08-19 if that reasoning ever needs revisiting.
 
 **The target is expectancy and real profit — never win rate as a goal in itself.**
 This system's own data already shows >~43% win rate isn't reachable without destroying
@@ -252,13 +273,12 @@ thrashing":**
   - Signal max-age ceiling (low-risk — doesn't change which trades qualify)
   Check whether an auto `Round N` entry has already applied (or reverted) one of these
   before assuming it's still untouched.
-- **Monitoring + optimization:** `crypto-demo-performance-check` polls
-  `/api/demo/report` every 6h, keeps this section's demo-account line current every
-  run, and — once 20+ new trades have closed since the last checkpoint — logs to
-  `docs/PERFORMANCE_LOG.md` and runs a full diagnose → research → apply-or-revert cycle
-  (see "Autonomous optimization" above). `docs/PERFORMANCE_LOG.md` and `docs/
-  RESEARCH_LOG.md`'s auto `Round N` entries are the actual current-state source of
-  truth for anything performance-related — this file summarizes, it doesn't replace them.
+- **Monitoring + optimization: STOPPED (2026-08-20)** — `crypto-demo-performance-check`
+  is disabled at the user's explicit request; nothing is polling, logging checkpoints,
+  or auto-tuning right now. See "Autonomous optimization" above. Keeping this
+  section's demo-account line current, watching `docs/PERFORMANCE_LOG.md` (frozen at
+  whatever it last held), and any further tuning are all manual/interactive now —
+  don't assume any of it is still happening in the background.
 - **Phase 4 (real-money connection) is explicitly gated and NOT covered by the
   autonomy grant above**: only propose it after ≥100 demo trades with stable positive
   expectancy across ≥3 consecutive evaluation periods, and never connect to a real
