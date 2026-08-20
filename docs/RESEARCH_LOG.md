@@ -382,3 +382,30 @@ position gets stopped out by ordinary noise rather than a real reversal — none
 the 11 Round-4 trades got close to their stop (worst was COMP at −0.215R against a
 −1.0R stop), so that risk wasn't visible yet, but it's the thing a narrower stop
 could newly introduce.
+
+## Round 6 (user-directed, 2026-08-20) — floating time-stop: never lock in a loss on the clock
+
+**Change requested:** the fixed 30-minute deadline was closing everything indiscrim-
+inately — winners below the 0.5R floor (ZRO +0.256R, ARB +0.239R) and small losses
+alike (Round 4/5 data). The user asked for the clock to stop applying to a position
+that's currently underwater: wait for breakeven or a real take-profit instead of
+force-closing at a loss on a timer.
+
+**Implemented in `agent/demo.py: _cycle_one`**: the time-stop condition changed from
+`pnl_now < floor_usdt` to `0 <= pnl_now < floor_usdt` — it now only fires on a
+position that is flat-or-ahead but not clearing the profit floor. A position
+currently in loss skips the clock entirely from then on; it's governed only by its
+real stop-loss (which still fires normally — this is not "never exits") and TP1/TP2,
+same as before. Re-checked every cycle, so a position that dips negative, then
+recovers to breakeven+, becomes eligible for the ordinary floor test again.
+
+**Trade-off, stated in the code comment and here for visibility:** a losing position
+is no longer bounded by time, only by its stop distance — it can occupy a slot and
+margin for longer than the old fixed window allowed. That capacity cost is real and
+worth watching in the account's slot utilization, not assumed away.
+
+**Tested:** existing suite (`tests/test_demo_lifecycle.py`) passed unchanged
+(28/28) — confirms this didn't disturb the winner-side "still open below floor"
+case, which was already floating in one direction. Added test 6b for the new
+loss-side behavior specifically (position stays open while underwater past the
+deadline; its real stop still closes it when hit) — 30/30 passing.

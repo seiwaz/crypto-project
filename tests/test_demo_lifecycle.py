@@ -103,6 +103,15 @@ price['v'] = ENTRY + 0.6*(tp1-ENTRY)/1.5*1.5   # ~0.9R, below tp1
 demo.cycle()
 results.append(check("still open", len(store.paper_open_positions()), 1))
 
+print("6b. Time stop does NOT fire on a losing position - it floats to breakeven or the stop")
+pid, stop, tp1, tp2 = fresh(opened_ago_s=(demo.time_stop_hours() + 1) * 3600)
+price['v'] = ENTRY * 0.999   # a small loss, well past the deadline
+demo.cycle()
+results.append(check("still open while underwater", len(store.paper_open_positions()), 1))
+price['v'] = stop; demo.cycle()   # the real stop still fires - floating isn't "never exits"
+t = store.paper_closed_positions()[0]
+results.append(check("real stop still closes it", t['exit_reason'], 'stopped'))
+
 print("7. Review exit when the verdict is no longer TAKE")
 pid, *_ = fresh()
 store.paper_update(pid, funding_periods=1)

@@ -846,14 +846,21 @@ def _cycle_one(pos: dict) -> dict:
 
     # Time stop, measured in hours and compared in USDT.
     #
-    # Both halves must hold: long enough, and not going anywhere. A position that has
-    # made its floor is left alone however long it has been open — the stop is for
-    # trades that are idle, not for trades that are merely slow.
+    # Floating, at the user's request (2026-08-20): the clock only closes a position
+    # that is flat or ahead but not making the required progress — it never locks in
+    # a loss on a timer. A position currently underwater is left alone past the
+    # deadline, re-checked every cycle, until price either recovers to breakeven+ (at
+    # which point the same floor test applies again) or the trade resolves on its own
+    # terms — the real stop-loss or a take-profit. This trades one risk for another:
+    # a losing position is no longer bounded by time, only by its stop distance, so it
+    # can occupy a slot/margin for longer than before. Watch for that trade-off rather
+    # than assuming it away.
     hours_held = (paper.now_ts() - float(pos["opened_ts"])) / 3600.0
     limit_hours = time_stop_hours()
     floor_usdt = time_stop_floor_usdt(pos)
     pnl_now = st.get("unrealised_pnl")
-    if hours_held >= limit_hours and pnl_now is not None and pnl_now < floor_usdt:
+    if (hours_held >= limit_hours and pnl_now is not None
+            and 0 <= pnl_now < floor_usdt):
         realised = _close(pos, spec, mark, "time_stop")
         return {"coin": pos["coin"], "action": "CLOSE", "reason": "time_stop",
                 "hours_held": round(hours_held, 2), "limit_hours": limit_hours,
