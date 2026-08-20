@@ -422,6 +422,20 @@ drawdown when BTC breaks. Don't treat a single measured correlation as a stable
 property of a coin; treat it as regime-conditional, and expect it to jump toward the
 tail figure precisely when a fast BTC move starts, not before.
 
+**"BTC alignment" means the coin's own trend first, BTC only as a fallback.** Found
+2026-08-20 in the demo's live Toobit scoring: a "BTC / dominance alignment" check was
+being resolved from BTC's own trend for every coin, regardless of that coin's actual
+behavior — i.e. a short only counted as favoured when BTC itself was falling, even if
+the coin was already in its own clear downtrend independent of BTC. This is backwards
+for the same reason §14's crash-correlation note matters: professional screening looks
+for coins *diverging* from BTC (relative strength/weakness) as the stronger signal, not
+coins merely moving in lockstep with it. The fix, verified live: check the instrument's
+**own** trend first (price vs its own EMA200 plus recent structure); fall back to BTC's
+trend only when the coin has no clear trend of its own. Two consecutive full-watchlist
+scans went from zero qualifying setups to seven, immediately, once this was corrected —
+a single blanket-BTC check can silently suppress a large share of real opportunities.
+Full writeup: this repo's `docs/RESEARCH_LOG.md`, Round 3.
+
 ---
 
 ## 15. Trend quality, not just direction (Choppiness Index / Efficiency Ratio)

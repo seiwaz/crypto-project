@@ -147,13 +147,14 @@ thrashing":**
 - The routine never has, and must never be given, exchange credentials of any kind.
   This stays paper-trading-only regardless of what looks promising.
 
-## Current state (updated 2026-08-19 — keep this section current, don't let it rot)
+## Current state (updated 2026-08-20 — keep this section current, don't let it rot)
 
-- **Demo account:** reset 2026-08-17, 1000 USDT starting capital. As of 2026-08-19:
-  **1 of 30 minimum-sample trades closed** (win_rate 0%, expectancy −0.12R on n=1 — not
-  remotely meaningful yet; check `/api/demo/report` for the live number before saying
-  anything about performance). This line is kept current automatically by the cloud
-  routine every ~6h.
+- **Demo account:** reset 2026-08-20 (0 of 30 minimum-sample trades closed), 1000 USDT
+  starting capital — reset specifically because the Round 3 BTC-alignment scoring fix
+  (see below) changes which trades qualify, so the prior small sample (6 closed, mixed
+  pre/post-fix) was no longer measuring one consistent configuration. Check
+  `/api/demo/report` for the live number before saying anything about performance. This
+  line is kept current automatically by the cloud routine every ~6h.
 - **Research:** Round 1 (retrospective — fixes shipped in commits `459c994` through
   `a515b5d`) and Round 2 (public-source: correlation crash-asymmetry, trend quality vs.
   direction, RVOL threshold gap, event-risk/signal-freshness gaps) are done, written up
