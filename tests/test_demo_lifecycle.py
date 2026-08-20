@@ -27,6 +27,38 @@ demo._latest_candle = lambda sym: {'high': price['v'], 'low': price['v'],
                                    'open': price['v'], 'close': price['v'], 'volume': 0}
 demo._trail_stop = lambda pos, plan, spec: None
 
+def check(label, got, want, tol=1e-6):
+    ok = abs(got-want) <= tol if isinstance(want, float) else got == want
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}: got {got!r}, want {want!r}")
+    return ok
+
+results = []
+
+print("0. exit_reason detects a stop the price has moved cleanly past, not just touched")
+# The bug (found live 2026-08-20): touched() required stop <= high too, a range-
+# containment check. Once price gaps past the stop and the most recent candle's own
+# high no longer reaches back up to the old level, that check silently never fires
+# again - the exact "stop stopped working" symptom. A long's stop only needs
+# low <= stop; a short's only needs high >= stop. Neither should care about the
+# opposite bound.
+results.append(check("long: candle range entirely below a stop it gapped past",
+                     paper.exit_reason('long', high=90.0, low=85.0, stop=95.0,
+                                       tp1=None, tp2=None, liq=None),
+                     ('stopped', 95.0)))
+results.append(check("long: not yet reached (candle range entirely above the stop)",
+                     paper.exit_reason('long', high=99.0, low=96.0, stop=95.0,
+                                       tp1=None, tp2=None, liq=None),
+                     None))
+results.append(check("short: candle range entirely above a stop it gapped past",
+                     paper.exit_reason('short', high=105.0, low=101.0, stop=100.0,
+                                       tp1=None, tp2=None, liq=None),
+                     ('stopped', 100.0)))
+results.append(check("long: a target gapped past also still registers (high >= tp1)",
+                     paper.exit_reason('long', high=112.0, low=108.0, stop=None,
+                                       tp1=110.0, tp2=None, liq=None),
+                     ('tp1', 110.0)))
+
+
 def fresh(*, side='long', opened_ago_s=0.0, verdict='TAKE', score=85.0):
     store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
     sign = 1 if side == 'long' else -1
@@ -44,13 +76,6 @@ def fresh(*, side='long', opened_ago_s=0.0, verdict='TAKE', score=85.0):
         stop=stop, tp1=tp1, tp2=tp2, opened_ts=paper.now_ts()-opened_ago_s,
         entry_fee=paper.fee(n), score=score, verdict=verdict, plan_json=json.dumps(plan))
     return pid, stop, tp1, tp2
-
-def check(label, got, want, tol=1e-6):
-    ok = abs(got-want) <= tol if isinstance(want, float) else got == want
-    print(f"  {'PASS' if ok else 'FAIL'}  {label}: got {got!r}, want {want!r}")
-    return ok
-
-results = []
 
 print("1. TP1 takes half and locks the runner's stop at the TP1 price")
 pid, stop, tp1, tp2 = fresh()

@@ -312,28 +312,35 @@ def exit_reason(side: str, high: float, low: float, *, stop: float | None,
 
     Liquidation is checked before the stop, because a position that liquidates is gone
     regardless of where its stop sat.
-    """
-    def touched(level: float | None) -> bool:
-        return level is not None and low <= level <= high
 
+    Each level is a one-sided comparison, not a `low <= level <= high` range
+    containment — found 2026-08-20, live, as the actual cause of stops that stopped
+    working: a long's stop only needs `low <= stop` (price dipped to or below it at
+    some point in the checked range); requiring `stop <= high` too was a real bug —
+    once price moved cleanly past the stop and the most recent candle's own high no
+    longer reached back up to the old stop level, the old range check silently
+    stopped firing forever, even with the position sitting far past its stop. `liq`
+    right below was already written as a one-sided check; `stop`/`tp1`/`tp2` were the
+    ones that had drifted into the wrong pattern.
+    """
     if side == "long":
         if liq is not None and low <= liq:
             return "liquidated", liq
-        if touched(stop):
+        if stop is not None and low <= stop:
             return "stopped", stop
-        if touched(tp2):
+        if tp2 is not None and high >= tp2:
             return "tp2", tp2
-        if touched(tp1):
+        if tp1 is not None and high >= tp1:
             return "tp1", tp1
         return None
 
     if liq is not None and high >= liq:
         return "liquidated", liq
-    if touched(stop):
+    if stop is not None and high >= stop:
         return "stopped", stop
-    if touched(tp2):
+    if tp2 is not None and low <= tp2:
         return "tp2", tp2
-    if touched(tp1):
+    if tp1 is not None and low <= tp1:
         return "tp1", tp1
     return None
 

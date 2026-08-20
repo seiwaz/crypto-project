@@ -560,3 +560,42 @@ not just "above entry").
 **Also**: added a totals row (sum of count/share/P&L, weighted-average of the
 per-bucket averages, not an average of averages) to the "by exit reason" table in
 the web dashboard.
+
+## Round 11 (user-reported, 2026-08-20) — stops that stopped working: a real bug, found live
+
+**Report:** user noticed some positions weren't closing on their stop. Verified live:
+UNI and ARB were both open with mark clearly past their stop (UNI: stop 3.798,
+mark 3.700, long; ARB: stop 0.09103, mark 0.08910, long), both ~170 minutes old.
+
+**Root cause: `agent/paper.py: exit_reason()`'s `touched()` helper used a range-
+containment check (`low <= level <= high`) for stop/tp1/tp2, when only a one-sided
+comparison is correct.** A long's stop only needs `low <= stop` — did price dip to or
+below it at any point in the checked range. Requiring `stop <= high` too silently
+breaks the check the moment price moves cleanly past the stop and stays there: once
+the most recent candle's own high no longer reaches back up to the old stop level,
+`touched()` returns `False` forever, even with the position sitting far past its
+stop. `liq` right next to these checks was already written correctly as a one-sided
+comparison (`low <= liq` for a long) — `stop`/`tp1`/`tp2` are the ones that had
+drifted into the wrong pattern. This is likely as old as the paper broker itself, not
+something introduced this session — it just needed a losing streak with no bounce
+back up to the old stop level to surface, which the tighter 1.0x ATR stop (Round 5)
+and higher trade volume (scalp profile, Round 4) made far more likely to happen.
+
+**Fixed:** replaced the three `touched()` calls with direct one-sided comparisons
+matching the `liq` pattern already sitting right there. Long: `low <= stop`,
+`high >= tp2`, `high >= tp1`. Short: mirrored.
+
+**Tested:** added test 0 to `tests/test_demo_lifecycle.py`, unit-testing
+`paper.exit_reason()` directly against the exact failure shape (a candle range
+entirely on the far side of a gapped-past level) for both a stop and a target, both
+sides. 40/40 checks passing (36 prior + 4 new).
+
+**Not yet known:** how many other currently-open positions besides UNI/ARB were
+affected, or how much this cost historically before being caught — every closed trade
+with `exit_reason: stopped` in the existing sample was still a real stop (the bug only
+suppresses detection, it never fabricates a false one), so past `stopped` trades are
+not in question; the concern is specifically positions that should have stopped but
+didn't, and are still sitting open, or that eventually recovered/were caught by some
+other exit (signal_exit, time_stop) instead of the real level that should have fired
+first. Worth a pass through currently-open positions after this deploys to confirm
+UNI/ARB and anything else past its stop closes on the very next cycle.
