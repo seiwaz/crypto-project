@@ -599,3 +599,55 @@ didn't, and are still sitting open, or that eventually recovered/were caught by 
 other exit (signal_exit, time_stop) instead of the real level that should have fired
 first. Worth a pass through currently-open positions after this deploys to confirm
 UNI/ARB and anything else past its stop closes on the very next cycle.
+
+## Round 12 (user-requested, 2026-08-20) — research "risk-free position" properly, reconcile skill docs with the live Round 10 behavior
+
+**Ask:** research the "risk-free trade" concept from external sources and make sure
+the skill teaches it and the live behavior actually implements it — this had already
+been implemented in code (Round 10's `_reduce_at_tp1` TP1-price stop lock) but never
+formally researched/cited, and `skill/SKILL.md` still described the *old*
+breakeven-plus-costs behavior, so the documented plan a user reads and the code
+actually running had drifted apart.
+
+**Research (WebSearch, both queries logged):**
+- Moving the stop to breakeven after a partial exit is the textbook definition of a
+  "risk-free trade" — the position can no longer produce a net loss from that point
+  forward. Sources:
+  [Trading Heroes](https://www.tradingheroes.com/move-stoploss-breakeven/),
+  [Trade-Guard](https://www.trade-guard.info/en/blog/risk-free-stop-loss-strategy),
+  [MondFX](https://mondfx.com/what-is-risk-free-in-forex),
+  [FeneFX](https://fenefx.com/en/blog/risk-free-in-forex).
+- The canonical partial-exit-then-move-stop pattern is attributed to Mark Minervini:
+  scale out half once gain equals the original risk (1R), move the remaining stop to
+  breakeven. Widely cited as the baseline hybrid approach across practitioner sources.
+- Futures/scalping-specific sources ([TradeZella](https://www.tradezella.com/blog/scalping-strategies),
+  [FeneFX](https://fenefx.com/en/blog/risk-free-in-forex)) confirm the same
+  partial-then-lock-stop mechanism is standard for short-hold scalp strategies
+  specifically, not just swing trading — directly relevant since this system runs a
+  5-30 minute scalp profile.
+- No source described locking the runner's stop at the *partial-exit price itself*
+  (rather than breakeven) under a specific named term — it is a strictly more
+  conservative variant of the same breakeven mechanism, not a distinct published
+  strategy, so it's documented here as a variant with its own explicit trade-off
+  rather than attributed to a source that doesn't describe it.
+
+**Conclusion: the Round 10 implementation is correct and well-grounded**, and is a
+*more* conservative form of the standard risk-free mechanism (floor = TP1's R-multiple
+instead of floor = 0), which fits this system's own finding (Round 10's 213-trade
+review) that reversals right after TP1 were giving back nearly the whole runner under
+the old breakeven-plus-costs stop. No code change needed — `agent/demo.py:
+_reduce_at_tp1` already does this correctly (`runner_stop = price`, the TP1 fill
+price).
+
+**Fixed: `skill/SKILL.md` and `skill/references/risk-math.md` were out of date.**
+`SKILL.md`'s Step 8 management rules still told the reader "on TP1: close 50%, stop to
+breakeven plus accumulated costs" — the *old*, pre-Round-10 behavior. Updated to state
+the actual live rule (stop locked at the TP1 fill price) and point to a new §10 in
+`risk-math.md` that lays out the three variants (breakeven only / breakeven+costs /
+locked-at-TP1-price), their worst-case floors and trade-offs, the citations above, and
+why this system deliberately picked the most conservative of the three. Synced to both
+copies (`skill/` in this repo and `~/.claude/skills/crypto-leverage-trade-plan/`) per
+the sync rule. No code, no test, and no deploy needed — this was a documentation-only
+round; the compile-check/restart deploy pipeline doesn't touch `SKILL.md` or
+`references/*.md`, which are read fresh from disk, so no server-side action is
+required for this to take effect for anyone reading the skill.

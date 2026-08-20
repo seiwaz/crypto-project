@@ -203,3 +203,54 @@ they have.
 
 **Minimum sample before drawing conclusions:** ~30 trades for a rough signal, ~100 for
 a win rate you can trust. Below that you're reading noise.
+
+---
+
+## 10. Risk-free management after TP1
+
+**"Risk-free" is a specific, well-defined state, not a vibe:** the trade can no longer
+lose money from this point forward, because the stop now sits at or beyond the price
+already banked at the partial exit
+([Trading Heroes](https://www.tradingheroes.com/move-stoploss-breakeven/);
+[Trade-Guard](https://www.trade-guard.info/en/blog/risk-free-stop-loss-strategy);
+[MondFX](https://mondfx.com/what-is-risk-free-in-forex)). The mechanism is always the
+same two steps — take a partial exit, then move the stop on the remainder to no worse
+than that exit's price — but practitioners differ on exactly where the stop lands, and
+the difference is not cosmetic:
+
+| Variant | Stop after TP1 | Worst case from here | Trade-off |
+|---|---|---|---|
+| **Breakeven only** | Entry price | ~0 (minus costs already paid) | Widest room for the runner; a round-trip after TP1 gives back nearly the whole trade, netting close to the cost drag alone |
+| **Breakeven + costs** | Entry ± fees/funding paid so far | Exactly 0, fees included | The textbook default; still gives back essentially all of the TP1 gain on a reversal |
+| **Locked at TP1 price** *(what this system uses)* | The TP1 fill price itself | ≈ the TP1 partial's R-multiple, not 0 | Floor is a real profit, not just "didn't lose" — a reversal can only take back the runner's *further* upside; costs more get-stopped-on-noise events right after TP1, because the stop sits much closer to price than a breakeven stop would |
+
+The first two are the standard textbook form of "risk-free": Mark Minervini's rule —
+scale out half once the gain equals the original risk, move the stop to breakeven on
+the rest — is the canonical version of this, cited across practitioner sources as the
+baseline (see the scalping and partial-exit discussion at
+[TradeZella](https://www.tradezella.com/blog/scalping-strategies) and
+[FeneFX](https://fenefx.com/en/blog/risk-free-in-forex)). The third — locking the
+runner's stop at the partial-exit price rather than entry — is a strictly more
+conservative variant of the same mechanism: it still guarantees the trade cannot go
+net-negative from TP1 onward, but it guarantees a *positive* floor instead of a
+break-even one.
+
+**Why this system locks at the TP1 price instead of breakeven** (changed 2026-08-20,
+`agent/demo.py: _reduce_at_tp1`, after a live account showed the breakeven version
+giving back almost the entire runner on ordinary post-TP1 pullbacks, netting the trade
+down to roughly the cost drag alone): on a 5–30 minute scalp hold, price revisiting the
+TP1 level shortly after tagging it is common — normal noise, not necessarily thesis
+failure. A breakeven stop treats that noise the same as a full invalidation and erases
+the trade's whole point. Locking at the TP1 price instead means the runner is only
+ever risking upside already proven, never the gain that's already been banked. This
+is a real trade-off, not a free upgrade: the tighter stop is easier to clip on
+ordinary volatility right after TP1 fires, so expect more `stopped`-after-`tp1`
+sequences than a breakeven stop would produce — that cost is accepted deliberately in
+exchange for never giving back a proven gain. Never move a stop the other way once
+locked; "risk-free" only holds if the stop is only ever tightened, matching the
+"never widen a stop" rule in §8 above.
+
+**State this explicitly in the Management section of every plan** (see the Output
+template's `TP1 action · stop move` line) — don't leave the exact stop level after TP1
+implicit, since the three variants above produce materially different outcomes on a
+reversal and the user should know which one the plan commits to.

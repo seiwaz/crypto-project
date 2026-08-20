@@ -284,7 +284,10 @@ This is where high-leverage scalping usually dies. At 5×, a 0.3% round-trip fee
 
 Management rules to state in the plan, so the exit isn't improvised under pressure:
 
-- On TP1: close 50%, stop to breakeven **plus accumulated costs**
+- On TP1: close 50%, stop **locked at the TP1 fill price itself** — risk-free and
+  strictly better than breakeven, since a reversal can only take back the runner's
+  further upside, never the gain already banked at TP1 (see
+  `references/risk-math.md` §10 for the reasoning and the trade-off this accepts)
 - Trail behind new swing points on the decision TF, not a tight indicator
 - Time stop: ~6 decision-TF candles (scalp) or ~12 (intraday) below 0.5R
 - On Nobitex, before each 8-hour renewal ask "would I open this now?" If no, close
@@ -361,8 +364,9 @@ Read these as needed rather than loading everything upfront:
 
 - **`references/risk-math.md`** — R-multiples, sizing derivation, leverage vs
   liquidation, expectancy, breakeven win rate, cost drag, portfolio heat, journaling
-  fields. Read when the user pushes on the risk model or asks about measuring
-  performance.
+  fields, and risk-free management after TP1 (breakeven vs. locked-at-TP1-price, and
+  why this system uses the latter). Read when the user pushes on the risk model or
+  asks about measuring performance.
 
 ## Scripts
 
