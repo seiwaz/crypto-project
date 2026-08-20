@@ -60,3 +60,36 @@ CRV
 PENGU
 VET
 TIA
+
+# Added 2026-08-20 — liquid Toobit USDT-M perpetuals not previously covered.
+# Selected against 24h quote-volume from GET /quote/v1/ticker/24hr per symbol,
+# filtered to roughly match or exceed this list's own existing floor (KAS at the
+# time was the thinnest included market, ~550K USDT 24h volume). GRAM above is not
+# currently a valid Toobit contract (exchangeInfo returns "Not supported symbols")
+# and has been sitting unscanned; left in rather than silently removed since a coin
+# missing/relisting is exactly the "not scanned, reason shown" case this file's own
+# header describes — worth a human decision, not an automated deletion.
+TON
+LDO
+EOS
+FET
+WIF
+ORDI
+AXS
+JTO
+COMP
+CHZ
+RUNE
+DYDX
+OP
+SEI
+GALA
+EIGEN
+GMX
+IMX
+AR
+STX
+STRK
+ZRO
+NOT
+1000SATS
