@@ -24,7 +24,7 @@ const API = {
   demo:       () => fetchJSON('/api/demo'),
   demoReport: () => fetchJSON('/api/demo/report'),
   demoCycle:  () => fetchJSON('/api/demo/cycle', {}),
-  demoReset:  () => fetchJSON('/api/demo/reset', {}),
+  demoReset:  (password) => fetchJSON('/api/demo/reset', { password }),
 };
 
 async function fetchJSON(url, body) {
@@ -1196,7 +1196,14 @@ function renderDemo() {
   });
   document.getElementById('demoReset').addEventListener('click', async () => {
     if (!window.confirm(t('demo.resetConfirm'))) return;
-    await API.demoReset();
+    const password = window.prompt(t('demo.resetPassword'));
+    if (password === null) return;   // cancelled the prompt itself
+    try {
+      await API.demoReset(password);
+    } catch (err) {
+      window.alert(err.message || t('demo.resetWrongPassword'));
+      return;
+    }
     await refreshDemo();
   });
 }

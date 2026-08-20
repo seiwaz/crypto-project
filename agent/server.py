@@ -410,7 +410,17 @@ class Handler(BaseHTTPRequestHandler):
                                "state": demo.state()})
 
         if path == "/api/demo/reset":
+            # Wiping the account (balance, positions, trade history) is the single
+            # most destructive thing this public, unauthenticated dashboard can do -
+            # it throws away the sample the whole project exists to collect. The rest
+            # of the API stays open by design (see CLAUDE.md), but this one action
+            # gets a password gate. Configured server-side only, in settings.json's
+            # "demo" block - never in git, never returned by public_settings(), so it
+            # can't leak through the API or the public repo.
             cfg = demo.settings()
+            required = cfg.get("reset_password")
+            if required and str(body.get("password") or "") != str(required):
+                return self._error(403, "wrong password")
             store.paper_init(exchange=cfg["exchange"], capital=cfg["capital"],
                              slots=cfg["slots"], heat_cap_pct=cfg["heat_cap_pct"],
                              reset=True)

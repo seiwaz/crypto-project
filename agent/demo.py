@@ -296,6 +296,11 @@ def settings() -> dict:
         "give_back_arm_r": float(demo.get("give_back_arm_r") or GIVE_BACK_ARM_R),
         "give_back_fraction": float(demo.get("give_back_fraction")
                                     or GIVE_BACK_FRACTION),
+        # Gate on /api/demo/reset, checked in server.py. Configured directly in the
+        # server's live settings.json only - never via strategy-tuning.json (that
+        # file is git-tracked and public) and never returned to the browser (not in
+        # server.py's public_settings() allowlist). None means the gate is off.
+        "reset_password": demo.get("reset_password"),
     }
 
 

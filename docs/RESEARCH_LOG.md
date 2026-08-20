@@ -483,3 +483,34 @@ an absence of data) rather than a two-state one.
 **Scope, as requested:** this only applies to positions currently in profit. Losing
 positions are untouched — they already float unconditionally per Round 6, governed
 only by their real stop-loss.
+
+## Round 9 (user-directed, 2026-08-20) — password gate on the reset endpoint
+
+**Change requested:** the reset-account button should require a password before it
+actually resets. This is the single most destructive action a public,
+unauthenticated dashboard exposes — it wipes the entire sample the project exists
+to collect (see CLAUDE.md's server-access notes: the dashboard has no auth and no
+firewall by design, and *anyone* who can reach the port can currently reset it).
+
+**Deliberately NOT committed to git**: the literal password. This repo is public
+(`seiwaz/crypto-project`), and the pattern of password the user gave looked like it
+could be reused elsewhere for them — putting it in a public repo's source would
+defeat the purpose and expose more than intended. Implemented as a value read from
+the server's live `config/settings.json` (`demo.reset_password`), which — like
+`config/settings.json` generally — is explicitly never synced from git (see
+CLAUDE.md's sync-rule exception) and is set directly on the server, outside this
+commit entirely.
+
+**Implemented:**
+- `agent/server.py`'s `/api/demo/reset` handler now checks `body["password"]`
+  against `demo.settings()["reset_password"]` and returns 403 on a mismatch or
+  missing value, before ever touching the account.
+- `agent/demo.py: settings()` reads `reset_password` from the `demo` settings block
+  (`None` if unset, which leaves the gate off — a deliberate default so existing
+  automation/tests aren't broken by this unless the server is actually configured).
+- `web/app.js`'s reset button now prompts for the password after the existing
+  confirm dialog, sends it with the reset request, and shows the server's error
+  message (rather than silently doing nothing) on a wrong password.
+- Confirmed `server.py: public_settings()`'s explicit allowlist does not include
+  `reset_password` — it cannot leak back out through `/api/settings` or anywhere
+  else in the API.

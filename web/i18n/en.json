@@ -145,6 +145,8 @@
   "demo.running": "Running…",
   "demo.reset": "Reset account",
   "demo.resetConfirm": "Reset the demo account? All positions and closed trades are deleted, and the report starts over.",
+  "demo.resetPassword": "Enter the reset password to confirm:",
+  "demo.resetWrongPassword": "Wrong password — account was not reset.",
   "demo.equity": "Equity",
   "demo.balance": "Balance",
   "demo.openPnl": "Unrealised P&L",
