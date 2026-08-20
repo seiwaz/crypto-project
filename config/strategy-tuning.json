@@ -1,5 +1,6 @@
 {
   "profile": "scalp",
+  "atr_mult": 1.0,
   "scan_interval_minutes": 5,
   "demo": {
     "cycle_seconds": 30,

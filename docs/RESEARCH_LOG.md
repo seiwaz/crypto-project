@@ -352,3 +352,33 @@ far tighter than anything tested since. If the account starts closing everything
 already-diagnosed one at a much smaller timescale. No reset needed to apply this: 0
 trades had closed since the same-day account reset, so the fresh sample starts
 consistently under scalp settings from trade #1.
+
+## Round 5 (user-directed, 2026-08-20) — tighten the stop, keep the 30-minute window
+
+**Live result from Round 4's settings:** 11 trades closed, **all 11 via `time_stop`,
+zero via a real stop or TP** — R ranged −0.215 (COMP) to +0.256 (ZRO), with exactly
+one survivor (ENA, +0.59R at minute 31, clearing the 0.5R floor). A clean, complete
+confirmation of the flagged risk: 1.5× ATR is too wide a distance for these coins to
+cover — in either direction — inside 30 minutes.
+
+**Decision:** the user chose to tighten the stop rather than widen the window. Set
+`atr_mult: 1.0` (was 1.5, scalp's own profile default) via `config/strategy-tuning.json`
+— confirmed this actually overrides the profile (`agent/scanner.py:108` reads the
+top-level `settings["atr_mult"]` and passes it to the planner as `--atr-mult`,
+logged as "profile default overridden"; Nobitex plans ignore this override, but demo
+trading is Toobit-only so that doesn't apply here).
+
+**Why 1.0× specifically, not something untested:** Round 1's own multiplier sweep
+(§2 above) already measured 1.0× ATR against a *48h* hold at 41.5% win / 4.7%
+undecided — the best undecided-rate of the three multipliers tested, meaning even
+at a long hold it resolves fast. Chosen as a previously-validated starting point
+over an arbitrary new number. **Explicitly untested: this multiplier against a
+30-minute hold specifically** — the compression from 48h to 30min is roughly 96×,
+so Round 1's numbers don't transfer directly; this is a real hypothesis, not a
+known-good setting. If time-stops still dominate at 1.0×, the next candidate is a
+further cut (0.5×) before concluding the 30-minute window itself needs widening.
+Watch for the opposite failure mode too: a stop this tight increases how often a
+position gets stopped out by ordinary noise rather than a real reversal — none of
+the 11 Round-4 trades got close to their stop (worst was COMP at −0.215R against a
+−1.0R stop), so that risk wasn't visible yet, but it's the thing a narrower stop
+could newly introduce.
