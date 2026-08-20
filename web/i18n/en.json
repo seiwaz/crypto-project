@@ -180,6 +180,7 @@
   "demo.col.count": "Trades",
   "demo.col.share": "Share",
   "demo.col.avgMfe": "Avg MFE",
+  "demo.col.total": "Total",
   "demo.report": "Report",
   "demo.byExit": "By exit reason",
   "demo.sampleShort": "Insufficient sample — no conclusions are drawn below",

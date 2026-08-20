@@ -52,18 +52,18 @@ def check(label, got, want, tol=1e-6):
 
 results = []
 
-print("1. TP1 takes half and moves the stop to breakeven + costs")
+print("1. TP1 takes half and locks the runner's stop at the TP1 price")
 pid, stop, tp1, tp2 = fresh()
 before = store.paper_position(pid)['contracts']
 price['v'] = tp1; demo.cycle()
 p = store.paper_position(pid)
 results.append(check("half closed", round(p['contracts']/before, 3), 0.5))
 results.append(check("tp1 flagged", p['tp1_filled'], 1))
-results.append(check("stop above entry", p['stop'] > ENTRY, True))
+results.append(check("stop locked exactly at tp1", p['stop'], tp1))
 bal_after_tp1 = store.paper_account()['balance']
 results.append(check("banked ~0.75R", round(p['realised_partial'], 2), round(0.75*RISK - 0.08, 2), 0.15))
 
-print("2. The runner stops at breakeven and the trade nets positive")
+print("2. The runner stops at the locked TP1 price and the trade nets close to the TP1 R")
 price['v'] = p['stop']; demo.cycle()
 t = store.paper_closed_positions()[0]
 results.append(check("exit reason", t['exit_reason'], 'stopped'))
@@ -186,6 +186,18 @@ results.append(check("blocked after closing on that scan",
 row["fetched_at"] = "2099-01-01T00:00:00+00:00"   # a scan newer than the close
 results.append(check("eligible again on a fresher scan",
                      [r["coin"] for r in demo.qualifying_signals()], ["FIL"]))
+
+print("9b. A tied/no-margin direction is not a qualifying signal")
+store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
+tied_row = {"coin": "TIEDCOIN", "symbol": SYM, "exchange": "toobit", "side": "long",
+            "verdict": "TAKE", "score": 88.0, "side_tied": 1,
+            "fetched_at": "2099-01-01T00:00:00+00:00", "plan_json": None, "scan_id": 1}
+demo.store.latest_results = lambda ex: [tied_row]
+results.append(check("tied signal excluded even with a qualifying score",
+                     [r["coin"] for r in demo.qualifying_signals()], []))
+tied_row["side_tied"] = 0
+results.append(check("same signal qualifies once side_tied clears",
+                     [r["coin"] for r in demo.qualifying_signals()], ["TIEDCOIN"]))
 
 print("10. Correlated same-direction positions are capped")
 from agent import correlation

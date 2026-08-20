@@ -1135,6 +1135,15 @@ function reportBlock(r) {
   }
 
   if (r.by_exit_reason.length) {
+    /* A sum row, not an average of averages: avg_pnl/avg_mfe below are each
+     * bucket's own mean, so the total row re-derives its own mean from the raw
+     * per-bucket totals (weighted by count) rather than averaging the averages -
+     * that would silently misweight a 1-trade bucket the same as a 50-trade one. */
+    const totalCount = r.by_exit_reason.reduce((s, b) => s + (b.count || 0), 0);
+    const totalSharePct = r.by_exit_reason.reduce((s, b) => s + (b.share_pct || 0), 0);
+    const totalPnl = r.by_exit_reason.reduce((s, b) => s + (b.total_pnl || 0), 0);
+    const totalMfeUsdt = r.by_exit_reason.reduce(
+      (s, b) => s + (b.avg_mfe_usdt || 0) * (b.count || 0), 0);
     kids.push(el('h4', { text: t('demo.byExit') }));
     kids.push(el('div', { class: 'table-wrap' }, [
       el('table', { class: 'postable' }, [
@@ -1149,6 +1158,14 @@ function reportBlock(r) {
           el('td', {}, [signed(b.total_pnl, { digits: 4 })]),
           el('td', {}, [signed(b.avg_mfe_usdt, { digits: 4 })]),
         ]))),
+        el('tfoot', {}, [el('tr', { class: 'postable__total' }, [
+          el('td', { text: t('demo.col.total') }),
+          el('td', {}, [num(totalCount)]),
+          el('td', {}, [num(totalSharePct, { digits: 1, suffix: '%' })]),
+          el('td', {}, [signed(totalCount ? totalPnl / totalCount : 0, { digits: 4 })]),
+          el('td', {}, [signed(totalPnl, { digits: 4 })]),
+          el('td', {}, [signed(totalCount ? totalMfeUsdt / totalCount : 0, { digits: 4 })]),
+        ])]),
       ]),
     ]));
   }

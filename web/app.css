@@ -662,6 +662,11 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   white-space: nowrap;
 }
 
+.postable__total td {
+  border-block-start: 2px solid var(--ink-muted);
+  font-weight: 700;
+}
+
 .pos__coin { font-weight: 600; }
 .pos__sym, .pos__sub { color: var(--ink-muted); font-size: 0.72rem; }
 .pos__side--long { color: var(--up); }

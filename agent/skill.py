@@ -222,23 +222,40 @@ def plan(snapshot_path: str, side: str, capital: float, *, profile: str,
     return json.loads(proc.stdout)
 
 
+DIRECTION_MARGIN = 1
+# Found 2026-08-20: 213 live demo trades, zero of them short. The old rule picked
+# short only when short_score > long_score and defaulted to long on everything else,
+# including an exact tie - a real, silent bias, not just this window's market being
+# bullish (the live scan showed the same skew: 66/69 coins scored long, all TAKE and
+# WATCH verdicts long, that same day). A side must now lead by MORE than this margin
+# to be picked; anything closer is `tied` and, in demo.py's qualifying_signals(),
+# excluded from trading entirely rather than defaulting to a side with no real edge.
+
+
 def side_from_direction(snap: dict) -> tuple[str, dict]:
     """Pick the side the snapshot's own direction_score favours.
 
-    Ties resolve to the side with more automated agreement; a genuine tie returns
-    'long' but is reported as `tied` so the UI can say the direction is unconvincing
-    rather than implying a real signal.
+    Symmetric: a side is only chosen when it leads the other by more than
+    DIRECTION_MARGIN. Anything closer - including an exact tie - is `tied`, still
+    returns a side so a card/plan can render, but is meant to be excluded from
+    actually trading rather than treated as a real signal (see demo.py's
+    qualifying_signals(), which enforces this).
     """
     ds = snap.get("direction_score") or {}
     longs = ds.get("long_score")
     shorts = ds.get("short_score")
     if longs is None or shorts is None:
         return "long", {"side": "long", "tied": True, "reason": "no direction score"}
-    if shorts > longs:
+    margin = longs - shorts
+    if margin > DIRECTION_MARGIN:
+        return "long", {"side": "long", "tied": False,
+                         "long_score": longs, "short_score": shorts}
+    if margin < -DIRECTION_MARGIN:
         return "short", {"side": "short", "tied": False,
                          "long_score": longs, "short_score": shorts}
-    return "long", {"side": "long", "tied": longs == shorts,
-                    "long_score": longs, "short_score": shorts}
+    side = "long" if longs >= shorts else "short"
+    return side, {"side": side, "tied": True,
+                  "long_score": longs, "short_score": shorts}
 
 
 # --------------------------------------------------------------------------------

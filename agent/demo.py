@@ -671,6 +671,13 @@ def qualifying_signals() -> list[dict]:
     for row in store.latest_results(cfg["exchange"]):
         if row.get("verdict") != "TAKE":
             continue
+        # A tied/near-tied direction (skill.side_from_direction's DIRECTION_MARGIN)
+        # is not a real signal — it's the least-wrong of two options with no real
+        # edge, which is exactly how this account traded 213/213 long before this
+        # was enforced (2026-08-20). The flag already existed for the UI; it just
+        # wasn't stopping anything from actually trading.
+        if row.get("side_tied"):
+            continue
         score = row.get("score")
         if score is None or float(score) < MIN_SCORE:
             continue
@@ -913,11 +920,17 @@ def _touched(side: str, high: float, low: float, level: float | None) -> bool:
 
 
 def _reduce_at_tp1(pos: dict, spec: dict, price: float) -> float:
-    """Close half the position at TP1 and move the stop to breakeven plus costs.
+    """Close half the position at TP1 and lock the runner's stop at the TP1 price.
 
-    Breakeven *plus accumulated cost*, not bare entry: exiting the remainder at the
-    entry price would still lose the fees and funding already paid, so a "breakeven"
-    stop set there is a small guaranteed loss.
+    Changed 2026-08-20, at the user's request: the stop used to move to breakeven
+    plus accumulated costs, so a reversal right after TP1 gave back almost the whole
+    runner and left the trade netting close to zero beyond the banked TP1 half.
+    Locking at the TP1 price instead means a reversal can take back only the runner's
+    *further* upside, never the gain already proven at TP1 — the trade's floor
+    becomes "roughly the TP1 R-multiple," not "roughly breakeven." This is strictly
+    more conservative than breakeven and gives back less on a round-trip, at the cost
+    of being easier to stop out of the runner on ordinary noise right after TP1 fires
+    (the stop is now much closer to price than a breakeven stop would have been).
     """
     qty = float(pos["contracts"])
     closing = paper.round_to_step(qty * TP1_CLOSE_FRACTION, spec["step_size"])
@@ -932,12 +945,7 @@ def _reduce_at_tp1(pos: dict, spec: dict, price: float) -> float:
     fee = paper.fee(paper.notional(closing, price, spec))
     realised = gross - fee
 
-    entry = float(pos["entry_price"])
-    costs = (float(pos.get("entry_fee") or 0.0) + fee
-             - float(pos.get("funding_paid") or 0.0))
-    coins_left = paper.coins(remaining, spec)
-    offset = (costs / coins_left) if coins_left else 0.0
-    be_stop = entry + offset if pos["side"] == "long" else entry - offset
+    runner_stop = price   # the TP1 fill price itself, not breakeven
 
     margin_released = float(pos["margin"]) * (closing / qty)   # un-reserved, not cash
     store.paper_update(
@@ -947,14 +955,14 @@ def _reduce_at_tp1(pos: dict, spec: dict, price: float) -> float:
         margin=float(pos["margin"]) - margin_released,
         tp1_filled=1,
         stop_moved_to_be=1,
-        stop=be_stop,
+        stop=runner_stop,
         exit_fee=float(pos.get("exit_fee") or 0.0) + fee,
         realised_partial=float(pos.get("realised_partial") or 0.0) + realised,
     )
     store.paper_event(pos["id"], "action", action="REDUCE", amount=realised,
                       detail=f"TP1 {closing:g} of {qty:g} contracts @ {price:g}; "
-                             f"stop to breakeven+costs {be_stop:.8g}")
-    pos.update(contracts=remaining, tp1_filled=1, stop=be_stop,
+                             f"stop locked at TP1 {runner_stop:.8g}")
+    pos.update(contracts=remaining, tp1_filled=1, stop=runner_stop,
                margin=float(pos["margin"]) - margin_released)
     return realised
 

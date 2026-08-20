@@ -514,3 +514,49 @@ commit entirely.
 - Confirmed `server.py: public_settings()`'s explicit allowlist does not include
   `reset_password` — it cannot leak back out through `/api/settings` or anywhere
   else in the API.
+
+## Round 10 (user-directed, 2026-08-20) — the long-only bias, and locking TP1 profit
+
+**Investigation (213 closed trades, first full-sample review):** win rate 59.2%,
+expectancy only +0.054R despite that — thin because `stopped` exits (39% of trades)
+split into ~47 genuine full losses (median ≈ −0.85R) against wins from
+`time_stop`/`signal_exit` averaging only +0.27–0.29R, capped by the aggressive
+30-minute window. Regime split was the more telling number: longs taken while BTC
+itself was bearish ran +0.29R expectancy / 71% win rate; longs taken while BTC was
+bullish ran **−0.05R expectancy** / 54% win rate — backwards from naive expectation,
+consistent with bullish-BTC entries chasing already-extended alt moves.
+
+**The headline finding: zero of 213 trades were short.** Traced to
+`agent/skill.py: side_from_direction()` — it picked short only when
+`short_score > long_score` strictly, defaulting to long on every tie and every case
+where long merely wasn't behind. Confirmed live, same day: the scan showed 66/69
+coins scored long, only 3 short, and 100% of TAKE/WATCH verdicts long. Market
+conditions this window are a contributing factor, not the sole cause — a tie-break
+that can only ever resolve to one side is a code defect regardless of what the
+market is doing.
+
+**Fixed:**
+- `side_from_direction()` now requires a side to lead by more than
+  `DIRECTION_MARGIN` (1) to be chosen; anything closer (including exact ties) is
+  `tied`, still returns a side so a card/plan can render, but is meant to be excluded
+  from trading.
+- `demo.py: qualifying_signals()` now actually enforces `side_tied` — this flag
+  already existed and was stored in the DB and shown in the UI, but nothing was
+  reading it to block a trade. It was purely cosmetic before this fix.
+- Tested: `tests/test_demo_lifecycle.py` 9b covers both states of the flag directly.
+
+**Also requested and implemented: lock the TP1 profit.** `_reduce_at_tp1` used to
+move the runner's stop to breakeven-plus-costs; a reversal right after TP1 gave back
+almost the whole runner and the trade netted close to zero beyond the banked TP1
+half. Now the stop locks at the TP1 price itself — a reversal can only take back the
+runner's *further* upside, never the proven gain. Trade-off, stated in the code
+comment: the stop sits much closer to price right after TP1 than a breakeven stop
+did, so the runner is easier to stop out of on ordinary noise immediately after TP1
+fires. Test 1/2 updated to assert the exact new contract (`stop == tp1` precisely,
+not just "above entry").
+
+**Full suite**: 36/36 checks passing (34 prior + 2 new for the side-tied filter).
+
+**Also**: added a totals row (sum of count/share/P&L, weighted-average of the
+per-bucket averages, not an average of averages) to the "by exit reason" table in
+the web dashboard.
