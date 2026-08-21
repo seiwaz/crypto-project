@@ -163,6 +163,73 @@ def tabdeal_is_read_only(path: str, method: str = "GET") -> bool:
         return False
 
 
+# --------------------------------------------------------------------------------
+# Tabdeal — the live-trading write allowlist
+# --------------------------------------------------------------------------------
+#
+# This is the ONLY door in the application through which an order can reach an
+# exchange, and it is bolted shut by default. `tabdeal_broker.py` is the only caller.
+# The read guard above is unchanged and still refuses every one of these paths, so
+# the market-data client cannot acquire write capability by accident.
+#
+# Three independent things must all be true before a write is permitted: the caller
+# must be the broker (it is the only importer), live trading must be enabled in
+# settings, and the exact path+verb must appear below. Enumerated exactly — no
+# prefixes, no wildcards — because on this Binance-shaped API a wildcard under
+# /fapi/v1/ would admit every write the venue offers.
+#
+# Deliberately absent and never to be added: anything resembling withdrawal. The
+# venue exposes no futures withdrawal endpoint, and this list must not become the
+# place where one appears.
+
+TABDEAL_WRITE_ALLOWLIST = frozenset({
+    ("POST", "/fapi/v1/order"),           # place
+    ("DELETE", "/fapi/v1/order"),         # cancel one order
+    ("DELETE", "/fapi/v1/position"),      # market-close an entire position
+    ("POST", "/fapi/v1/positionSlTp"),    # exchange-side stop / target
+    ("POST", "/fapi/v1/leverage"),        # set leverage before entry
+    ("POST", "/fapi/v1/transfer"),        # spot <-> futures wallet
+})
+
+
+class LiveTradingDisabled(RuntimeError):
+    pass
+
+
+def assert_tabdeal_write_allowed(path: str, method: str, *,
+                                 live_enabled: bool) -> None:
+    """Gate a real, money-moving Tabdeal request.
+
+    `live_enabled` is passed in rather than read here so the decision is made by the
+    caller's own settings load and is visible at the call site — a guard that reads
+    global state can be flipped from somewhere the reader is not looking.
+    """
+    if not live_enabled:
+        raise LiveTradingDisabled(
+            f"Refusing {method} {path}: live trading is disabled. Set "
+            f"demo.live_trading=true in settings.json to arm it.")
+    base = path.split("?", 1)[0]
+    if (method.upper(), base) not in TABDEAL_WRITE_ALLOWLIST:
+        raise ReadOnlyViolation(
+            f"Refusing {method} {base}: not on the Tabdeal write allowlist.")
+
+
+_TABDEAL_WRITE_MUST_REJECT = (
+    ("POST", "/fapi/v1/order", False),          # correct path, but not armed
+    ("POST", "/fapi/v1/withdraw", True),        # never, armed or not
+    ("POST", "/api/v1/capital/withdraw", True),
+    ("GET", "/fapi/v1/order", True),            # wrong verb for this door
+    ("POST", "/fapi/v1/unknown", True),
+    ("POST", "/fapi/v2/order", True),           # version not enumerated
+)
+
+_TABDEAL_WRITE_MUST_ALLOW = (
+    ("POST", "/fapi/v1/order"),
+    ("DELETE", "/fapi/v1/position"),
+    ("POST", "/fapi/v1/positionSlTp"),
+)
+
+
 def assert_toobit_read_only(path: str, method: str = "GET") -> None:
     """Same contract as `assert_read_only`, for Toobit paths.
 
@@ -318,6 +385,23 @@ def self_test() -> list[str]:
     for path in _TABDEAL_MUST_ALLOW:
         if not tabdeal_is_read_only(path):
             failures.append(f"tabdeal: should have allowed {path}")
+    # The write door: shut when disarmed, and selective when armed.
+    for method, path, armed in _TABDEAL_WRITE_MUST_REJECT:
+        try:
+            assert_tabdeal_write_allowed(path, method, live_enabled=armed)
+            failures.append(f"tabdeal-write: should have rejected {method} {path} "
+                            f"(live_enabled={armed})")
+        except (ReadOnlyViolation, LiveTradingDisabled):
+            pass
+    for method, path in _TABDEAL_WRITE_MUST_ALLOW:
+        try:
+            assert_tabdeal_write_allowed(path, method, live_enabled=True)
+        except (ReadOnlyViolation, LiveTradingDisabled):
+            failures.append(f"tabdeal-write: should have allowed armed {method} {path}")
+    # Every write path must still be refused by the read guard.
+    for method, path in TABDEAL_WRITE_ALLOWLIST:
+        if tabdeal_is_read_only(path, method):
+            failures.append(f"tabdeal: read guard must still refuse {method} {path}")
     for path in _MUST_REJECT:
         if is_read_only(path):
             failures.append(f"nobitex: should have rejected {path}")
@@ -340,4 +424,6 @@ if __name__ == "__main__":
         raise SystemExit(1)
     print(f"guard ok — nobitex: {len(_MUST_REJECT)} rejected / {len(_MUST_ALLOW)} allowed; "
           f"toobit: {len(_TOOBIT_MUST_REJECT)} rejected / {len(_TOOBIT_MUST_ALLOW)} allowed; "
-          f"tabdeal: {len(_TABDEAL_MUST_REJECT)} rejected / {len(_TABDEAL_MUST_ALLOW)} allowed")
+          f"tabdeal: {len(_TABDEAL_MUST_REJECT)} rejected / {len(_TABDEAL_MUST_ALLOW)} allowed; "
+          f"tabdeal-write: {len(_TABDEAL_WRITE_MUST_REJECT)} rejected / "
+          f"{len(_TABDEAL_WRITE_MUST_ALLOW)} allowed when armed")

@@ -331,6 +331,65 @@ results.append(check("zero-width stop never blocks",
 results.append(check("default threshold is 0.3R",
                      demo.settings()["max_entry_drift_r"], 0.3))
 
+print("11. Live broker is disarmed, and its rails hold when armed")
+# tabdeal_broker is the only code in the project that can move real money. These
+# checks exist so "it is switched off" is a tested property, not an assumption.
+from agent import tabdeal_broker as _tb, guard as _g
+
+_orig_live = _tb.TabdealBroker.live_enabled
+try:
+    _tb.TabdealBroker.live_enabled = staticmethod(lambda: False)
+    b = _tb.TabdealBroker()
+    results.append(check("dry_run is the constructor default", b.dry_run, True))
+
+    blocked = 0
+    for fn in (lambda: b.place_order("BTC_USDT", "BUY", 0.001, price=70000),
+               lambda: b.close_position("BTC_USDT"),
+               lambda: b.set_position_sl_tp(1, sl_price=1.0),
+               lambda: b.set_leverage("BTC_USDT", 10),
+               lambda: b.transfer(100)):
+        try:
+            fn()
+        except _g.LiveTradingDisabled:
+            blocked += 1
+        except Exception:                       # noqa: BLE001
+            pass
+    results.append(check("every write refuses while disarmed", blocked, 5))
+
+    # Armed but still dry: the rails must not depend on the disarmed check.
+    _tb.TabdealBroker.live_enabled = staticmethod(lambda: True)
+    b = _tb.TabdealBroker(dry_run=True)
+    results.append(check("armed dry-run reaches the wire builder",
+                         b.place_order("SUI_USDT", "BUY", 100.0,
+                                       price=0.83).get("dry_run"), True))
+    rails = 0
+    for fn in (lambda: b.place_order("BTC_USDT", "BUY", 1.0, price=77000),   # notional
+               lambda: b.place_order("BTC_USDT", "LONG", 0.001, price=1),    # side
+               lambda: b.place_order("BTC_USDT", "BUY", 0.001,
+                                     order_type="STOP_MARKET", price=1),     # type
+               lambda: b.place_order("BTC_USDT", "BUY", 0.001),              # no price
+               lambda: b.place_order("BTC_USDT", "BUY", 0, price=1),         # qty
+               lambda: b.set_position_sl_tp(1),                              # no level
+               lambda: b.reduce_position("X_USDT", 1.5)):                    # fraction
+        try:
+            fn()
+        except _tb.BrokerError:
+            rails += 1
+        except Exception:                        # noqa: BLE001
+            pass
+    results.append(check("armed rails still reject bad orders", rails, 7))
+
+    # The read guard must keep refusing every write path even with live armed.
+    still_refused = all(not _g.tabdeal_is_read_only(p, m)
+                        for m, p in _g.TABDEAL_WRITE_ALLOWLIST)
+    results.append(check("read guard still refuses all write paths",
+                         still_refused, True))
+finally:
+    _tb.TabdealBroker.live_enabled = _orig_live
+
+results.append(check("_num avoids scientific notation", _tb._num(1e-05), "0.00001"))
+results.append(check("_num passes None through", _tb._num(None), None))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
