@@ -9,87 +9,67 @@
 # dashboard's "not scanned" section with the reason — nothing is silently dropped.
 #
 # After editing, run:  ./run.sh setup     (re-runs discovery against this list)
+#
+# ---------------------------------------------------------------------------------
+# SCOPE, changed 2026-08-22: this list is now the intersection of "tradeable on
+# Tabdeal اهرم حرفه‌ای (Professional Leverage)" and "has a Toobit USDT perp".
+#
+# Why: the demo is being pointed at a future Tabdeal migration, and a track record
+# built on coins Tabdeal does not list is not predictive of real trading. Tabdeal
+# lists 33 futures symbols; 32 of them have a Toobit perp for candles/scanning.
+# This cut the list from 74 coins to 32 and drops ~59% of the previous trade flow —
+# expect materially fewer signals and a slower-accumulating sample.
+#
+# Verified 2026-08-22 against Tabdeal /r/fapi/v1/exchangeInfo (33 symbols, strict
+# underscore format e.g. BTC_USDT) and Toobit's live contract list.
+#
+# Excluded deliberately:
+#   GRAM   — on Tabdeal, but no Toobit USDT perpetual, so it cannot be scanned or
+#            given candles. Listed here rather than dropped silently; revisit if a
+#            Toobit contract appears or if candles ever come from elsewhere.
+#
+# Watch when reading results: PAXG and XAUT are gold-backed and track bullion, not
+# crypto. They will behave very differently under the BTC-correlation and
+# counter-trend gates than the rest of this list — treat their stats separately
+# rather than pooling them with the altcoins.
+# ---------------------------------------------------------------------------------
 
+# Majors
 BTC
 ETH
 BNB
-XRP
 SOL
-TRX
-HYPE
-DOGE
-ZEC
+XRP
 ADA
-LINK
-XLM
-BCH
-GRAM
+DOGE
+TRX
 LTC
-HBAR
-SUI
-AVAX
-SHIB
-TAO
-CRO
-UNI
-NEAR
-WLFI
-ONDO
-ASTER
-MNT
-AAVE
-DOT
-ICP
-WLD
-PEPE
-PUMP
-MORPHO
-ETC
-ENA
-POL
-ATOM
-ALGO
-KAS
-RENDER
-FIL
-JUP
-ARB
-APT
-INJ
-CRV
-PENGU
-VET
-TIA
+BCH
 
-# Added 2026-08-20 — liquid Toobit USDT-M perpetuals not previously covered.
-# Selected against 24h quote-volume from GET /quote/v1/ticker/24hr per symbol,
-# filtered to roughly match or exceed this list's own existing floor (KAS at the
-# time was the thinnest included market, ~550K USDT 24h volume). GRAM above is not
-# currently a valid Toobit contract (exchangeInfo returns "Not supported symbols")
-# and has been sitting unscanned; left in rather than silently removed since a coin
-# missing/relisting is exactly the "not scanned, reason shown" case this file's own
-# header describes — worth a human decision, not an automated deletion.
-TON
-LDO
-EOS
-FET
+# Large / mid caps
+AVAX
+LINK
+DOT
+ATOM
+NEAR
+ICP
+AAVE
+SUI
+TAO
+HYPE
+ZEC
+XLM
+HBAR
+ALGO
+POL
+CAKE
+
+# Meme / high-beta
+SHIB
+PEPE
 WIF
-ORDI
-AXS
-JTO
-COMP
-CHZ
-RUNE
-DYDX
-OP
-SEI
-GALA
-EIGEN
-GMX
-IMX
-AR
-STX
-STRK
-ZRO
-NOT
-1000SATS
+FLOKI
+
+# Gold-backed — see note above, do not pool with the altcoins when reviewing
+PAXG
+XAUT
