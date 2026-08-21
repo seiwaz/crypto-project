@@ -317,7 +317,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$PREFIX/var
+# var/ holds the database and logs; config/ holds settings.json, which the dashboard
+# writes when a setting is changed from the UI. Omitting config/ here made every
+# settings change fail with "Read-only file system" and silently revert in the UI —
+# the control looked functional and simply did nothing.
+ReadWritePaths=$PREFIX/var $PREFIX/config
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

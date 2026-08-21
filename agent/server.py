@@ -385,7 +385,19 @@ class Handler(BaseHTTPRequestHandler):
                         return self._error(400, f"{numeric} must be a number")
                     if patch[numeric] <= 0:
                         return self._error(400, f"{numeric} must be positive")
-            settings = config.save_settings(patch)
+            try:
+                settings = config.save_settings(patch)
+            except OSError as exc:
+                # This failed silently for days: the systemd unit's ProtectSystem=
+                # strict only granted ReadWritePaths on var/, so writing config/
+                # settings.json raised "Read-only file system", the generic handler
+                # turned it into a bare 500, and the UI just re-read the old value
+                # and snapped the control back. A control that looks like it works
+                # and does nothing is worse than one that reports why.
+                log.error("could not persist settings: %s", exc)
+                return self._error(500, f"could not write settings.json: {exc}. "
+                                        f"The service may lack write access to "
+                                        f"config/ (systemd ReadWritePaths).")
             return self._json({"settings": public_settings(settings)})
 
         if path == "/api/scan":

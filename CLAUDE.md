@@ -344,12 +344,22 @@ thrashing":**
      Round 3 for the full writeup and live verification (two consecutive full-watchlist
      scans went from 0 TAKEs to 7 immediately after the fix; all 7 filled as real
      positions the same session).
-  2. **Not fixed:** `POST /api/settings` fails with `OSError: Read-only file system` —
-     the systemd unit's `ProtectSystem=strict` + `ReadWritePaths=/opt/crypto-screener/
-     var` only allows writes to `var/`, but `config.save_settings()` writes to
-     `config/settings.json`. Doesn't affect the autonomous tuning pipeline (the deploy
-     timer's `strategy-tuning.json` merge runs outside the systemd sandbox), but the
-     dashboard's own "change settings" UI/API is silently broken. Needs `config/` added
+  2. **FIXED 2026-08-22.** `POST /api/settings` used to fail with `OSError:
+     Read-only file system` — the systemd unit's `ProtectSystem=strict` +
+     `ReadWritePaths=/opt/crypto-screener/var` allowed writes only to `var/`, while
+     `config.save_settings()` writes `config/settings.json`. The UI change appeared
+     to work and silently reverted. Fixed by adding `config/` to `ReadWritePaths`
+     (both `/etc/systemd/system/crypto-screener.service` on the box and the template
+     in `packaging/install-centos.sh`), and by catching `OSError` in the settings
+     handler so a write failure now reports the real reason instead of a bare
+     `{"error":"internal error"}` 500.
+     **Separate gotcha, NOT a bug:** with `demo.auto_slots: true` (the default) the
+     demo ignores the top-level `risk_pct` entirely and uses
+     `derived_risk_pct() = heat_cap_pct / max_slots` — 6/20 = **0.3%**. So changing
+     `risk_pct` in the UI saves correctly but has no effect on trading while
+     auto_slots is on; the levers that actually move risk per trade are
+     `demo.heat_cap_pct` and `demo.max_slots`. Set `demo.auto_slots: false` to make
+     `risk_pct` authoritative. Needs `config/` added
      to `ReadWritePaths` in the systemd unit, or the write moved elsewhere.
   3. **Worth watching, not fully root-caused:** after the 2026-08-20 restart to deploy
      the scoring fix, `demo.scheduler_loop`'s background thread appeared alive (thread
