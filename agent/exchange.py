@@ -20,7 +20,8 @@ from . import config
 
 NOBITEX = "nobitex"
 TOOBIT = "toobit"
-SUPPORTED = (TOOBIT, NOBITEX)
+TABDEAL = "tabdeal"
+SUPPORTED = (TOOBIT, NOBITEX, TABDEAL)
 
 
 class _NobitexAdapter:
@@ -85,7 +86,43 @@ class _ToobitAdapter:
                               tp1_r=tp1_r, tp2_r=tp2_r, atr_mult=atr_mult)
 
 
-_ADAPTERS = {NOBITEX: _NobitexAdapter, TOOBIT: _ToobitAdapter}
+class _TabdealAdapter:
+    """Tabdeal اهرم حرفه‌ای — the venue a real account would actually trade.
+
+    Candles, order book and symbol list all come from Tabdeal itself, so a signal is
+    scored on the same book it would be filled on. Everything used is public; the
+    account endpoints exist but the guard refuses them along with every write path,
+    because the credentials for this venue carry live trade permission.
+    """
+
+    NAME = TABDEAL
+    LABEL = "Tabdeal — اهرم حرفه‌ای"
+    PLAN_EXCHANGE = "generic-perp"
+    needs_credentials = False
+
+    @staticmethod
+    def discover(coins):
+        from . import tabdeal
+        return tabdeal.discover(coins)
+
+    @staticmethod
+    def scannable(watchlist):
+        from . import tabdeal
+        return tabdeal.scannable(watchlist)
+
+    @staticmethod
+    def analyze(entry, profile, *, capital, risk_pct, count=300, hold_hours=0.0,
+                account_level=None, slots=1, tp1_r=None, tp2_r=None,
+                atr_mult=None):
+        from . import tabdeal
+        del account_level
+        return tabdeal.analyze(entry, profile, capital=capital, risk_pct=risk_pct,
+                               count=count, hold_hours=hold_hours, slots=slots,
+                               tp1_r=tp1_r, tp2_r=tp2_r, atr_mult=atr_mult)
+
+
+_ADAPTERS = {NOBITEX: _NobitexAdapter, TOOBIT: _ToobitAdapter,
+             TABDEAL: _TabdealAdapter}
 
 
 def current_name() -> str:

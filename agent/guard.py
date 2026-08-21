@@ -78,8 +78,89 @@ TOOBIT_FORBIDDEN = (
 )
 
 
+# --------------------------------------------------------------------------------
+# Tabdeal
+# --------------------------------------------------------------------------------
+#
+# Tabdeal is the riskiest of the three to guard, for two reasons.
+#
+# First, its API is Binance-shaped like Toobit's, so the write paths sit right next
+# to the reads: POST /fapi/v1/order, POST /fapi/v1/positionSlTp and POST
+# /fapi/v1/leverage all live under /fapi/v1/ alongside the depth and account reads.
+# The allowlist is therefore exact-match only, as it is for Toobit.
+#
+# Second — and unlike Toobit or Nobitex — the credentials this project holds for
+# Tabdeal are *live trade-permission keys on a funded account* (`canTrade: true`).
+# On the other two venues a guard failure would leak a read we did not intend; here
+# it could place a real order with real money. Nothing in the screener or the demo
+# has any reason to write, so the guard refuses every non-GET verb outright.
+#
+# Market data spans two hosts: `api1.tabdeal.org` serves /fapi/* (depth, account,
+# exchangeInfo) and `api-web.tabdeal.org` serves /plots/history (the OHLCV the web
+# charts use). Paths are guarded the same way regardless of host, since a path that
+# is safe on one is not automatically safe on the other.
+
+TABDEAL_PUBLIC_PREFIXES = (
+    "/plots/history", "/r/plots/history",
+)
+
+TABDEAL_ALLOWLIST = frozenset({
+    "/r/fapi/v1/ping",
+    "/r/fapi/v1/time",
+    "/r/fapi/v1/exchangeInfo",
+    "/r/fapi/v1/depth",
+    "/r/fapi/v1/aggDepth",
+    # Account reads. Harmless, and useful for reconciling the demo against a real
+    # balance later — but never anything that mutates.
+    "/r/fapi/v3/account",
+    "/r/fapi/v3/balance",
+    "/r/fapi/v3/positionRisk",
+    "/r/fapi/v1/userTrades",
+    "/r/fapi/v1/income",
+})
+
+TABDEAL_FORBIDDEN = (
+    "order", "sltp", "positionclose", "close", "leverage", "transfer", "withdraw",
+    "cancel", "margin/loan", "margin/repay", "borrow", "repay", "apikey", "deposit",
+    "listenkey", "userdatastream", "login", "logout", "convert", "batch",
+)
+
+
 class ReadOnlyViolation(RuntimeError):
     pass
+
+
+def assert_tabdeal_read_only(path: str, method: str = "GET") -> None:
+    """Same contract as the Toobit guard, for Tabdeal paths on either host.
+
+    `/fapi/v1/leverage` is a GET-able read, but it is refused anyway: the identical
+    path with POST *sets* leverage on a live funded account, and keeping the whole
+    path out of reach is worth more than the one number it would tell us.
+    """
+    if method.upper() != "GET":
+        raise ReadOnlyViolation(
+            f"Refusing {method.upper()} {path}: this application issues GET only, "
+            f"and Tabdeal credentials carry live trade permission.")
+    low = path.lower()
+    for bad in TABDEAL_FORBIDDEN:
+        if bad in low:
+            raise ReadOnlyViolation(
+                f"Refusing '{path}': matches the forbidden substring '{bad}'. This "
+                f"application is read-only and never places or modifies anything.")
+    base = path.split("?", 1)[0]
+    if any(base.startswith(p) for p in TABDEAL_PUBLIC_PREFIXES):
+        return
+    if base in TABDEAL_ALLOWLIST:
+        return
+    raise ReadOnlyViolation(f"Path '{base}' is not on the Tabdeal read-only allowlist.")
+
+
+def tabdeal_is_read_only(path: str, method: str = "GET") -> bool:
+    try:
+        assert_tabdeal_read_only(path, method)
+        return True
+    except ReadOnlyViolation:
+        return False
 
 
 def assert_toobit_read_only(path: str, method: str = "GET") -> None:
@@ -200,9 +281,43 @@ _TOOBIT_MUST_ALLOW = (
 )
 
 
+_TABDEAL_MUST_REJECT = (
+    ("/fapi/v1/order", "POST"),
+    ("/fapi/v1/order", "GET"),
+    ("/fapi/v1/positionSlTp", "POST"),        # sets a real stop on a real position
+    ("/fapi/v1/positionSlTp", "GET"),
+    ("/fapi/v1/positionClose", "POST"),
+    ("/fapi/v1/leverage", "POST"),
+    ("/fapi/v1/leverage", "GET"),             # same path mutates under POST
+    ("/fapi/v1/transfer", "POST"),
+    ("/r/fapi/v1/openOrders", "GET"),         # "order" substring, and we never need it
+    ("/r/fapi/v1/allOrders", "GET"),
+    ("/api/v1/margin/loan", "GET"),
+    ("/api/v1/userDataStream", "POST"),
+    ("/plots/history", "POST"),               # right path, wrong verb
+    ("/r/fapi/v1/depth", "DELETE"),
+    ("/r/fapi/v1/unknown", "GET"),
+)
+
+_TABDEAL_MUST_ALLOW = (
+    "/r/fapi/v1/ping",
+    "/r/fapi/v1/exchangeInfo",
+    "/r/fapi/v1/depth?symbol=BTC_USDT&limit=20",
+    "/r/fapi/v3/positionRisk",
+    "/plots/history?symbol=BTC_USDT&resolution=15&from=1787000000&to=1787340000",
+    "/r/plots/history?symbol=ETH_USDT&resolution=60&from=1787000000&to=1787340000",
+)
+
+
 def self_test() -> list[str]:
-    """Return a list of failures; empty means both guards behave."""
+    """Return a list of failures; empty means all three guards behave."""
     failures = []
+    for path, method in _TABDEAL_MUST_REJECT:
+        if tabdeal_is_read_only(path, method):
+            failures.append(f"tabdeal: should have rejected {method} {path}")
+    for path in _TABDEAL_MUST_ALLOW:
+        if not tabdeal_is_read_only(path):
+            failures.append(f"tabdeal: should have allowed {path}")
     for path in _MUST_REJECT:
         if is_read_only(path):
             failures.append(f"nobitex: should have rejected {path}")
@@ -224,4 +339,5 @@ if __name__ == "__main__":
         print("\n".join(problems))
         raise SystemExit(1)
     print(f"guard ok — nobitex: {len(_MUST_REJECT)} rejected / {len(_MUST_ALLOW)} allowed; "
-          f"toobit: {len(_TOOBIT_MUST_REJECT)} rejected / {len(_TOOBIT_MUST_ALLOW)} allowed")
+          f"toobit: {len(_TOOBIT_MUST_REJECT)} rejected / {len(_TOOBIT_MUST_ALLOW)} allowed; "
+          f"tabdeal: {len(_TABDEAL_MUST_REJECT)} rejected / {len(_TABDEAL_MUST_ALLOW)} allowed")

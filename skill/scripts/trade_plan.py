@@ -135,6 +135,44 @@ EXCHANGES = {
             "Assumes isolated margin.",
         ],
     },
+    "tabdeal": {
+        "label": "Tabdeal - اهرم حرفه‌ای (Professional Leverage)",
+        # Selectable 1..100 per the product page. Unlike Toobit there is no per-tier
+        # ladder to climb, so this ceiling does not tighten as the position grows.
+        "leverage_cap": 100.0,
+        "leverage_steps": None,
+        "level_caps": {},
+        "funding_period_hours": 8,
+        "max_hold_days": None,
+        # tabdeal.org/commissions: 0.001 taker AND 0.001 maker = 0.1% a side, with no
+        # maker discount at all. That is 2.5x Toobit's effective round trip, and it is
+        # flagged there as a temporary promotional rate, so treat it as a floor.
+        "default_fee_pct": 0.1,
+        # No funding rate is published for this product and the product page never
+        # mentions one. This is the generic placeholder, kept rather than zeroed:
+        # "unverified" must not be recorded as "free to hold".
+        "holding_cost_pct": 0.01,
+        # Flat 0.5% of position value for every symbol - «مارجین نگهداری ... ۰.۵ درصد
+        # از ارزش کل پوزیشن». No tier ladder, so unlike Toobit this figure is exact
+        # rather than a per-contract approximation.
+        "maintenance_margin_pct": 0.5,
+        "holding_cost_can_be_credit": True,
+        "notes": [
+            "CROSS margin, not isolated: the whole wallet backs every position, so "
+            "the per-position liquidation buffer below is indicative only. Tabdeal "
+            "states one losing position can liquidate the entire account, closing "
+            "profitable positions with it.",
+            "Maintenance margin is a flat 0.5% of position value on every symbol.",
+            "Fees are 0.1% on both maker and taker - there is no maker discount, so "
+            "resting a limit order saves nothing, and a high-frequency strategy pays "
+            "this on every leg.",
+            "No funding rate is published for this product; holding cost here is an "
+            "unverified placeholder, not a venue figure.",
+            "Order quantity is in coins - there is no contract multiplier.",
+            "No weekly candles are available, so the swing profile cannot be planned "
+            "on this venue.",
+        ],
+    },
     "generic-perp": {
         "label": "Generic perpetual futures",
         "leverage_cap": 20.0,

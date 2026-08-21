@@ -1,15 +1,30 @@
-"""Local paper broker that simulates Toobit USDT-M perpetuals.
+"""Local paper broker that simulates USDT-M perpetuals on Toobit or Tabdeal.
 
 Toobit's own demo trading is web-only — their documentation says "users can only
 access the Demo Trading via Webpage", the production API lists no `TBV_` symbols, and
 no demo API host resolves in DNS. So the demo cannot be delegated to them; it has to
-run here. Everything below is simulation against Toobit's *real* public prices.
+run here. Everything below is simulation against the venue's *real* public prices.
 
 Nothing in this module can reach an exchange with intent. It reads market data through
-`toobit._get`, which is behind the read-only allowlist in `guard.py`, and writes only
-to the local database.
+the venue clients, every path of which is behind a read-only allowlist in `guard.py`,
+and writes only to the local database. That matters more on Tabdeal than anywhere
+else: the credentials held for that venue carry live trade permission on a funded
+account, so "the simulator cannot place an order" has to be a structural property,
+not an intention.
 
-The contract mechanics are read from Toobit rather than assumed:
+`_venue()` picks the client from `settings.exchange`, and the two differ in ways that
+change the numbers, not just the plumbing:
+
+| | Toobit | Tabdeal اهرم حرفه‌ای |
+|---|---|---|
+| Quantity | contracts (`contractMultiplier`, `1000SHIB`) | coins, always 1:1 |
+| Maintenance margin | 9-tier ladder, 0.25%–2.5% by notional | flat 0.5%, every symbol |
+| Margin mode | isolated | **cross** — see `liquidation_price` |
+| Fees | 0.02% maker / 0.06% taker | 0.1% **both**, no maker discount |
+| Funding | live per contract, 8h | not published for this product |
+| Mark | index `edp`, falling back to last | order-book mid |
+
+The contract mechanics are read from the venue rather than assumed:
 
 * `contractMultiplier` and any numeric symbol prefix decide how many coins a contract
   is — FIL is 0.1 coins per contract, so a position quoted in coins is wrong by 10×.
@@ -38,6 +53,35 @@ from . import toobit
 MAKER_FEE_PCT = 0.02
 TAKER_FEE_PCT = 0.06
 
+
+def _venue():
+    """The market-data module for the venue the demo is currently simulating.
+
+    The paper broker models *exchange mechanics*, and those differ enough between
+    venues that reading Toobit's book while claiming to trade Tabdeal would produce
+    a record of a position that could not exist. Resolved per call rather than at
+    import time so switching `settings.exchange` takes effect without a restart.
+    """
+    from . import exchange                                    # noqa: PLC0415
+    if exchange.current_name() == exchange.TABDEAL:
+        from . import tabdeal                                 # noqa: PLC0415
+        return tabdeal
+    return toobit
+
+
+def fees_for_venue() -> tuple[float, float]:
+    """(maker_pct, taker_pct) for the active venue.
+
+    Tabdeal charges 0.1% on **both** sides — there is no maker discount, so the
+    demo's maker-entry optimisation saves nothing there. Getting this wrong is not
+    cosmetic: at ~$270 notional against a $3 R it is the difference between 0.06R
+    and 0.16R of cost per trade, which is most of this strategy's measured edge.
+    """
+    v = _venue()
+    if getattr(v, "NAME", "") == "tabdeal":
+        return v.MAKER_FEE_PCT, v.TAKER_FEE_PCT
+    return MAKER_FEE_PCT, TAKER_FEE_PCT
+
 # Funding period comes from the API per contract ("8H" for every perp checked), but a
 # venue could quote a contract without one, and a missing period must not silently
 # become "no funding cost".
@@ -65,12 +109,16 @@ def _fnum(d: dict, key: str) -> float | None:
 
 
 def contract_spec(symbol: str) -> dict:
-    """Everything the simulator needs about one contract, straight from Toobit.
+    """Everything the simulator needs about one contract, straight from the venue.
 
     Raises rather than defaulting: a made-up tick size or lot step would produce
     positions that could never exist on the real venue, which is precisely the kind of
     plausible-but-wrong number this project is built to avoid.
     """
+    venue = _venue()
+    if getattr(venue, "NAME", "") == "tabdeal":
+        return _tabdeal_spec(symbol, venue)
+
     row = next((c for c in toobit.contracts() if c.get("symbol") == symbol), None)
     if row is None:
         raise PaperError(f"{symbol} is not a live Toobit contract")
@@ -99,6 +147,50 @@ def contract_spec(symbol: str) -> dict:
         "max_qty": _fnum(filt.get("LOT_SIZE") or {}, "maxQty"),
         "min_notional": _fnum(filt.get("MIN_NOTIONAL") or {}, "minNotional") or 0.0,
         "tiers": tiers,
+    }
+
+
+def _tabdeal_spec(symbol: str, venue) -> dict:
+    """Contract spec for Tabdeal, whose mechanics are simpler than Toobit's.
+
+    Three real differences, none of them cosmetic:
+
+    * **Quantity is in coins.** No `contractMultiplier`, no `1000SHIB` scaling, so
+      `units_per_contract` is 1.0 and a "contract" and a coin are the same thing.
+    * **One flat maintenance rate, no ladder.** Tabdeal charges 0.5% of position
+      value on every symbol regardless of size, so the tier list here is a single
+      entry covering all notionals rather than a 9-rung ladder. `tier_for` still
+      works unchanged against it.
+    * **Tick and step come from decimal precision**, the only sizing information
+      this venue publishes — there is no PRICE_FILTER/LOT_SIZE to read. `min_qty`
+      is set to the step for the same reason, and `min_notional` to 0.0 because the
+      venue states no minimum; that is "not published", not "verified as none", so
+      an order this simulator accepts could still be rejected in reality.
+
+    The leverage ceiling recorded here is the product's 100x. Note it is *cross*
+    margin on this venue, which `liquidation_price()` does not model — see the
+    warning there.
+    """
+    row = venue.contract_for(symbol)
+    if row is None:
+        raise PaperError(f"{symbol} is not a live Tabdeal futures symbol")
+
+    tick = venue._precision_step(row.get("pricePrecision"))
+    step = venue._precision_step(row.get("quantityPrecision"))
+    return {
+        "symbol": symbol,
+        "underlying": row.get("baseAsset"),
+        "index_token": None,
+        "units_per_contract": 1.0,
+        "tick_size": tick,
+        "step_size": step,
+        "min_qty": step,
+        "max_qty": None,
+        "min_notional": 0.0,
+        "margin_mode": "cross",
+        "tiers": [{"max_notional": float("inf"),
+                   "maint_rate": venue.MAINT_MARGIN_PCT / 100.0,
+                   "max_leverage": venue.MAX_LEVERAGE}],
     }
 
 
@@ -148,6 +240,14 @@ def mark_price(spec: dict) -> tuple[float | None, str]:
     Returns (None, reason) rather than falling back to a guess when nothing is
     available, so the caller can show "no data" instead of a plausible number.
     """
+    venue = _venue()
+    if getattr(venue, "NAME", "") == "tabdeal":
+        # No index or `edp` equivalent is published here, so the order-book mid is
+        # the closest honest analogue of a mark — and on a book this thin it is the
+        # right one, because it is what the position could actually be closed at.
+        price = venue.mark_price(spec["symbol"])
+        return (price, "book_mid") if price else (None, "unavailable")
+
     token = spec.get("index_token")
     if token:
         try:
@@ -167,8 +267,11 @@ def mark_price(spec: dict) -> tuple[float | None, str]:
 
 def funding(symbol: str) -> dict | None:
     """Live funding for the contract, with its period and the venue's cap."""
-    raw = toobit.funding_rate(symbol)
+    raw = _venue().funding_rate(symbol)
     if not raw:
+        # Tabdeal publishes no funding rate for اهرم حرفه‌ای, so this is the normal
+        # path there rather than an error. `_cycle_one` already treats a missing
+        # rate as "no funding accrued this cycle".
         return None
     hours = DEFAULT_FUNDING_HOURS
     period = str(raw.get("period") or "")
@@ -201,7 +304,8 @@ def notional(contracts_qty: float, price: float, spec: dict) -> float:
 
 
 def fee(notional_value: float, *, maker: bool = False) -> float:
-    pct = MAKER_FEE_PCT if maker else TAKER_FEE_PCT
+    maker_pct, taker_pct = fees_for_venue()
+    pct = maker_pct if maker else taker_pct
     return abs(notional_value) * pct / 100.0
 
 
@@ -229,6 +333,19 @@ def liquidation_price(side: str, entry: float, leverage: float,
     This is an estimate in the same sense the planner's is: it ignores fees already
     paid and any funding accrued, both of which move the real trigger slightly
     against the position.
+
+    **This formula is isolated-margin only, and Tabdeal is cross.** On a cross-margin
+    venue there is no per-position liquidation price: the whole wallet backs every
+    position, so what actually triggers a liquidation is total equity falling below
+    the *summed* maintenance requirement of all open positions at once. Tabdeal is
+    explicit that one loser can close the entire account, profitable positions
+    included. The number returned here for a Tabdeal position is therefore the price
+    at which that position *alone* would exhaust *its own* notional margin share —
+    useful as a per-position risk marker, and what the planner's liquidation-buffer
+    gate checks, but **it is not the price Tabdeal will actually liquidate at**. The
+    real trigger is portfolio-wide and arrives earlier when other positions are
+    losing. Modelling that properly is an open item; until then, treat cross-margin
+    liquidation distance as optimistic.
     """
     if leverage <= 0:
         return None
