@@ -368,7 +368,48 @@ thrashing":**
      against what the code should be doing, not from a report or metric alone —
      worth remembering as the pattern that keeps finding real bugs in this system.
 
-## Tabdeal integration — IN PROGRESS, real-money migration requested (2026-08-21)
+## Tabdeal — LIVE as the demo's sole venue since 2026-08-22
+
+**The cutover is done.** The screener and demo now run entirely on Tabdeal data:
+`exchange: "tabdeal"` (in `config/strategy-tuning.json` and the server's
+`settings.json`), watchlist = all 33 Tabdeal futures symbols, demo account reset to
+1000 USDT / 0 positions and tagged `tabdeal`. Verified end to end: scan 597 read 33
+Tabdeal symbols, and the demo placed and then correctly cancelled a real maker order
+(`LTC_USDT`, limit 52.08, unfilled after 2m).
+
+**Trap found during the cutover, worth remembering:** `demo.settings()` resolves
+`demo.get("exchange") or s.get("exchange") or "toobit"` — there was a **`demo.exchange`
+override** in `settings.json` still set to `"toobit"` after the top-level was switched.
+Left alone it would have had the demo reading Toobit scan results while the scanner
+wrote Tabdeal ones: **zero signals, no error, nothing in the logs.** Fixed by deleting
+`demo.exchange` entirely so it inherits the top-level key — one venue key is harder to
+leave half-switched than two that must agree. Check for this pattern before assuming a
+venue switch is complete.
+
+**The headline result: TAKEs collapsed from ~15/32 on Toobit to 1/33 on Tabdeal.**
+This is the gates working, not a bug — verified by reading the failure reasons rather
+than assuming. Across scan 597's 33 coins: **16 fail on fees** (7 "cost efficiency,
+costs are 0.36R vs max 0.25R" + 9 "plan blocker: cost filter failed"), 4 fail
+**spread** (Tabdeal's books are thinner — ATOM 0.128% vs the 0.1% max; WIF scored 73.1
+with +0.151R expectancy and was still correctly SKIPped on spread alone), 4 fail
+**volatility fit** (PAXG/XAUT are gold-backed and too quiet — ATR 0.16% vs the 0.3%
+floor, exactly as flagged in `coins.txt`), 2 **liquidity depth**, 2 **liquidation
+buffer**. Direction scoring is fully healthy on this venue: "9/9 automated checks
+favour long, all checks resolved from live data" — the missing funding rate does not
+reduce coverage, because scalp skips that check anyway.
+
+**What this means:** the current scalp configuration barely functions on Tabdeal. That
+is the honest answer the cost gate was built to give, and it matches the repricing
+analysis below — a 0.2% round trip needs **fewer, larger-R trades**, i.e. something
+closer to the `intraday` profile, not 25 scalps an hour. Changing the profile is the
+obvious next experiment and has **not** been done yet.
+
+**Open question raised by the first order:** `maker_entry` is now of dubious value
+here. Tabdeal charges 0.1% maker *and* taker, so resting a limit saves nothing on
+fees; all it buys is the 0.1% price improvement, paid for with a 2-minute fill window
+that the very first order missed. Worth measuring before keeping or dropping it.
+
+### Original investigation (2026-08-21) — kept for the reasoning trail
 
 **User's stated goal, verbatim intent: use Tabdeal as a real exchange to migrate off
 demo/paper trading onto real trading.** This is a live, unresolved, high-stakes thread
