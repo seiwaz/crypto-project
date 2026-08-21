@@ -245,6 +245,51 @@ store.paper_open(status='pending', limit_price=0.16, placed_ts=paper.now_ts(),
 results.append(check("blocked while its own order is still pending, not yet open",
                      [r["coin"] for r in demo.qualifying_signals()], []))
 
+print("9d. Tabdeal client retries a 502 but not a 400")
+# Found live 2026-08-22: a single CDN 502 on /r/plots/history knocked XRP out of an
+# entire scan. The client was modelled on toobit's, whose rule is "HTTP errors are
+# not retried: a 400 will still be a 400" - correct for 4xx, wrong for a gateway
+# blip. 5xx and 429 must be retried; 4xx must still fail fast.
+import io, urllib.error
+from agent import tabdeal as _tab
+_tab._RETRY_BACKOFF = 0.0                      # keep the test instant
+
+def _fake_urlopen(codes, payload=b'{"data":[],"no_data":true}'):
+    """Raise each code in turn, then succeed. Returns (opener, call_counter)."""
+    state = {"n": 0}
+    def opener(req, timeout=None):
+        i = state["n"]; state["n"] += 1
+        if i < len(codes):
+            raise urllib.error.HTTPError(req.full_url, codes[i], "err", {},
+                                         io.BytesIO(b"<!DOCTYPE html><html>gateway"))
+        class R:
+            def read(self): return payload
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return R()
+    return opener, state
+
+_orig = _tab.urllib.request.urlopen
+try:
+    op, st = _fake_urlopen([502, 502])          # two blips, then fine
+    _tab.urllib.request.urlopen = op
+    got = _tab._get("/r/plots/history", {"symbol": "X_USDT", "resolution": "15"},
+                    chart=True)
+    results.append(check("502 retried then succeeded", got.get("no_data"), True))
+    results.append(check("took 3 attempts", st["n"], 3))
+
+    op, st = _fake_urlopen([400])               # a real client error
+    _tab.urllib.request.urlopen = op
+    try:
+        _tab._get("/r/fapi/v1/depth", {"symbol": "NOPE"})
+        results.append(check("400 raised", False, True))
+    except _tab.TabdealError as exc:
+        results.append(check("400 not retried", st["n"], 1))
+        results.append(check("no HTML dumped in the error",
+                             "<!DOCTYPE" not in str(exc), True))
+finally:
+    _tab.urllib.request.urlopen = _orig
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)

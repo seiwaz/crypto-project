@@ -67,7 +67,10 @@ AVAILABLE = "available"
 NOT_LISTED = "not_listed"
 
 _MIN_GAP_SECONDS = 0.12
-_RETRIES = 3
+# Four attempts, not three: both Tabdeal hosts sit behind a CDN that returns
+# intermittent 502s, and one extra attempt (~9s of total backoff) is cheap against a
+# 5-minute scan interval when the alternative is losing a coin from the scan.
+_RETRIES = 4
 _RETRY_BACKOFF = 1.5
 _gap_lock = threading.Lock()
 _last_call = 0.0
@@ -152,8 +155,20 @@ def _get(path: str, params: dict | None = None, *, chart: bool = False,
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:200]
-            raise TabdealError(f"HTTP {exc.code} on {path}: {detail}") from None
+            body = exc.read().decode("utf-8", "replace")
+            # 5xx and 429 are transient and MUST be retried. Both Tabdeal hosts sit
+            # behind a CDN (ArvanCloud/Cloudflare) that returns a 502 HTML error page
+            # under load — seen live 2026-08-22 on /r/plots/history, which dropped
+            # XRP out of a whole scan. The Toobit client this was modelled on says
+            # "HTTP errors are not retried: a 400 will still be a 400", which is
+            # correct for 4xx and wrong for a gateway blip; copying that rule
+            # wholesale was the bug.
+            if (exc.code >= 500 or exc.code == 429) and attempt < _RETRIES - 1:
+                last = f"HTTP {exc.code}"
+                time.sleep(_RETRY_BACKOFF * (attempt + 1))
+                continue
+            raise TabdealError(
+                f"HTTP {exc.code} on {path}: {_brief_error(body)}") from None
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last = getattr(exc, "reason", exc)
             if attempt < _RETRIES - 1:
@@ -162,6 +177,19 @@ def _get(path: str, params: dict | None = None, *, chart: bool = False,
         except json.JSONDecodeError:
             raise TabdealError(f"non-JSON response from {path}") from None
     raise TabdealError(f"network error on {path} after {_RETRIES} attempts: {last}")
+
+
+def _brief_error(body: str) -> str:
+    """A one-line reason, never a dump of a CDN error page.
+
+    The gateway returns a full HTML document on a 502. Passing that through put 200
+    characters of `<!DOCTYPE html><head><meta charset…` into the dashboard's error
+    card, which buries the one fact that matters — that the upstream failed.
+    """
+    text = (body or "").strip()
+    if text.startswith("<") or "<html" in text[:200].lower():
+        return "upstream returned an HTML error page (gateway/CDN), not JSON"
+    return text[:200]
 
 
 # --------------------------------------------------------------------------------
