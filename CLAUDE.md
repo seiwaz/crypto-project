@@ -409,6 +409,41 @@ here. Tabdeal charges 0.1% maker *and* taker, so resting a limit saves nothing o
 fees; all it buys is the 0.1% price improvement, paid for with a 2-minute fill window
 that the very first order missed. Worth measuring before keeping or dropping it.
 
+### Round 14 (2026-08-22) — stale signals silently rewrote trade geometry
+
+Found by auditing the first Tabdeal closed trades against real 1m candles rather than
+trusting the recorded exits. **A plan's `stop`/`tp1`/`tp2` are anchored to the entry
+price at *scan* time, but `_proposal()` fills at the *current* mark and never
+re-anchors them.** When the market moves in between, the trade's R:R is rewritten
+without any error or warning.
+
+FLOKI: filled 3.32% above a plan entry whose stop was 1.75% away — **1.83R of drift
+before the position opened**. TP1 then sat *below* the entry (already passed) and TP2
+0.19R away against a stop 2.83R below: risking 2.83R for 0.19R on what the plan
+called a 2R target. LINK opened at 0.48R of drift (1.48R risk, 0.52R target).
+
+Fixed with a `stale_signal` decline in `try_fill_slots`, threshold
+`demo.max_entry_drift_r` (default **0.3R**), computed by `_entry_drift_r()`. Drift is
+signed against the position, so a fill *better* than the plan entry is negative and
+never blocked. Against the first 16 real entries it rejects exactly the two broken
+ones and allows every well-formed one (all ≤0.25R). Rejecting beats re-anchoring: the
+stop came from structure and ATR observed at the old price, so sliding it to the new
+one would invent a level the planner never validated. Tests 9e; 53/53 passing.
+
+This is the "signal max-age ceiling" that has sat in the Round 2 candidate queue
+unimplemented — it turned out to matter far more than "low-risk" suggested, because
+the damage is to geometry, not freshness.
+
+**Verification done at the same time, all clean:** exit reasons reconcile against
+real 1m candles (FLOKI's tp2 genuinely traded; the three `signal_exit`s touched
+neither stop nor tp2, and every exit price sits inside its candle range); per-trade
+P&L is exact (`gross − exit_fee + realised_partial == realised_pnl` on all six);
+fees are 0.1% both sides as expected; and the account reconciles **to the cent** —
+`1000 + 8.9559 realised − 2.4201 entry fees = 1006.5358`, matching the stored
+balance exactly. **Still unverified live on Tabdeal:** the TP1 partial + stop-lock
+path (Round 10), because no trade has reached TP1 yet — it is covered by tests 1/2
+but has no live Tabdeal evidence.
+
 ### Original investigation (2026-08-21) — kept for the reasoning trail
 
 **User's stated goal, verbatim intent: use Tabdeal as a real exchange to migrate off
