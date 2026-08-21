@@ -934,7 +934,22 @@ def _cycle_one(pos: dict) -> dict:
 
 
 def _touched(side: str, high: float, low: float, level: float | None) -> bool:
-    return level is not None and low <= float(level) <= high
+    """Has price reached this level, from the side the position cares about?
+
+    One-sided, never `low <= level <= high`. This is the same bug Round 11 fixed in
+    `paper.exit_reason()` — it was fixed there and left here, and this copy then
+    silently disabled every TP1 partial the account has ever had. Once price moves
+    cleanly past TP1, the latest candle's *low* sits above it, so the range check
+    reads False forever and the partial never fires: positions ran to TP2 at full
+    size, and ones that reversed after TP1 gave back the whole gain instead of
+    banking half. Found 2026-08-22 — ADA held 46 minutes, peaked at 1.95R and closed
+    at TP2 with `tp1_filled=0`, which is geometrically impossible for a long that
+    genuinely passed through TP1.
+    """
+    if level is None:
+        return False
+    level = float(level)
+    return high >= level if side == "long" else low <= level
 
 
 def _reduce_at_tp1(pos: dict, spec: dict, price: float) -> float:

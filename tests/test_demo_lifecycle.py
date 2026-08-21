@@ -78,15 +78,30 @@ def fresh(*, side='long', opened_ago_s=0.0, verdict='TAKE', score=85.0):
     return pid, stop, tp1, tp2
 
 print("1. TP1 takes half and locks the runner's stop at the TP1 price")
+# Price is driven PAST tp1, not exactly onto it. Setting it exactly at the level was
+# a blind spot that hid a real bug for the life of the project: demo._touched() used
+# `low <= level <= high`, which is only true when the candle straddles the level.
+# With high=low=tp1 that held, so this test passed while every live TP1 partial
+# silently failed to fire once price moved cleanly through.
 pid, stop, tp1, tp2 = fresh()
 before = store.paper_position(pid)['contracts']
-price['v'] = tp1; demo.cycle()
+price['v'] = tp1 + (tp2 - tp1) * 0.4      # clearly past tp1, still short of tp2
+demo.cycle()
 p = store.paper_position(pid)
 results.append(check("half closed", round(p['contracts']/before, 3), 0.5))
 results.append(check("tp1 flagged", p['tp1_filled'], 1))
 results.append(check("stop locked exactly at tp1", p['stop'], tp1))
 bal_after_tp1 = store.paper_account()['balance']
 results.append(check("banked ~0.75R", round(p['realised_partial'], 2), round(0.75*RISK - 0.08, 2), 0.15))
+
+results.append(check("_touched fires for a long once price is past tp1",
+                     demo._touched('long', high=110.0, low=105.0, level=100.0), True))
+results.append(check("_touched does not fire before a long reaches tp1",
+                     demo._touched('long', high=99.0, low=95.0, level=100.0), False))
+results.append(check("_touched fires for a short once price is below tp1",
+                     demo._touched('short', high=95.0, low=90.0, level=100.0), True))
+results.append(check("_touched does not fire before a short reaches tp1",
+                     demo._touched('short', high=110.0, low=101.0, level=100.0), False))
 
 print("2. The runner stops at the locked TP1 price and the trade nets close to the TP1 R")
 price['v'] = p['stop']; demo.cycle()
