@@ -8,6 +8,6 @@
     "entry_interval_seconds": 300,
     "time_stop_hours": 0.5,
     "maker_timeout_minutes": 2,
-    "maker_entry": false
+    "maker_entry": true
   }
 }
