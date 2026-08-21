@@ -1,4 +1,5 @@
 {
+  "exchange": "tabdeal",
   "profile": "scalp",
   "atr_mult": 1.0,
   "scan_interval_minutes": 5,
