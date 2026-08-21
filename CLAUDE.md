@@ -500,9 +500,35 @@ not from docs alone. **Corrections to the section above, found during the audit:
    Phase 4 minimum.
 
 **BLOCKERS — all six must be resolved before real money:**
-1. **No candle data anywhere on Tabdeal** (detailed above). Signal engine cannot run
-   on Tabdeal data. Unresolved: use Toobit candles + Tabdeal execution, or build bars
-   locally from Tabdeal's depth stream with no history.
+1. ~~No candle data anywhere on Tabdeal.~~ **WRONG — RESOLVED 2026-08-22. Tabdeal
+   has full OHLCV history; it is just on a different host.** The earlier conclusion
+   was drawn from probing `api1.tabdeal.org` (`/fapi/*`, `/api/*`) and the
+   `wss://api1…/stream/` websocket, all of which genuinely lack klines. The web
+   charts are fed by a **separate host** found in the Nuxt config on
+   `tabdeal.org/special-margin` (`BROWSER_BASE_URL: "https://api-web.tabdeal.org"`):
+
+       GET https://api-web.tabdeal.org/plots/history
+           ?symbol=BTC_USDT&resolution=15&from=<unix_s>&to=<unix_s>
+       -> {"data":[{"time":1787344200,"low":…,"high":…,"open":…,"close":…,
+                    "volume":…}, …]}          # empty is {"data":[],"no_data":true}
+
+   Verified live: **symbol must be underscore form** (`BTC_USDT`; `BTCUSDT` returns
+   `no_data`), `time` is unix **seconds**, and `/r/plots/history` is the identical
+   read replica. Resolutions that work: `1, 5, 15, 30, 60, 120, 240, 360, 720, 1D`
+   (`3`, `D`, `W`, `1W`, `1M` return empty). History depth is at least **90 days on
+   15m (8640 bars)** — far beyond the ~200 bars EMA200 needs. **All 33 futures
+   symbols return full candles**, GRAM included.
+   Prices track the futures book closely: BTC 15m close 77,489.6 vs `fapi` depth mid
+   ~77,432 at the same moment (**0.07%**), so these candles are a fair basis for
+   signals on the perp. Other useful config from that same Nuxt block:
+   `wss://ws.tabdeal.org/special_margin/{broadcast,stream}/`, `…/prices/`,
+   `…/broadcast/`, `…/stream/`, plus `apollo.tabdeal.org` (GraphQL) and
+   `cms.tabdeal.org`.
+
+   **Lesson worth keeping:** "the endpoint doesn't exist" was wrong because only one
+   host was probed. When an exchange's web UI visibly renders a chart, the data
+   exists somewhere — read the front-end's own config for its base URLs before
+   concluding a capability is missing.
 2. **The codebase is architecturally read-only, on purpose.** `agent/guard.py` holds
    two independent allowlists (Nobitex + Toobit), forbids the substrings `order`,
    `leverage`, `transfer`, `cancel`, `close`, refuses any non-GET verb, and
