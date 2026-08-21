@@ -28,6 +28,13 @@ from . import config, correlation, paper, skill, store, toobit
 
 log = logging.getLogger("demo")
 
+# How far price may run past a plan's entry before the signal counts as stale,
+# in units of the planned stop distance. 0.3R is the point at which the geometry
+# starts to degrade materially: at 0.5R the target is halved while the risk grows
+# by half. Would have rejected both problem entries seen on 2026-08-22 (FLOKI at
+# 1.83R, LINK at 0.48R) while allowing every well-formed one (all <= 0.25R).
+DEFAULT_MAX_ENTRY_DRIFT_R = 0.3
+
 DEFAULT_SLOTS = 5
 DEFAULT_HEAT_CAP_PCT = 6.0
 MIN_SCORE = 70.0
@@ -289,6 +296,8 @@ def settings() -> dict:
         "entry_interval_seconds": int(demo.get("entry_interval_seconds")
                                       or ENTRY_INTERVAL_SECONDS),
         "maker_entry": demo.get("maker_entry", MAKER_ENTRY_ENABLED),
+        "max_entry_drift_r": float(demo.get("max_entry_drift_r")
+                                   or DEFAULT_MAX_ENTRY_DRIFT_R),
         "maker_offset_pct": float(demo.get("maker_offset_pct") or MAKER_OFFSET_PCT),
         "maker_timeout_minutes": float(demo.get("maker_timeout_minutes")
                                        or MAKER_TIMEOUT_MINUTES),
@@ -1171,6 +1180,8 @@ def try_fill_slots() -> dict:
 
     tripped = circuit_breaker()
 
+    cfg_max_drift = settings()["max_entry_drift_r"]
+
     heat = snapshot["heat"]["used_pct"]
     cap = snapshot["heat"]["cap_pct"]
     equity = snapshot["account"]["equity"]
@@ -1253,6 +1264,31 @@ def try_fill_slots() -> dict:
                    detail=(f"corr {blocked['correlation']:.2f} beta {blocked['beta']:.2f}, "
                            f"{blocked['already_open']} same-side already at the "
                            f"{blocked['cap']} cap"))
+            continue
+
+        # A plan's stop/tp1/tp2 are anchored to the entry price at *scan* time, and
+        # `_proposal` fills at the *current* mark without re-anchoring them. When the
+        # market has moved in the meantime, that silently rewrites the trade's
+        # geometry — and the further it has moved, the worse the rewrite.
+        #
+        # Found 2026-08-22 in the first Tabdeal trades. FLOKI filled 3.32% above its
+        # plan entry on a planned stop distance of 1.75%, i.e. **1.83R of drift before
+        # the position even opened**. The recorded levels then had TP1 *below* the
+        # entry (already passed) and TP2 only 0.19R away, against a stop sitting
+        # 2.83R below: it risked 2.83R to make 0.19R. LINK opened at 0.48R of drift,
+        # leaving 1.48R of risk for a 0.52R target.
+        #
+        # Rejecting is right rather than re-anchoring the levels: the stop came from
+        # structure and ATR observed at the old price, so moving it to the new one
+        # would invent a level the planner never validated. A signal this stale is
+        # simply gone — the move it predicted has already happened.
+        drift_r = _entry_drift_r(row, proposal)
+        if drift_r is not None and drift_r > cfg_max_drift:
+            declined.append({"coin": row["coin"], "code": "stale_signal",
+                             "drift_r": round(drift_r, 3), "max_r": cfg_max_drift})
+            record(row, rank, "declined", "stale_signal", mark=proposal["entry"],
+                   detail=(f"price moved {drift_r:.2f}R past the plan entry "
+                           f"(max {cfg_max_drift:.2f}R) — setup already played out"))
             continue
 
         added_heat = proposal["risk_amount"] / equity * 100.0 if equity > 0 else 0.0
@@ -1386,6 +1422,30 @@ def _proposal(row: dict, equity: float) -> dict | None:
         "tp2": levels.get("tp2"),
         "plan": plan,
     }
+
+
+def _entry_drift_r(row: dict, proposal: dict) -> float | None:
+    """How far price has run past the plan's entry, in units of the planned stop.
+
+    Signed against the position: positive means the market has already moved the way
+    the plan expected, so the entry is chasing. Negative means it moved against the
+    plan, which *improves* the entry and is not blocked here — a long filling below
+    its planned entry gets a wider effective target and a tighter effective risk.
+
+    Returns None when the plan lacks the levels needed to judge, so a missing value
+    can never block a trade.
+    """
+    plan_entry = ((proposal.get("plan") or {}).get("levels") or {}).get("entry")
+    stop, entry = proposal.get("stop"), proposal.get("entry")
+    if not all(isinstance(v, (int, float)) for v in (plan_entry, stop, entry)):
+        return None
+    planned_r = abs(float(plan_entry) - float(stop))
+    if planned_r <= 0:
+        return None
+    drift = float(entry) - float(plan_entry)
+    if row.get("side") == "short":
+        drift = -drift
+    return drift / planned_r
 
 
 def _iso_to_ts(value: str) -> float | None:

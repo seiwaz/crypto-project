@@ -290,6 +290,32 @@ try:
 finally:
     _tab.urllib.request.urlopen = _orig
 
+print("9e. A signal whose price has already run past the plan entry is declined")
+# Found 2026-08-22 in the first Tabdeal trades: a plan's stop/tp1/tp2 are anchored to
+# the entry at SCAN time, but the fill happens at the current mark and the levels are
+# never re-anchored. FLOKI filled 3.32% above a plan entry whose stop was 1.75% away
+# - 1.83R of drift - leaving TP1 already behind price and TP2 0.19R away against 2.83R
+# of risk. Drift is measured in units of the planned stop, signed against the trade.
+def drift_case(side, plan_entry, stop, mark):
+    row = {"side": side}
+    prop = {"plan": {"levels": {"entry": plan_entry}}, "stop": stop, "entry": mark}
+    return demo._entry_drift_r(row, prop)
+
+results.append(check("the real FLOKI case measures 1.83R of drift",
+                     round(drift_case("long", 2.684e-05, 2.637e-05, 2.7702e-05), 2), 1.83))
+results.append(check("long at the plan entry is 0R",
+                     drift_case("long", 100.0, 99.0, 100.0), 0.0))
+results.append(check("long filling BETTER than plan is negative (allowed)",
+                     drift_case("long", 100.0, 99.0, 99.5), -0.5))
+results.append(check("short is mirrored, not absolute",
+                     drift_case("short", 100.0, 101.0, 99.0), 1.0))
+results.append(check("missing levels never block a trade",
+                     drift_case("long", None, 99.0, 100.0), None))
+results.append(check("zero-width stop never blocks",
+                     drift_case("long", 100.0, 100.0, 101.0), None))
+results.append(check("default threshold is 0.3R",
+                     demo.settings()["max_entry_drift_r"], 0.3))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
