@@ -518,14 +518,32 @@ not from docs alone. **Corrections to the section above, found during the audit:
    requires stable positive expectancy across ≥3 consecutive periods. Also note the
    entire 919-trade sample spans only **36.5 hours** (~25 trades/hour) — one market
    regime, and it straddles the Round 11/13 bug fixes.
-4. **Futures fee rate is unknown and potentially fatal.** Not in the API, not in the
-   docs, not findable by search. Spot reports `makerCommission: 40 / takerCommission:
-   40` — on the Binance convention that reads as **0.40% per side**. If futures fees
-   are anywhere near that, the strategy dies: at ~$270 notional against a $3 R, a
-   0.8% round trip is **~0.72R of cost** versus the ~0.11R the plans currently assume
-   on Toobit's 0.06% taker. Expectancy is +0.14R; +0.6R of extra drag makes it
-   deeply negative. **Verify the real futures fee before anything else — this single
-   number can invalidate the whole migration.**
+4. **RESOLVED 2026-08-22, and it is the decisive finding: Tabdeal's fee is 0.1% on
+   BOTH maker and taker, and it breaks the current strategy.** Source:
+   `https://tabdeal.org/commissions` (fetchable from the server, not from the Mac —
+   see note below), section «کارمزد اهرم‌ حرفه‌ای»: all four VIP levels show taker
+   `0.001` / maker `0.001`, with «کارمزد فعلی اهرم حرفه‌ای: 0.001». Confirmed as
+   0.1% (not 0.001%) by the worked example on `/special-margin`, which says «با فرض
+   کارمزد 0.1%». **There is no maker discount at all** — the demo's maker-entry
+   optimisation buys nothing here.
+   - Toobit effective round trip today: 0.02% maker in + 0.06% taker out = 0.08%.
+     Tabdeal: 0.1% + 0.1% = **0.2%, i.e. 2.5x**.
+   - Repriced the 374 Tabdeal-tradeable closed trades by reconstructing each trade's
+     notional from the fee actually charged, then re-charging at 0.1%/0.1%:
+     **expectancy +0.1387R → +0.0455R (67% of the edge consumed), win rate
+     63.1% → 50.3%**, cost per trade 0.062R → 0.155R ($0.187 → $0.466 on a $3 R).
+   - Per-block after repricing: `+0.166 / −0.141 / +0.142 / +0.209 / −0.139` — **two
+     of five blocks negative, including the most recent.** That is not a thin edge,
+     it is noise around breakeven.
+   - **The 0.1% is explicitly a temporary promotional rate** («به مناسبت معرفی محصول
+     اهرم حرفه‌ای، موقتا…»), so the real long-run rate is unknown and can only go up.
+   - **Implication:** the scalp profile (Round 4+, ~25 trades/hour, 1R/2R targets,
+     ~30-min holds) is precisely the wrong shape for a 0.2% round trip. This is the
+     cost-drag mechanism already documented in `skill/references/risk-math.md` §6 —
+     fees are charged on notional, so a high-frequency small-R strategy pays them
+     over and over. Making Tabdeal viable means **fewer, larger-R trades** (back
+     toward the `intraday` profile the system used before Round 4), not a config
+     tweak. Do not migrate the scalp configuration as-is.
 5. **`reduceOnly` is documented as "فعلا پشتیبانی نمی شود" (not currently
    supported).** Without it there is no guaranteed-safe way to close: an oversized
    close can flip into an opposite position rather than flatten.
@@ -534,7 +552,32 @@ not from docs alone. **Corrections to the section above, found during the audit:
    under another name or closing happens only via an opposing order (which, with no
    `reduceOnly`, is exactly the risk in blocker 5). Must be resolved.
 
+**Product mechanics, from `https://tabdeal.org/special-margin` (2026-08-22):**
+- **Margin is CROSS, not isolated** — «معامله با اهرم حرفه‌ای صرافی تبدیل به‌صورت
+  کراس انجام می‌شود». The whole اهرم-حرفه‌ای wallet backs every position. Tabdeal
+  states the consequence plainly: «ممکن است یک پوزیشن، تمام اکانت را لیکوئید کند»
+  — one position can liquidate the entire account, and positions *in profit* get
+  closed too. **`agent/paper.py` explicitly assumes isolated margin** ("Assumes
+  isolated margin" in its exchange notes, and `liquidation_price()` solves the
+  isolated formula per position). The demo runs 10-20 concurrent positions sharing
+  one pool under cross — the 6% portfolio-heat cap was designed for isolated, where
+  each position's loss is bounded by its own margin. **The entire liquidation and
+  heat model has to be rewritten for cross margin**, not merely re-parameterised.
+- **Maintenance margin is a flat 0.5% of position value** — no tier ladder. Simpler
+  than Toobit's 9-tier `riskLimits`, and it means liquidation *is* computable
+  locally after all, which partly offsets the missing bracket data noted below.
+  Tabdeal's own worked example: $100 balance, 10x, $1000 position → maintenance
+  $5 → liquidated once loss reaches $95.
+- **Max leverage 100x** (selectable 1–100).
+- **Funding rate: not mentioned anywhere on the product page** — unknown whether
+  this product charges funding/interest at all. Must be confirmed; it is a direct
+  input to the cost model.
+
 **Remaining gaps (not blockers, but real):**
+- **Network access asymmetry:** `tabdeal.org` (bare) does not resolve from the
+  operator's Mac; `www.tabdeal.org` resolves but redirects to the bare host and
+  fails. The **server reaches both fine** — fetch Tabdeal web pages from
+  94.74.166.123, not locally. `api1.tabdeal.org` resolves and works from both.
 - **45 of 74 watchlist coins don't exist on Tabdeal** (61%). Only 33 futures symbols
   total. Symbol format is strict underscore (`BTC_USDT`); `BTCUSDT` is rejected.
 - `exchangeInfo` gives only `pricePrecision`/`quantityPrecision` — no tickSize,
