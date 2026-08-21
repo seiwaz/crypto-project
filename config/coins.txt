@@ -11,22 +11,21 @@
 # After editing, run:  ./run.sh setup     (re-runs discovery against this list)
 #
 # ---------------------------------------------------------------------------------
-# SCOPE, changed 2026-08-22: this list is now the intersection of "tradeable on
-# Tabdeal اهرم حرفه‌ای (Professional Leverage)" and "has a Toobit USDT perp".
+# SCOPE, changed 2026-08-22: this list is every symbol tradeable on Tabdeal
+# اهرم حرفه‌ای (Professional Leverage) — all 33 of them.
 #
-# Why: the demo is being pointed at a future Tabdeal migration, and a track record
-# built on coins Tabdeal does not list is not predictive of real trading. Tabdeal
-# lists 33 futures symbols; 32 of them have a Toobit perp for candles/scanning.
-# This cut the list from 74 coins to 32 and drops ~59% of the previous trade flow —
-# expect materially fewer signals and a slower-accumulating sample.
+# Why: the demo now runs entirely on Tabdeal data, which is the venue a real account
+# would actually trade. A track record built on coins Tabdeal does not list would not
+# be predictive of real trading. This cut the list from 74 coins to 33 and drops most
+# of the previous trade flow — expect materially fewer signals and a slower-
+# accumulating sample.
 #
 # Verified 2026-08-22 against Tabdeal /r/fapi/v1/exchangeInfo (33 symbols, strict
-# underscore format e.g. BTC_USDT) and Toobit's live contract list.
+# underscore format e.g. BTC_USDT); discovery resolves all 33.
 #
-# Excluded deliberately:
-#   GRAM   — on Tabdeal, but no Toobit USDT perpetual, so it cannot be scanned or
-#            given candles. Listed here rather than dropped silently; revisit if a
-#            Toobit contract appears or if candles ever come from elsewhere.
+# GRAM was briefly excluded here while Toobit still supplied candles — it has no
+# Toobit perpetual. That reason disappeared when the data source moved to Tabdeal's
+# own chart API, so it is back in.
 #
 # Watch when reading results: PAXG and XAUT are gold-backed and track bullion, not
 # crypto. They will behave very differently under the BTC-correlation and
@@ -63,6 +62,7 @@ HBAR
 ALGO
 POL
 CAKE
+GRAM
 
 # Meme / high-beta
 SHIB
