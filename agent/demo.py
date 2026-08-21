@@ -730,9 +730,13 @@ def cycle() -> dict:
     mark, because a poll every few minutes would otherwise miss a wick that a real
     venue would have triggered on.
     """
-    acct = ensure_account()
+    ensure_account()
     results = []
-    balance = float(acct["balance"])
+    # Accumulate a delta and apply it atomically at the end, rather than reading the
+    # balance here and writing an absolute total back. The old shape lost an entry
+    # fee on 2026-08-22 when `_open()` debited the balance underneath a cycle that
+    # was holding a stale copy — see store.paper_adjust_balance.
+    delta = 0.0
 
     for pending in store.paper_pending_positions():
         try:
@@ -741,7 +745,7 @@ def cycle() -> dict:
             log.warning("pending %s failed: %s", pending["coin"], exc)
             continue
         if outcome:
-            balance += outcome.pop("balance_delta", 0.0)
+            delta += outcome.pop("balance_delta", 0.0)
             results.append(outcome)
 
     for pos in store.paper_open_positions():
@@ -751,10 +755,11 @@ def cycle() -> dict:
             log.warning("cycle failed for %s: %s", pos["coin"], exc)
             results.append({"coin": pos["coin"], "error": str(exc)})
             continue
-        balance += outcome.pop("balance_delta", 0.0)
+        delta += outcome.pop("balance_delta", 0.0)
         results.append(outcome)
 
-    store.paper_set_balance(balance)
+    if delta:
+        store.paper_adjust_balance(delta)
     return {"checked": len(results), "results": results}
 
 
@@ -1529,9 +1534,12 @@ def _open(row: dict, proposal: dict, slot: int, rank: int = 0,
     )
     if status == "open":
         # The entry fee leaves the account the moment the position opens.
-        acct = store.paper_account()
-        store.paper_set_balance(float(acct["balance"]) - entry_fee)
-        store.paper_event(pid, "open", detail=f"slot {slot}, score {row.get('score')}")
+        store.paper_adjust_balance(-entry_fee)
+        # Record the amount, not just the slot: an `open` event with no amount left
+        # the ledger unable to explain the balance, which is what made the lost fee
+        # above take so long to find.
+        store.paper_event(pid, "open", amount=-entry_fee,
+                          detail=f"slot {slot}, score {row.get('score')}")
     else:
         store.paper_event(pid, "place", detail=(
             f"maker limit {limit_price:.8g} ({cfg['maker_offset_pct']:g}% better "

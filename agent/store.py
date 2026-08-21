@@ -615,8 +615,33 @@ def paper_init(*, exchange: str, capital: float, slots: int,
 
 
 def paper_set_balance(balance: float) -> None:
+    """Set the balance to an absolute value.
+
+    Prefer `paper_adjust_balance` for anything that credits or debits money — see
+    the lost-update note there. This remains for a genuine reset, where an absolute
+    value is what is meant.
+    """
     with tx() as conn:
         conn.execute("UPDATE paper_account SET balance = ? WHERE id = 1", (balance,))
+
+
+def paper_adjust_balance(delta: float) -> None:
+    """Credit or debit the balance atomically, in the database.
+
+    Every money movement must go through here rather than reading the balance,
+    doing arithmetic in Python and writing an absolute value back. That pattern is a
+    classic lost update, and it cost real money in this account on 2026-08-22:
+    `_open()` debited nine entry fees directly while `cycle()` held a balance read
+    from before them and wrote its own total at the end, silently discarding one fee
+    of 0.1488 USDT. The balance was then permanently 0.1488 higher than the trade
+    records justified.
+
+    `UPDATE ... SET balance = balance + ?` makes the read-modify-write a single
+    statement, so concurrent writers serialise instead of clobbering each other.
+    """
+    with tx() as conn:
+        conn.execute("UPDATE paper_account SET balance = balance + ? WHERE id = 1",
+                     (float(delta),))
 
 
 def paper_open_positions() -> list[dict]:
