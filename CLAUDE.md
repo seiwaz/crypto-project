@@ -368,6 +368,115 @@ thrashing":**
      against what the code should be doing, not from a report or metric alone —
      worth remembering as the pattern that keeps finding real bugs in this system.
 
+## Tabdeal integration — IN PROGRESS, real-money migration requested (2026-08-21)
+
+**User's stated goal, verbatim intent: use Tabdeal as a real exchange to migrate off
+demo/paper trading onto real trading.** This is a live, unresolved, high-stakes thread
+— read this whole section before acting on it further, and do not silently start
+wiring real execution without re-surfacing the open concerns below to the user first.
+
+**How this started:** user asked to research Tabdeal (docs.tabdeal.org, `pip install
+tabdeal-python`) and update the skill to support it. Investigation found the *official*
+`tabdeal-python` package (v0.4.7, latest) only wraps **Spot** and **Isolated Margin**
+(borrow-based leverage — interest, not funding; margin-call liquidation, not a
+maintenance-tier formula) — no perpetual-futures class at all. User then named the
+actual product they want: **"اهرم حرفه‌ای" (Professional Leverage)** — Tabdeal's
+separate futures-style product, undocumented in the pip package but real, live, and
+Binance-futures-shaped.
+
+**Confirmed live, with the user's own real API key/secret (read-only GET calls only —
+no order/transfer/leverage-change calls were ever made):**
+- Base URL `https://api1.tabdeal.org`, futures paths under `/fapi/v1` (orders,
+  leverage, exchangeInfo, depth) and `/fapi/v3` (account, balance, positionRisk). Same
+  auth as spot: `X-MBX-APIKEY` header + HMAC-SHA256-signed query string
+  (`timestamp`+`signature`), i.e. the same pattern `agent/toobit.py` already speaks.
+- `/r/fapi/v3/account` → `{"canTrade": true, "canDeposit": true, "canWithdraw": true,
+  "assets": [], "positions": []}` — the futures account is real, active, currently
+  flat/unfunded.
+- `/r/fapi/v1/leverage?symbol=BTC_USDT` → `{"leverage": 10, "symbol": "BTC_USDT"}` —
+  leverage is real, per-symbol, gettable and (per docs) settable via POST.
+- 33 futures symbols exist. **Symbol format is strict underscore** (`BTC_USDT`) —
+  `BTCUSDT` is rejected as invalid, unlike Toobit's no-separator convention.
+- `exchangeInfo` only returns `pricePrecision`/`quantityPrecision`/`quotePrecision`
+  per symbol — no `filters` (tickSize/stepSize/minNotional) and no leverage-bracket /
+  maintenance-margin ladder the way Toobit's `riskLimits` provides. Usable as
+  `tick = 10^-pricePrecision`, `step = 10^-quantityPrecision`, but there is nothing
+  server-published to check a plan's liquidation buffer against ahead of placing an
+  order — `positionRisk` should return a live `liquidationPrice` once a position
+  actually exists, but that's *after the fact*, not a pre-trade check.
+
+**Hard blocker, confirmed by direct testing, not just doc gaps — Tabdeal has
+NO candle/kline data anywhere:**
+- Every REST path tried 404'd live: `/fapi/v1/klines`, `/fapi/v3/klines`,
+  `/api/v1/klines`, `/fapi/v1/premiumIndex`, `/fapi/v1/fundingRate`,
+  `/fapi/v1/ticker/24hr`, `/fapi/v1/ticker/price` — tried with both symbol formats.
+- The websocket (`wss://api1.tabdeal.org/stream/`, subscribe via a JSON
+  `{"method":"SUBSCRIBE","params":[...],"id":N}` message, **not** the URL
+  `?streams=` query form some Binance-style APIs also accept) works and pushes real
+  depth data fine (`btcusdt@depth@2000ms` streamed live order-book updates), but a
+  kline subscription (`btcusdt@kline_15m`, both symbol formats) got an explicit
+  `{"error":"INVALID_FORMAT"}` rejection from the server — not silence, an active
+  "this isn't a real stream" answer.
+- **Without candles, nothing in `compute_indicators()` (EMA/ATR/RSI/Ichimoku/VWAP/
+  swing structure — the entire signal engine) can be computed from Tabdeal data
+  directly.** The user was mid-way through choosing how to handle this (options put
+  to them: Toobit-candles-for-signals + Tabdeal-for-execution, vs. building candles
+  locally from Tabdeal's own tick/depth stream going forward with no history, vs.
+  pausing) when the conversation moved on to the reachability check below — **this
+  is still an open, unresolved decision, not settled.**
+
+**Server reachability, confirmed 2026-08-21 from 94.74.166.123:** DNS resolves
+(`api1.tabdeal.org` → `185.143.233.238`/`185.143.234.238`), plain HTTPS REST works
+(`/r/fapi/v1/ping` → `200 {}`), `iptables`/`firewalld` are not blocking outbound (same
+permissive state noted elsewhere in this file). **Not yet confirmed:** clean websocket
+reachability from the server specifically — `websocket-client` isn't installed there,
+and a crude `curl` upgrade probe returned `HTTP 000` (inconclusive, not a real test).
+Worth a proper Python-based test before relying on it, the same way it was verified
+from the Mac.
+
+**Two safety concerns raised with the user, not yet resolved either way:**
+1. **The API key/secret the user pasted (now in the gitignored local `.env` as
+   `TABDEAL_API_KEY`/`TABDEAL_API_SECRET`, base URL left blank — never in this public
+   repo, never printed again after the first time) are FULL TRADE-PERMISSION keys on
+   a real, funded account** (`canTrade: true` on both spot and futures; the spot
+   wallet holds real SHIB) — not read-only, unlike every other exchange key this
+   project has used so far (Nobitex, Toobit both explicitly recommend read-only).
+   Recommended the user rotate this key once done exploring. Also recommended they
+   stop pasting secrets directly into chat (paste into `.env` instead) since this
+   session's transcript now contains them regardless of where they end up stored.
+2. **This directly runs into the Phase 4 gate already established in this file**
+   (see below): real-money connection was explicitly gated on ≥100 demo trades with
+   *stable* positive expectancy across ≥3 consecutive evaluation periods, plus a
+   separate explicit approval in an interactive session — "propose and wait, always."
+   The demo account does have 309 closed trades (>100), but per this file's own
+   "Current state" notes the sample mixes trades opened under materially different
+   bug-fix states (Rounds 4-13, same day) and has NOT yet been judged stable across
+   ≥3 consecutive periods under one settled configuration. **The user has now stated
+   the real-trading intent directly and interactively — that satisfies the "explicit
+   approval" half of the gate, but the trade-count/stability precondition has not
+   been re-verified as met.** This was raised but not yet resolved when the session
+   paused to save state for a model switch — surface it again before writing any
+   order-placement code, don't silently proceed past it.
+
+**Separate, not-yet-raised-in-full risk worth surfacing early in the next session:**
+the futures order types confirmed documented so far are only `LIMIT`/`MARKET` — no
+`STOP_MARKET`/`STOP_LOSS`/conditional order type has been confirmed to exist on
+Tabdeal's futures API (spot has `STOP_LOSS_LIMIT`; futures docs explicitly said
+"other advanced types not currently supported" without confirming which, if any,
+stop-type exists). The paper-trading system's whole safety model relies on *its own*
+monitoring loop to detect a stop/TP hit (`agent/paper.py: exit_reason()`) — that's
+fine for a simulation, but for **real money**, if Tabdeal has no server-side/exchange-
+native stop order, a monitoring-loop outage (this project has already had one real,
+if brief, unexplained scheduler-loop stall — see "Known live bugs" item 3 above)
+would leave a real leveraged position with **zero downside protection** for however
+long the loop is down. This must be confirmed one way or the other — and designed
+around if there's no native stop — before any real order is ever placed. Not yet
+investigated at all as of this save point.
+
+**Nothing has been written to `agent/` or `skill/` for Tabdeal yet** — this section
+exists entirely to preserve research findings and open decisions, not completed work.
+No code changes, no commits, no deploys related to Tabdeal have happened.
+
 ## What needs to continue (pick this up without being re-asked)
 
 1. Keep letting the demo account run; the autonomous routine may reset gates/params
