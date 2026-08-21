@@ -477,6 +477,80 @@ investigated at all as of this save point.
 exists entirely to preserve research findings and open decisions, not completed work.
 No code changes, no commits, no deploys related to Tabdeal have happened.
 
+### Full prerequisite audit (2026-08-21) — verdict: NOT READY, 6 blockers
+
+Run at the user's request ("check all prerequisites") before any migration work.
+Everything below was verified by live authenticated GET calls or direct inspection,
+not from docs alone. **Corrections to the section above, found during the audit:**
+
+**CLEARED — these are genuinely fine:**
+1. **Exchange-native SL/TP exists** — `POST /fapi/v1/positionSlTp` is real (GET
+   returns `405 {"code":1217}`, an API-level "wrong method", not a 404 page).
+   This resolves the biggest safety worry flagged above: a real position *can*
+   carry an exchange-side stop that survives our monitoring loop dying. **This
+   changes the earlier "no confirmed stop type" concern from blocker to cleared** —
+   the `/fapi/v1/order` endpoint really does only accept LIMIT/MARKET, but SL/TP is
+   a separate position-level endpoint, not an order type.
+2. **Reachable from the server** — DNS + HTTPS confirmed from 94.74.166.123.
+3. **Auth is Binance-shaped HMAC-SHA256**, same pattern `agent/toobit.py` speaks.
+4. **Leverage + positionRisk + liquidationPrice** all work.
+5. **Track record partly transfers**: of 919 closed demo trades, 374 (40.7%) are on
+   coins Tabdeal actually lists, and that subset performs *better* than the whole
+   (+0.1387R expectancy, 63.1% win, vs +0.1053R / 61.4% overall). 374 > the ≥100
+   Phase 4 minimum.
+
+**BLOCKERS — all six must be resolved before real money:**
+1. **No candle data anywhere on Tabdeal** (detailed above). Signal engine cannot run
+   on Tabdeal data. Unresolved: use Toobit candles + Tabdeal execution, or build bars
+   locally from Tabdeal's depth stream with no history.
+2. **The codebase is architecturally read-only, on purpose.** `agent/guard.py` holds
+   two independent allowlists (Nobitex + Toobit), forbids the substrings `order`,
+   `leverage`, `transfer`, `cancel`, `close`, refuses any non-GET verb, and
+   `self_test()` runs at server startup — **the server refuses to boot if the guard
+   ever stops rejecting a known-bad path.** The skill's own client has a second copy
+   of the same guard. Real trading means deliberately dismantling a safety system
+   that was built deliberately, in two places, with a startup tripwire. This is a
+   major architectural decision, not a config flag.
+3. **Phase 4 stability gate FAILS.** Split into 5 consecutive blocks, expectancy is
+   *not* stable — it swings hard and **the most recent block is negative in both
+   cuts**: all-trades blocks run +0.012/+0.114/+0.181/+0.263/**−0.041**R;
+   Tabdeal-only coins run +0.261/**−0.049**/+0.245/+0.297/**−0.051**R. The gate
+   requires stable positive expectancy across ≥3 consecutive periods. Also note the
+   entire 919-trade sample spans only **36.5 hours** (~25 trades/hour) — one market
+   regime, and it straddles the Round 11/13 bug fixes.
+4. **Futures fee rate is unknown and potentially fatal.** Not in the API, not in the
+   docs, not findable by search. Spot reports `makerCommission: 40 / takerCommission:
+   40` — on the Binance convention that reads as **0.40% per side**. If futures fees
+   are anywhere near that, the strategy dies: at ~$270 notional against a $3 R, a
+   0.8% round trip is **~0.72R of cost** versus the ~0.11R the plans currently assume
+   on Toobit's 0.06% taker. Expectancy is +0.14R; +0.6R of extra drag makes it
+   deeply negative. **Verify the real futures fee before anything else — this single
+   number can invalidate the whole migration.**
+5. **`reduceOnly` is documented as "فعلا پشتیبانی نمی شود" (not currently
+   supported).** Without it there is no guaranteed-safe way to close: an oversized
+   close can flip into an opposite position rather than flatten.
+6. **No close-position endpoint found.** Docs reference `POST /fapi/v1/positionClose`
+   but that path 404s, as do five other candidates tried. Either it's undocumented
+   under another name or closing happens only via an opposing order (which, with no
+   `reduceOnly`, is exactly the risk in blocker 5). Must be resolved.
+
+**Remaining gaps (not blockers, but real):**
+- **45 of 74 watchlist coins don't exist on Tabdeal** (61%). Only 33 futures symbols
+  total. Symbol format is strict underscore (`BTC_USDT`); `BTCUSDT` is rejected.
+- `exchangeInfo` gives only `pricePrecision`/`quantityPrecision` — no tickSize,
+  stepSize, or minNotional filters, and no maintenance-margin/leverage-bracket
+  ladder, so there is no pre-trade liquidation-buffer check the way Toobit's
+  `riskLimits` allows. `positionRisk` gives `liquidationPrice` only after the fact.
+- **The futures account is unfunded** (`assets: []`, `balance: []`).
+- The whole execution layer does not exist: `agent/paper.py` is a simulator, and a
+  real broker needs order-state reconciliation, partial fills, real slippage,
+  rejects, and a kill switch — none of which a paper account ever had to handle.
+- Websocket reachability *from the server* still unverified (`websocket-client` isn't
+  installed there; a curl upgrade probe was inconclusive).
+- API key is full-permission (`canTrade: true`, and futures reports
+  `canWithdraw: true`) on a real funded spot wallet. Should be rotated to the
+  narrowest permission set that works, ideally IP-whitelisted to the server.
+
 ## What needs to continue (pick this up without being re-asked)
 
 1. Keep letting the demo account run; the autonomous routine may reset gates/params
