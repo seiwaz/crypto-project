@@ -368,6 +368,18 @@ thrashing":**
      against what the code should be doing, not from a report or metric alone —
      worth remembering as the pattern that keeps finding real bugs in this system.
 
+## Real-money migration — read `docs/TABDEAL_LIVE_READINESS.md` first
+
+The user has asked for everything to be prepared so a "migrate to real trading"
+instruction can be acted on. **That dossier is the collected result** — the complete
+verified execution API (order/close/SL-TP/leverage/transfer, with exact parameters,
+from Tabdeal's official Postman collection), the two mechanic gaps with no clean
+native solution, what code must be built, a pre-flight checklist, and the gate.
+**Nothing has been executed and nothing is enabled**; the codebase is still
+structurally read-only. Do not start building or opening `guard.py` without the user
+explicitly asking — and when they do, surface §2 (TP1 partial has no safe primitive;
+cross-margin liquidation unmodelled) and §5 (the gate is not met) before writing code.
+
 ## Tabdeal — LIVE as the demo's sole venue since 2026-08-22
 
 **The cutover is done.** The screener and demo now run entirely on Tabdeal data:
