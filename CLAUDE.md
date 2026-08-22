@@ -623,6 +623,23 @@ not from docs alone. **Corrections to the section above, found during the audit:
    `…/broadcast/`, `…/stream/`, plus `apollo.tabdeal.org` (GraphQL) and
    `cms.tabdeal.org`.
 
+   **Data provenance, verified 2026-08-22 — read this before trusting a volume
+   signal.** `plots/history` is Tabdeal's *general* chart API, not a futures one: it
+   serves spot-only pairs (`BTC_IRT`, `USDT_IRT`, `ETH_IRT` all return bars and none
+   have a futures market), and no futures-specific chart path exists —
+   `market_type=special_margin`, `type=futures` and `/special_margin/plots/...` are
+   all ignored or 404. So **the candles are the SPOT series**. Measured basis against
+   both books: chart close sits within **0.02-0.17%** of spot mid *and* futures mid
+   (BTC -0.016%/+0.020%, SUI -0.018%/-0.030%, DOGE +0.126%/+0.094%), so every
+   price-based indicator — EMA, ATR, RSI, Ichimoku, VWAP, structure — is effectively
+   identical either way, and so are the ATR-derived stops. **The one input that is
+   genuinely wrong is volume**: `plots/history` returns spot volume, so the "volume
+   bias (last 10)" direction check (1 of 9) measures the wrong book. Unfixable —
+   the venue publishes no futures volume anywhere. Everything else the screener uses
+   *is* real اهرم حرفه‌ای data: symbol universe and precision from
+   `/r/fapi/v1/exchangeInfo`, order book / spread / liquidity-depth gate from
+   `/r/fapi/v1/depth`, and all execution from `/fapi/v1/*`.
+
    **Lesson worth keeping:** "the endpoint doesn't exist" was wrong because only one
    host was probed. When an exchange's web UI visibly renders a chart, the data
    exists somewhere — read the front-end's own config for its base URLs before
