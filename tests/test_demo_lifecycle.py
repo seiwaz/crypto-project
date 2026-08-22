@@ -505,8 +505,11 @@ results.append(check("_latest_scan_id returns an int or None",
 
 print("18. Settlement identifies OUR position and only OUR fees")
 _cf = _insp.getsource(_live._closing_fill)
-results.append(check("no `or not vpid` fallback to the first match",
-                     "or not vpid" not in _cf, True))
+# check the CODE, not the comment that explains the old bug
+_code = "\n".join(l for l in _cf.splitlines()
+                  if not l.strip().startswith("#") and '"""' not in l)
+results.append(check("no `or not vpid` fallback in the code itself",
+                     "or not vpid" not in _code, True))
 results.append(check("falls back to the position nearest our opened_ts",
                      "abs(float(h.get(\"createdTime\") or 0) - opened_ms)" in _cf, True))
 results.append(check("fees are bounded by the position's own window",
