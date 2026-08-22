@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -203,6 +204,15 @@ def _closing_fill(broker, symbol: str, row: dict) -> tuple[float | None, float |
 # --------------------------------------------------------------------------------
 
 
+# Entry is serialised. Without this, two callers — the scheduler thread and a manual
+# try_open, or two overlapping cycles — can both pass the "not already held" check
+# and both place an order. That happened live on 2026-08-22: orders 8462546 and
+# 8462548 went in a second apart, giving double the intended size on one venue
+# position and two DB rows that each recorded the same close, over-counting the loss
+# by 100%.
+_entry_lock = threading.Lock()
+
+
 def _open_symbols() -> set[str]:
     return {r["symbol"] for r in store.live_positions("pending", "open")}
 
@@ -228,6 +238,17 @@ def try_open(broker=None) -> dict:
     """
     cfg = settings()
     broker = broker or _broker()
+    # Non-blocking: if another caller is already placing an order, say so rather than
+    # queueing up behind it to place a second one moments later.
+    if not _entry_lock.acquire(blocking=False):
+        return {"action": "none", "reason": "entry_in_progress"}
+    try:
+        return _try_open_locked(broker, cfg)
+    finally:
+        _entry_lock.release()
+
+
+def _try_open_locked(broker, cfg: dict) -> dict:
     held = _open_symbols()
     slots_free = cfg["max_slots"] - len(held)
     if slots_free <= 0:
@@ -244,6 +265,10 @@ def try_open(broker=None) -> dict:
     for row in demo.qualifying_signals(held_coins=held_coins,
                                        closed_times=store.live_last_close_times()):
         if row["symbol"] in held:
+            continue
+        # Re-read our book right before committing: the venue is authoritative and a
+        # position may have appeared since the loop started.
+        if row["coin"] in {r["coin"] for r in store.live_positions("pending", "open")}:
             continue
         try:
             return _enter(broker, row, cfg, notional_now)
@@ -389,7 +414,21 @@ def manage(broker=None) -> list[dict]:
     broker = broker or _broker()
     venue = {p["symbol"]: p for p in broker.positions()}
     out = []
+    # One venue position per symbol, so manage one row per symbol. Duplicates close
+    # the same position twice — the second attempt fails with "position not found"
+    # and, worse, records the same realised PnL again.
+    seen: set[str] = set()
     for row in store.live_positions("open"):
+        if row["symbol"] in seen:
+            store.live_close(row["id"], exit_price=None, exit_reason="duplicate",
+                             realised_pnl=0.0)
+            store.live_event(row["id"], "close",
+                             "duplicate row for a symbol already managed; "
+                             "closed with zero PnL so it cannot be double-counted")
+            log.error("live: duplicate row for %s — closed as duplicate", row["symbol"])
+            out.append({"symbol": row["symbol"], "action": "DEDUPE"})
+            continue
+        seen.add(row["symbol"])
         pos = venue.get(row["symbol"])
         if not pos:
             continue                       # reconcile() handles the vanished case

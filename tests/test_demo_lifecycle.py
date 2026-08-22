@@ -453,11 +453,38 @@ _src = _insp.getsource(_live._enter)
 results.append(check("`side` is bound before the geometry check",
                      _src.index('side = row["side"]') < _src.index("valid_geometry(side"),
                      True))
-_ts = _insp.getsource(_live.try_open)
+# the selection loop now lives in _try_open_locked, behind the entry lock
+_ts = _insp.getsource(_live._try_open_locked)
 results.append(check("failed entries report all_entries_failed",
                      "all_entries_failed" in _ts, True))
 results.append(check("no_signal is still returned when there is genuinely nothing",
                      '"reason": "no_signal"' in _ts, True))
+
+print("16. Entry is serialised and duplicate rows cannot double-count")
+# Live 2026-08-22: a manual try_open raced the scheduler thread; both passed the
+# "not already held" check and both placed an order one second apart (8462546,
+# 8462548). Result was double the intended size on one venue position and two DB
+# rows that each recorded the same close - over-counting the loss by 100%.
+results.append(check("an entry lock exists", hasattr(_live, "_entry_lock"), True))
+_ts = _insp.getsource(_live.try_open)
+results.append(check("try_open takes it non-blocking",
+                     "acquire(blocking=False)" in _ts, True))
+results.append(check("a busy lock reports entry_in_progress",
+                     "entry_in_progress" in _ts, True))
+_lk = _insp.getsource(_live._try_open_locked)
+results.append(check("the book is re-read inside the lock before placing",
+                     'store.live_positions("pending", "open")' in _lk, True))
+_mg = _insp.getsource(_live.manage)
+results.append(check("manage dedupes by symbol", "seen" in _mg, True))
+results.append(check("a duplicate row is closed with ZERO pnl",
+                     "realised_pnl=0.0" in _mg, True))
+# the lock actually excludes
+_held = _live._entry_lock.acquire(blocking=False)
+try:
+    results.append(check("held lock blocks a second entry",
+                         _live.try_open().get("reason"), "entry_in_progress"))
+finally:
+    if _held: _live._entry_lock.release()
 
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
