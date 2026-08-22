@@ -143,7 +143,7 @@ class TabdealBroker:
 
     def positions(self) -> list[dict]:
         """Live positions, straight from the venue. The source of truth."""
-        raw = tabdeal._get("/r/fapi/v3/positionRisk", self._signed_query(), timeout=15)
+        raw = self._get_signed("/r/fapi/v3/positionRisk")
         rows = raw if isinstance(raw, list) else []
         return [r for r in rows if abs(float(r.get("positionAmt") or 0)) > 0]
 
@@ -151,14 +151,34 @@ class TabdealBroker:
         return next((p for p in self.positions() if p.get("symbol") == symbol), None)
 
     def balance(self) -> list[dict]:
-        return tabdeal._get("/r/fapi/v3/balance", self._signed_query(), timeout=15)
+        return self._get_signed("/r/fapi/v3/balance")
 
-    def _signed_query(self) -> dict:
-        ts = int(time.time() * 1000)
-        q = {"timestamp": ts, "recvWindow": RECV_WINDOW_MS}
-        sig = hmac.new(self._secret.encode(), urllib.parse.urlencode(q).encode(),
+    def _get_signed(self, path: str, params: dict | None = None):
+        """Authenticated GET. Must NOT go through `tabdeal._get`.
+
+        That helper is the public market-data client and sends no `X-MBX-APIKEY`
+        header, so a signed request through it returns 401 "Access denied". Found the
+        first time this ran live, and it mattered: `positions()` backs both
+        `reduce_position()` and `flatten_all()`, so a silent 401 would have made the
+        kill switch report an empty position list and close nothing.
+        """
+        d = dict(params or {})
+        d["timestamp"] = int(time.time() * 1000)
+        d["recvWindow"] = RECV_WINDOW_MS
+        query = urllib.parse.urlencode(d)
+        sig = hmac.new(self._secret.encode(), query.encode(),
                        hashlib.sha256).hexdigest()
-        return {**q, "signature": sig}
+        req = urllib.request.Request(
+            f"{tabdeal.base_url()}{path}?{query}&signature={sig}",
+            headers={"X-MBX-APIKEY": self._key, "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8") or "null")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:200]
+            raise BrokerError(f"HTTP {exc.code} on GET {path}: {detail}") from None
+        except Exception as exc:                                   # noqa: BLE001
+            raise BrokerError(f"GET {path} failed: {exc}") from None
 
     # ---------------------------------------------------------------- writes
 
