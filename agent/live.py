@@ -536,11 +536,22 @@ def cycle() -> dict:
 def scheduler_loop(stop_event) -> None:
     """Run the engine for as long as the server lives and live trading is armed.
 
-    Entries are attempted on their own slower timer, for the same reason the demo
-    separates them: the candidate set only changes when a scan completes, so trying
-    every cycle re-evaluates the same signals and risks acting on a stale plan.
+    Entry is triggered by a NEW COMPLETED SCAN, not by a fixed timer.
+
+    The timer version fired every `entry_interval_seconds` regardless of whether the
+    candidate set had changed, and the two clocks drifted against each other. Seen
+    live on 2026-08-22: the engine attempted entry at 09:51:52, seconds before scan
+    706 finished at 09:52:33 and made BNB a TAKE — so a valid signal sat unacted on
+    for the next five minutes. On a 30-minute scalp that is a sixth of the trade's
+    life, and by the time the timer came round the drift guard may reject the plan as
+    stale. Acting on scan completion removes the drift entirely: a new candidate set
+    is exactly when there is something new to decide.
+
+    `entry_interval_seconds` is kept as a floor so a burst of scans cannot produce a
+    burst of entries.
     """
     last_entry = 0.0
+    last_scan_seen = None
     while not stop_event.is_set():
         cfg = settings()
         if cfg["enabled"]:
@@ -548,16 +559,40 @@ def scheduler_loop(stop_event) -> None:
                 out = cycle()
                 if out["reconcile"]["closed"] or out["reconcile"]["orphans"]:
                     log.warning("live reconcile: %s", out["reconcile"])
+
+                scan_id = _latest_scan_id()
                 now = time.time()
-                if now - last_entry >= cfg["entry_interval_seconds"]:
-                    last_entry = now
+                fresh_scan = scan_id is not None and scan_id != last_scan_seen
+                spaced = now - last_entry >= cfg["entry_interval_seconds"]
+                if fresh_scan and (spaced or last_entry == 0.0):
+                    last_scan_seen, last_entry = scan_id, now
                     opened = try_open()
-                    if opened.get("action") == "opened":
-                        log.warning("live entry: %s", opened)
+                    # Log every outcome, not just a fill. A silent non-entry is what
+                    # made the timer drift above take so long to spot.
+                    log.warning("live entry attempt (scan %s): %s", scan_id, opened)
+                out["scan_id"] = scan_id
                 store.set_kv("live.last_cycle", {"at": _now_iso(), **out})
             except Exception as exc:                           # noqa: BLE001
                 log.warning("live cycle failed: %s", exc)
         stop_event.wait(cfg["cycle_seconds"])
+
+
+def _latest_scan_id() -> int | None:
+    """The most recent COMPLETED scan. A running scan is a partial candidate set."""
+    try:
+        row = store.latest_scan_done() if hasattr(store, "latest_scan_done") else None
+        if row:
+            return int(row["id"])
+    except Exception:                                          # noqa: BLE001
+        pass
+    try:
+        with store.tx() as conn:
+            r = conn.execute("SELECT MAX(id) AS m FROM scans "
+                             "WHERE status = 'done'").fetchone()
+            return int(r["m"]) if r and r["m"] is not None else None
+    except Exception as exc:                                   # noqa: BLE001
+        log.warning("live: could not read the latest scan id: %s", exc)
+        return None
 
 
 def state() -> dict:

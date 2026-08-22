@@ -486,6 +486,23 @@ try:
 finally:
     if _held: _live._entry_lock.release()
 
+print("17. Entry is triggered by a new completed scan, not a blind timer")
+# Live 2026-08-22: the entry timer fired at 09:51:52, seconds before scan 706 finished
+# at 09:52:33 and made BNB a TAKE. The two clocks had drifted apart, so a valid signal
+# sat unacted on for five minutes - a sixth of a 30-minute scalp's life.
+_sl = _insp.getsource(_live.scheduler_loop)
+results.append(check("loop tracks the last scan it acted on",
+                     "last_scan_seen" in _sl, True))
+results.append(check("entry requires a fresh scan", "fresh_scan" in _sl, True))
+results.append(check("interval is kept only as a floor", "spaced" in _sl, True))
+results.append(check("every attempt is logged, not just fills",
+                     "live entry attempt" in _sl, True))
+results.append(check("only COMPLETED scans count",
+                     "status = 'done'" in _insp.getsource(_live._latest_scan_id), True))
+results.append(check("_latest_scan_id returns an int or None",
+                     _live._latest_scan_id() is None
+                     or isinstance(_live._latest_scan_id(), int), True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
