@@ -216,19 +216,29 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
         return {"action": "declined", "coin": row["coin"], "reason": "stale_signal",
                 "drift_r": round(drift_r, 3)}
 
-    # Size from the risk budget, then clamp to whatever notional headroom is left.
-    risk_amount = cfg["capital"] * _risk_pct(cfg) / 100.0
+    # Size to a notional target, and let risk fall out of the real stop distance.
+    #
+    # Not from a `capital` x `risk_pct` budget, deliberately. Under cross margin the
+    # binding constraint is TOTAL notional — liquidation is computed on the whole
+    # book, not per position — so notional is the thing to control directly. It also
+    # decouples the live engine from the top-level `capital` setting, which the
+    # planner uses to build plans: setting that to the real 5.27 balance made every
+    # plan unfundable (84x leverage required against a 17x cap) and turned all 33
+    # coins into SKIP, starving this engine of the very signals it needs.
     stop_distance = abs(mark - float(stop))
     if stop_distance <= 0:
         raise ValueError("stop distance is zero")
-    qty = risk_amount / stop_distance
     spec = _spec(symbol)
-    headroom = cfg["max_total_notional"] - notional_now
-    if qty * mark > headroom:
-        qty = headroom / mark
-    qty = tabdeal_broker._round_down(qty, spec["step_size"])
+    target_notional = min(cfg["max_total_notional"] / max(1, cfg["max_slots"]),
+                          cfg["max_total_notional"] - notional_now)
+    if target_notional <= 0:
+        return {"action": "declined", "coin": row["coin"], "reason": "notional_cap"}
+    qty = tabdeal_broker._round_down(target_notional / mark, spec["step_size"])
     if qty <= 0:
-        return {"action": "declined", "coin": row["coin"], "reason": "size_rounds_to_zero"}
+        return {"action": "declined", "coin": row["coin"],
+                "reason": "size_rounds_to_zero",
+                "target_notional": round(target_notional, 4)}
+    risk_amount = qty * stop_distance          # 1R, a consequence of the real stop
 
     # Leverage must exist for the symbol before it can be traded — an unconfigured
     # market answers "TraderMarketConfig matching query does not exist".
@@ -358,9 +368,13 @@ def _reached(side: str, mark: float, level) -> bool:
 
 
 def _risk_pct(cfg: dict) -> float:
-    """Risk per position, derived so a full board sits at the notional cap."""
+    """Indicative risk per position as a % of the live balance. Reporting only.
+
+    Sizing does not use this — `_enter` sizes to a notional target and derives 1R
+    from the actual stop distance. This exists so the dashboard can express that as
+    a percentage of the account.
+    """
     per_notional = cfg["max_total_notional"] / max(1, cfg["max_slots"])
-    # notional = R / stop_pct, and the scalp stop is ~1.5%
     return (per_notional * 0.015) / cfg["capital"] * 100.0 if cfg["capital"] else 0.0
 
 
