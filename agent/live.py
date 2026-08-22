@@ -3,14 +3,18 @@
 This is `demo.py`'s management loop pointed at real money. It runs the same strategy
 against the same signals, with one deliberate difference in who does what:
 
-    the EXCHANGE owns the downside  — stop loss and take profit are set on the
-                                      position itself via `positionSlTp`, so they
-                                      survive this process dying, the server
-                                      rebooting, or the network dropping
-    the ENGINE owns the judgement   — which signal to take, when the setup has
-                                      stopped being valid (signal exit), when a
-                                      trade has gone nowhere (time stop), and the
-                                      TP1 partial
+    the EXCHANGE owns the downside  — the stop loss is set on the position itself via
+                                      `positionSlTp`, so it survives this process
+                                      dying, the server rebooting, or the network
+                                      dropping. Once TP1 is reached the stop is moved
+                                      up to TP1, so a paid trade stays paid.
+    the ENGINE owns the upside      — which signal to take, when the setup has stopped
+                                      being valid (signal exit), and when a trade has
+                                      gone nowhere (time stop). There is no venue-side
+                                      take-profit and no TP2: a fixed target closes a
+                                      trade at an arbitrary price regardless of whether
+                                      the move is actually over, and the signal is a
+                                      better judge of that.
 
 That split is the whole safety design. A monitoring loop is a good place for
 "should I still be in this trade"; it is a terrible place for "am I about to lose
@@ -274,13 +278,19 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
                                   f"{order.get('orderId')}")
     log.warning("live: OPENED %s %s qty=%g @~%.8g", symbol, side, qty, mark)
 
-    _attach_stop(broker, pid, symbol, stop, tp2)
+    # Stop only — no exchange take-profit. The upside is decided by the signal, and
+    # a venue-side TP would pre-empt that at an arbitrary price.
+    _attach_stop(broker, pid, symbol, stop, None)
     return {"action": "opened", "coin": row["coin"], "symbol": symbol,
             "qty": qty, "entry": mark, "order": order.get("orderId")}
 
 
-def _attach_stop(broker, pid: int, symbol: str, stop, tp) -> None:
+def _attach_stop(broker, pid: int, symbol: str, stop, tp=None) -> None:
     """Hand the downside to the exchange, immediately after the fill.
+
+    `tp` is normally None: this engine does not use a venue-side take-profit, because
+    the exit decision belongs to the signal (see `_manage_one`). The stop is the part
+    that must survive this process dying, and it always does.
 
     This is the most important call in the engine. Until it succeeds the position has
     no protection that survives this process, so a failure is logged as an error and
@@ -341,18 +351,35 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
 
     # The stop and the target belong to the exchange. Everything below is judgement.
 
-    # TP1: bank half and let the exchange keep protecting the rest.
+    # TP1 reached: lock the stop there and hand the exit decision to the signal.
+    #
+    # No partial and no TP2, at the user's direction (2026-08-22). Both changes earn
+    # their keep:
+    #   * The half exit had to be an opposing MARKET order, because Tabdeal supports
+    #     neither `reduceOnly` nor a partial close — the one operation in this engine
+    #     that could flip a position instead of trimming it. Removing it removes that
+    #     whole class of failure.
+    #   * A fixed TP2 closed the trade at an arbitrary level regardless of whether the
+    #     setup still held. The signal check is a better judge of when the move is
+    #     over, and it was already the dominant exit in practice (61 of 92 in the
+    #     demo's crash window, against 2 TP2s).
+    #
+    # What TP1 still does is move the exchange stop up to the TP1 price. That is the
+    # risk-free lock, and it is enforced by the venue rather than this loop — so once
+    # a trade has paid, the profit survives the engine dying.
     if not int(row.get("tp1_filled") or 0) and _reached(row["side"], mark, row["tp1"]):
-        res = broker.reduce_position(symbol, 0.5)
-        store.live_update(row["id"], tp1_filled=1, quantity=res.get("remaining",
-                                                                   row["quantity"]))
-        store.live_event(row["id"], "tp1", f"halved at {mark:.8g}: {res}")
-        # Move the exchange stop up to TP1 — the risk-free lock, now enforced by the
-        # venue rather than by this loop.
-        _attach_stop(broker, row["id"], symbol, row["tp1"], row["tp2"])
-        return {"symbol": symbol, "action": "TP1", "mark": mark, **res}
+        _attach_stop(broker, row["id"], symbol, row["tp1"], None)
+        store.live_update(row["id"], tp1_filled=1)
+        store.live_event(row["id"], "tp1",
+                         f"reached TP1 {float(row['tp1']):.8g} at {mark:.8g}; "
+                         f"stop locked there, running on signal")
+        log.warning("live: %s reached TP1, stop locked at %.8g", symbol,
+                    float(row["tp1"]))
+        return {"symbol": symbol, "action": "TP1_LOCK", "mark": mark,
+                "stop_now": row["tp1"], "r": round(r_now, 3)}
 
-    # Signal exit: in profit, but the setup no longer qualifies.
+    # Signal exit: in profit, but the setup no longer qualifies. Past TP1 this is the
+    # only thing that closes a winner, since there is no TP2 to run into.
     if upnl > 0:
         still, reason = demo._profit_signal_check(row)
         if reason is not None:
