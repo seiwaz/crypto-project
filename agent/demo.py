@@ -666,7 +666,8 @@ def _correlation_filter_status() -> dict:
 # --------------------------------------------------------------------------------
 
 
-def qualifying_signals() -> list[dict]:
+def qualifying_signals(held_coins: set[str] | None = None,
+                       closed_times: dict | None = None) -> list[dict]:
     """Signals eligible to take a slot: TAKE, score at or above the floor, not open.
 
     Ranking is by score. The spec's tie-break on `btc_context.alpha_pct` — coin
@@ -682,9 +683,16 @@ def qualifying_signals() -> list[dict]:
     # "not open" and queued a second entry for it. This account did exactly that on
     # WIF — two live positions in the same coin at once, doubling its single-name risk
     # beyond the one-slot-per-coin design the slot/heat model assumes.
-    open_coins = {p["coin"] for p in store.paper_open_positions()}
-    open_coins |= {p["coin"] for p in store.paper_pending_positions()}
-    closed_at = store.paper_last_close_times()
+    # Callers with their own book pass it in. The live engine and the paper account
+    # hold separate positions, and one must not block the other from taking a signal
+    # — without this the demo's 14 open positions would silently starve the live
+    # engine of exactly the candidates it rates highest.
+    if held_coins is None:
+        held_coins = {p["coin"] for p in store.paper_open_positions()}
+        held_coins |= {p["coin"] for p in store.paper_pending_positions()}
+    open_coins = held_coins
+    closed_at = (store.paper_last_close_times() if closed_times is None
+                 else closed_times)
     out = []
     for row in store.latest_results(cfg["exchange"]):
         if row.get("verdict") != "TAKE":

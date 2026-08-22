@@ -179,7 +179,10 @@ def try_open(broker=None) -> dict:
         return {"action": "none", "reason": "notional_cap",
                 "notional": round(notional_now, 2)}
 
-    for row in demo.qualifying_signals():
+    # Pass our own book: the paper account's positions must not gate the live one.
+    held_coins = {r["coin"] for r in store.live_positions("pending", "open")}
+    for row in demo.qualifying_signals(held_coins=held_coins,
+                                       closed_times=store.live_last_close_times()):
         if row["symbol"] in held:
             continue
         try:

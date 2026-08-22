@@ -883,3 +883,10 @@ def live_event(position_id, kind: str, detail: str = "") -> None:
     with tx() as conn:
         conn.execute("INSERT INTO live_events (position_id, at, kind, detail) "
                      "VALUES (?, ?, ?, ?)", (position_id, now_iso(), kind, detail))
+
+
+def live_last_close_times() -> dict[str, str]:
+    """Most recent live close per coin, for the live engine's re-entry guard."""
+    return {r["coin"]: r["closed_at"] for r in _rows(
+        "SELECT coin, MAX(closed_at) AS closed_at FROM live_positions "
+        "WHERE status = 'closed' AND closed_at IS NOT NULL GROUP BY coin")}
