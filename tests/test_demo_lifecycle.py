@@ -526,6 +526,29 @@ results.append(check("backfill only touches rows missing a result",
                      'row.get("realised_pnl") is not None' in
                      _insp.getsource(_live.backfill_unsettled), True))
 
+print("19. Signal exit must clear the round-trip cost first")
+# Live: 8 closes, gross POSITIVE at +0.064254, account still down 0.047507 - because
+# six of them fired while gross was below the ~0.0124 round-trip fee, so the exit
+# itself booked the loss. `upnl > 0` was the wrong bar.
+_m1 = _insp.getsource(_live._manage_one)
+results.append(check("a round-trip cost is computed",
+                     "round_trip_cost = qty * mark" in _m1, True))
+results.append(check("signal exit is gated on it, not on upnl > 0",
+                     "if upnl > round_trip_cost:" in _m1, True))
+# `elif upnl > 0:` is the correct below-the-line branch; what must be gone is the
+# bare `if upnl > 0:` that used to trigger the exit itself.
+results.append(check("the bare `if upnl > 0:` trigger is gone",
+                     not any(l.strip() == "if upnl > 0:" for l in _m1.splitlines()),
+                     True))
+results.append(check("below the line it holds and says why",
+                     "below_cost_line" in _m1, True))
+# the arithmetic itself: 0.1% a side, both sides
+_qty, _mark = 0.0089, 697.0
+_expect = _qty * _mark * (_tab.TAKER_FEE_PCT / 100.0) * 2
+results.append(check("round trip is 0.2% of notional",
+                     round(_expect, 6), round(_qty * _mark * 0.002, 6)))
+results.append(check("~0.0124 on a $6.20 position", round(_expect, 4), 0.0124, 0.0002))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)

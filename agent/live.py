@@ -522,8 +522,20 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
                     out["exit_price"], out["realised_pnl"])
         return {"symbol": symbol, "action": "CLOSE", "reason": "tp1", **out}
 
-    # Signal exit: in profit but short of TP1, and the setup no longer qualifies.
-    if upnl > 0:
+    # Signal exit: the setup has lapsed AND the trade has actually paid for itself.
+    #
+    # `upnl > 0` was the wrong bar. A round trip costs 0.1% a side, so ~0.0124 USDT on
+    # a $6.20 position, and closing at +0.0018 of gross books a 0.0107 loss. Six of
+    # the first eight live closes did exactly that: gross across them was POSITIVE
+    # (+0.0643) and the account still lost 0.0475, because the exits kept firing
+    # before the move had covered its own cost.
+    #
+    # Below the cost line the choice is not "take the profit" versus "give it back" —
+    # it is "book a certain loss now" versus "let the exchange stop bound it". The
+    # stop is already on the position, so holding is the cheaper of the two. Above the
+    # line the original logic stands: bank it rather than wait for a level.
+    round_trip_cost = qty * mark * (tabdeal.TAKER_FEE_PCT / 100.0) * 2
+    if upnl > round_trip_cost:
         still, reason = demo._profit_signal_check(row)
         if reason is not None:
             out = settle(broker, row, "signal_exit", mark)
@@ -534,6 +546,15 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
         if still:
             return {"symbol": symbol, "action": "HOLD", "reason": "still_favoured",
                     "r": r_now}
+    elif upnl > 0:
+        # In profit but not yet past the fee. Say so explicitly, so a run of these is
+        # visible as "the edge is too small to clear costs" rather than looking idle.
+        still, reason = demo._profit_signal_check(row)
+        if reason is not None:
+            return {"symbol": symbol, "action": "HOLD", "reason": "below_cost_line",
+                    "detail": f"setup lapsed but gross {upnl:.6f} < round trip "
+                              f"{round_trip_cost:.6f}; holding to the stop",
+                    "r": round(r_now, 3)}
 
     # Time stop: only for a trade that is going nowhere. A loser is left to its
     # exchange stop, exactly as in the demo.
