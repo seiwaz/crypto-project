@@ -123,8 +123,41 @@ def reconcile(broker=None) -> dict:
     return out
 
 
+def settle(broker, row: dict, reason: str, fallback_price: float) -> dict:
+    """Close a position and record what the VENUE says it cost, not our estimate.
+
+    The first live close made the need obvious: CAKE exited flat at 1.7801 with
+    0.00623 of commission each side, a real result of about -0.0125 USDT, but the
+    engine recorded +0.00175 because it stored the unrealised PnL computed from our
+    own mark at decision time and never subtracted fees. Left alone, the live record
+    would drift from the account exactly the way the paper account's did — and this
+    one is real money.
+
+    Falls back to the estimate only when the venue has not yet published the fill,
+    and says so in the event log rather than silently passing an estimate off as
+    settled.
+    """
+    symbol = row["symbol"]
+    broker.close_position(symbol)
+    price, pnl = _closing_fill(broker, symbol, row)
+    estimated = price is None
+    store.live_close(row["id"], exit_price=price if price else fallback_price,
+                     exit_reason=reason, realised_pnl=pnl)
+    store.live_event(row["id"], "close",
+                     f"{reason} at {price if price else fallback_price} "
+                     f"(net {pnl if pnl is not None else 'unknown'})"
+                     + (" [ESTIMATED — venue fill not yet available]" if estimated else ""))
+    return {"exit_price": price or fallback_price, "realised_pnl": pnl,
+            "estimated": estimated}
+
+
 def _closing_fill(broker, symbol: str, row: dict) -> tuple[float | None, float | None]:
-    """The price the venue actually closed at, from its own trade record."""
+    """The price the venue actually closed at, and the NET result after commission.
+
+    Commission is the part that is easy to miss and never negligible here: Tabdeal
+    charges 0.1% a side, so a trade that exits at its entry price is already down
+    0.2% of notional. `realizedPnl` from the venue is gross of that.
+    """
     try:
         trades = broker._get_signed("/r/fapi/v1/userTrades", {"symbol": symbol}) or []
     except Exception as exc:                                   # noqa: BLE001
@@ -134,14 +167,15 @@ def _closing_fill(broker, symbol: str, row: dict) -> tuple[float | None, float |
     fills = [t for t in trades if float(t.get("time") or 0) >= opened]
     if not fills:
         return None, None
-    last = fills[-1]
-    price = float(last.get("price") or 0) or None
-    pnl = None
-    try:
-        pnl = sum(float(t.get("realizedPnl") or 0) for t in fills)
-    except (TypeError, ValueError):
-        pass
-    return price, pnl
+    price = float(fills[-1].get("price") or 0) or None
+    gross = fees = 0.0
+    for t in fills:
+        try:
+            gross += float(t.get("realizedPnl") or 0)
+            fees += float(t.get("commission") or 0)
+        except (TypeError, ValueError):
+            continue
+    return price, gross - fees
 
 
 # --------------------------------------------------------------------------------
@@ -383,13 +417,11 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     if upnl > 0:
         still, reason = demo._profit_signal_check(row)
         if reason is not None:
-            broker.close_position(symbol)
-            store.live_close(row["id"], exit_price=mark, exit_reason="signal_exit",
-                             realised_pnl=upnl)
-            store.live_event(row["id"], "close", f"signal_exit: {reason}")
-            log.warning("live: %s signal_exit at %.8g (%+.3fR)", symbol, mark, r_now)
+            out = settle(broker, row, "signal_exit", mark)
+            log.warning("live: %s signal_exit at %s (net %s)", symbol,
+                        out["exit_price"], out["realised_pnl"])
             return {"symbol": symbol, "action": "CLOSE", "reason": "signal_exit",
-                    "r": r_now}
+                    "detail": reason, **out}
         if still:
             return {"symbol": symbol, "action": "HOLD", "reason": "still_favoured",
                     "r": r_now}
@@ -398,12 +430,11 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     # exchange stop, exactly as in the demo.
     floor = 0.5 * risk
     if held_h >= cfg["time_stop_hours"] and 0 <= upnl < floor:
-        broker.close_position(symbol)
-        store.live_close(row["id"], exit_price=mark, exit_reason="time_stop",
-                         realised_pnl=upnl)
-        store.live_event(row["id"], "close", f"time_stop after {held_h:.2f}h")
-        log.warning("live: %s time_stop at %.8g (%+.3fR)", symbol, mark, r_now)
-        return {"symbol": symbol, "action": "CLOSE", "reason": "time_stop", "r": r_now}
+        out = settle(broker, row, "time_stop", mark)
+        log.warning("live: %s time_stop after %.2fh (net %s)", symbol, held_h,
+                    out["realised_pnl"])
+        return {"symbol": symbol, "action": "CLOSE", "reason": "time_stop",
+                "held_h": round(held_h, 2), **out}
 
     return {"symbol": symbol, "action": "HOLD", "r": round(r_now, 3),
             "held_h": round(held_h, 2)}
