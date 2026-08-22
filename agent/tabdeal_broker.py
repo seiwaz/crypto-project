@@ -142,10 +142,43 @@ class TabdealBroker:
     # ---------------------------------------------------------------- reads
 
     def positions(self) -> list[dict]:
-        """Live positions, straight from the venue. The source of truth."""
-        raw = self._get_signed("/r/fapi/v3/positionRisk")
-        rows = raw if isinstance(raw, list) else []
-        return [r for r in rows if abs(float(r.get("positionAmt") or 0)) > 0]
+        """Live positions, straight from the venue. The source of truth.
+
+        Reads `/r/fapi/v1/position`, NOT `/r/fapi/v3/positionRisk`. The Binance-shaped
+        positionRisk endpoint looked like the obvious choice and is close to useless
+        here: it carries no position id at all, and returns `markPrice`,
+        `unRealizedProfit` and `liquidationPrice` as the string "0" on a live
+        position. Acting on those zeros would mean a stop that can never be attached
+        (positionSlTp requires the id) and a manager that believes every trade is
+        exactly flat.
+
+        `/r/fapi/v1/position` carries `id`, the real `entryPrice`, and — usefully —
+        `stopLossPrice`/`takeProfitPrice`, so whether the exchange-side stop actually
+        landed is verifiable rather than assumed. `positionAmt` there is unsigned
+        with a separate LONG/SHORT `side`, so it is signed here to match the
+        Binance convention the rest of the code expects.
+        """
+        raw = self._get_signed("/r/fapi/v1/position")
+        out = []
+        for r in (raw if isinstance(raw, list) else []):
+            if str(r.get("status") or "").upper() != "ACTIVE":
+                continue
+            amt = abs(float(r.get("positionAmt") or 0))
+            if amt <= 0:
+                continue
+            is_long = str(r.get("side") or "").upper() == "LONG"
+            out.append({
+                "positionId": r.get("id"),
+                "symbol": r.get("symbol"),
+                "side": "long" if is_long else "short",
+                "positionAmt": amt if is_long else -amt,
+                "entryPrice": r.get("entryPrice"),
+                "stopLossPrice": r.get("stopLossPrice"),
+                "takeProfitPrice": r.get("takeProfitPrice"),
+                "createdTime": r.get("createdTime"),
+                "raw": r,
+            })
+        return out
 
     def position_for(self, symbol: str) -> dict | None:
         return next((p for p in self.positions() if p.get("symbol") == symbol), None)

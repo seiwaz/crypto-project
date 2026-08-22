@@ -154,7 +154,8 @@ def total_notional(broker=None) -> float:
     tot = 0.0
     for p in broker.positions():
         try:
-            tot += abs(float(p["positionAmt"])) * float(p.get("markPrice") or 0)
+            px = float(p.get("markPrice") or 0) or (tabdeal.mark_price(p["symbol"]) or 0)
+            tot += abs(float(p["positionAmt"])) * px
         except (TypeError, ValueError, KeyError):
             continue
     return tot
@@ -274,7 +275,7 @@ def _attach_stop(broker, pid: int, symbol: str, stop, tp) -> None:
     """
     try:
         live = broker.position_for(symbol)
-        vpid = (live or {}).get("positionId") or (live or {}).get("id")
+        vpid = (live or {}).get("positionId")
         if vpid is None:
             raise ValueError("venue did not report a positionId")
         broker.set_position_sl_tp(vpid, sl_price=stop, tp_price=tp, symbol=symbol)
@@ -311,8 +312,16 @@ def manage(broker=None) -> list[dict]:
 
 def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     symbol = row["symbol"]
-    mark = float(pos.get("markPrice") or 0) or tabdeal.mark_price(symbol)
-    upnl = float(pos.get("unRealizedProfit") or 0)
+    # The venue reports markPrice and unRealizedProfit as "0" on a live position, so
+    # both are computed here from our own mark and the venue's entry price. Trusting
+    # its zeros would leave the manager believing every trade is exactly flat —
+    # signal exit would never fire, and the time stop would fire on everything.
+    mark = tabdeal.mark_price(symbol)
+    if not mark:
+        return {"symbol": symbol, "action": "SKIP", "reason": "no mark price"}
+    entry = float(pos.get("entryPrice") or row.get("entry_price") or 0)
+    qty = abs(float(pos.get("positionAmt") or 0))
+    upnl = (mark - entry) * qty if row["side"] == "long" else (entry - mark) * qty
     risk = float(row.get("risk_amount") or 0)
     r_now = (upnl / risk) if risk else 0.0
     held_h = (time.time() - float(row.get("opened_ts") or time.time())) / 3600.0
