@@ -410,6 +410,22 @@ results.append(check("short: a long-shaped plan is rejected",
 results.append(check("missing levels never block (handled elsewhere)",
                      demo.valid_geometry("long", _L(100, None, 105, 110)), True))
 
+print("13. _profit_signal_check works on a row with no `exchange` column")
+# live_positions has no `exchange` column; the live engine passes its own rows in.
+# Reading pos["exchange"] raised KeyError, aborting _manage_one before the time stop,
+# so a live position in profit received no engine management at all.
+_saved = D.store.result_for
+try:
+    D.store.result_for = lambda coin, ex: {"verdict": "TAKE", "score": 85.0}
+    results.append(check("no-exchange row resolves instead of raising",
+                         demo._profit_signal_check({"coin": "BNB"}), (True, None)))
+    D.store.result_for = lambda coin, ex: {"verdict": "SKIP", "score": 40.0}
+    ok, why = demo._profit_signal_check({"coin": "BNB"})
+    results.append(check("still detects a lapsed setup", ok, False))
+    results.append(check("and gives a reason", why is not None, True))
+finally:
+    D.store.result_for = _saved
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)

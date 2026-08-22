@@ -1115,7 +1115,12 @@ def _profit_signal_check(pos: dict) -> tuple[bool, str | None]:
     the fix. Missing data means "no opinion," so it falls through to the unmodified
     time-stop logic below rather than either forcing a close or forcing a float.
     """
-    row = store.result_for(pos["coin"], pos["exchange"])
+    # `exchange` is a column on paper_positions but not on live_positions, and the
+    # live engine passes its own rows here. Reading it directly raised KeyError,
+    # which aborted _manage_one before the time stop ever ran — so a live position in
+    # profit got no engine management at all, only the exchange's TP2. Fall back to
+    # the configured venue, which is what a live row always trades on anyway.
+    row = store.result_for(pos["coin"], pos.get("exchange") or settings()["exchange"])
     if not row:
         return False, None
     verdict, score = row.get("verdict"), row.get("score")
