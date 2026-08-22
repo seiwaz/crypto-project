@@ -85,6 +85,33 @@ def _now_iso() -> str:
 # --------------------------------------------------------------------------------
 
 
+def backfill_unsettled(broker=None) -> list[dict]:
+    """Fill in any closed row still missing its realised P&L.
+
+    `settle()` reads the fill back from the venue, but the venue does not always have
+    it published yet at that instant — it returns None and the row is stored with a
+    NULL result. A NULL in a money record is not acceptable: it silently drops that
+    trade out of every total, which is exactly how the live record came to disagree
+    with the account by 0.0169. This runs every cycle and closes the gap as soon as
+    the venue catches up.
+    """
+    broker = broker or _broker()
+    out = []
+    for row in store.live_closed():
+        if row.get("realised_pnl") is not None:
+            continue
+        price, pnl = _closing_fill(broker, row["symbol"], row)
+        if pnl is None:
+            continue
+        store.live_update(row["id"], realised_pnl=pnl,
+                          exit_price=row.get("exit_price") or price)
+        store.live_event(row["id"], "settled",
+                         f"backfilled from the venue: net {pnl}")
+        log.warning("live: backfilled %s (id %s) net %s", row["symbol"], row["id"], pnl)
+        out.append({"id": row["id"], "symbol": row["symbol"], "realised_pnl": pnl})
+    return out
+
+
 def reconcile(broker=None) -> dict:
     """Align local records with the venue. Returns what changed."""
     broker = broker or _broker()
@@ -554,7 +581,11 @@ def cycle() -> dict:
     broker = _broker()
     rec = reconcile(broker)
     managed = manage(broker)
-    return {"reconcile": rec, "managed": managed}
+    filled = backfill_unsettled(broker)
+    out = {"reconcile": rec, "managed": managed}
+    if filled:
+        out["backfilled"] = filled
+    return out
 
 
 def scheduler_loop(stop_event) -> None:

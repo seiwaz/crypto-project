@@ -518,6 +518,14 @@ results.append(check("the venue id is stored even when the stop attach fails",
                      "venue_position_id=str(live_now" in _insp.getsource(_live._attach_stop),
                      True))
 
+results.append(check("a closed row with NULL pnl gets backfilled",
+                     hasattr(_live, "backfill_unsettled"), True))
+results.append(check("backfill runs every cycle",
+                     "backfill_unsettled(broker)" in _insp.getsource(_live.cycle), True))
+results.append(check("backfill only touches rows missing a result",
+                     'row.get("realised_pnl") is not None' in
+                     _insp.getsource(_live.backfill_unsettled), True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
