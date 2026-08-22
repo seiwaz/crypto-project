@@ -67,13 +67,55 @@ def settings() -> dict:
         "leverage": float(d.get("live_leverage") or 10.0),
         "time_stop_hours": float(d.get("time_stop_hours") or 0.5),
         "max_entry_drift_r": float(d.get("max_entry_drift_r") or 0.3),
+        # An absolute ceiling, and the multiple of live equity that normally binds.
+        # The multiple is what keeps risk proportional as the account moves; the
+        # ceiling is a blast-radius limit that does not grow with a winning streak.
         "max_total_notional": float(d.get("live_max_total_notional") or 25.0),
+        "notional_multiple": float(d.get("live_notional_multiple") or 4.7),
         "dry_run": bool(d.get("live_dry_run", False)),
     }
 
 
 def _broker() -> tabdeal_broker.TabdealBroker:
     return tabdeal_broker.TabdealBroker(dry_run=settings()["dry_run"])
+
+
+def account_equity(broker) -> float | None:
+    """Live equity from the venue, read fresh. None if it cannot be read.
+
+    Unrealised losses count against it, unrealised gains do not. Sizing off paper
+    profit would let a position that has merely not been closed yet justify a larger
+    one next to it, which is how a drawdown compounds under cross margin.
+    """
+    try:
+        row = (broker.balance() or [{}])[0]
+        wallet = float(row.get("walletBalance") or 0)
+        unreal = float(row.get("crossUnPnl") or 0)
+        return wallet + min(0.0, unreal)
+    except Exception as exc:                                   # noqa: BLE001
+        log.warning("live: could not read the account balance: %s", exc)
+        return None
+
+
+def notional_cap(broker, cfg: dict) -> tuple[float, str]:
+    """How much total notional the account may carry RIGHT NOW.
+
+    Re-read before every entry rather than taken from config. A fixed cap silently
+    becomes a larger multiple of equity as the account draws down — $25 against 5.27
+    is 4.7x, against 4.00 it is 6.3x — and under cross margin that walks liquidation
+    closer with every loss, exactly when it should be walking away.
+
+    Returns (cap, why) so the reason appears in the decision log.
+    """
+    equity = account_equity(broker)
+    if equity is None or equity <= 0:
+        # Never size off a number we could not read. The configured ceiling is the
+        # conservative fallback because it cannot be larger than the intended cap.
+        return cfg["max_total_notional"], "balance unreadable, using configured cap"
+    scaled = equity * cfg["notional_multiple"]
+    if scaled <= cfg["max_total_notional"]:
+        return scaled, f"{cfg['notional_multiple']:g}x equity {equity:.4f}"
+    return cfg["max_total_notional"], f"ceiling (equity {equity:.4f} would allow {scaled:.2f})"
 
 
 def _now_iso() -> str:
@@ -297,10 +339,13 @@ def _try_open_locked(broker, cfg: dict) -> dict:
     if slots_free <= 0:
         return {"action": "none", "reason": "slots_full", "held": len(held)}
 
+    cap, why = notional_cap(broker, cfg)
     notional_now = total_notional(broker)
-    if notional_now >= cfg["max_total_notional"]:
+    if notional_now >= cap:
         return {"action": "none", "reason": "notional_cap",
-                "notional": round(notional_now, 2)}
+                "notional": round(notional_now, 2), "cap": round(cap, 2),
+                "basis": why}
+    cfg = {**cfg, "max_total_notional": cap, "cap_basis": why}
 
     # Pass our own book: the paper account's positions must not gate the live one.
     held_coins = {r["coin"] for r in store.live_positions("pending", "open")}
@@ -688,6 +733,8 @@ def state() -> dict:
         "tracked": store.live_positions("pending", "open"),
         "closed": store.live_closed()[:50],
         "slots": {"used": len(positions), "max": cfg["max_slots"]},
+        "equity": account_equity(broker),
         "notional": {"used": round(total_notional(broker), 2),
-                     "cap": cfg["max_total_notional"]},
+                     "cap": round(notional_cap(broker, cfg)[0], 2),
+                     "basis": notional_cap(broker, cfg)[1]},
     }

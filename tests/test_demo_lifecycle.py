@@ -549,6 +549,32 @@ results.append(check("round trip is 0.2% of notional",
                      round(_expect, 6), round(_qty * _mark * 0.002, 6)))
 results.append(check("~0.0124 on a $6.20 position", round(_expect, 4), 0.0124, 0.0002))
 
+print("20. Position sizing re-reads the live balance every time")
+class _FakeB:
+    def __init__(self, wallet, unreal=0.0): self._w, self._u = wallet, unreal
+    def balance(self): return [{"walletBalance": str(self._w), "crossUnPnl": str(self._u)}]
+_cfg = {"max_total_notional": 25.0, "notional_multiple": 4.7}
+results.append(check("equity is wallet when flat",
+                     _live.account_equity(_FakeB(5.27)), 5.27))
+results.append(check("unrealised LOSS reduces equity",
+                     round(_live.account_equity(_FakeB(5.27, -1.0)), 4), 4.27))
+results.append(check("unrealised GAIN does not inflate it",
+                     _live.account_equity(_FakeB(5.27, +1.0)), 5.27))
+cap, why = _live.notional_cap(_FakeB(5.27), _cfg)
+results.append(check("cap scales with equity", round(cap, 3), round(5.27*4.7, 3)))
+cap2, _ = _live.notional_cap(_FakeB(4.00), _cfg)
+results.append(check("a drawdown shrinks the cap", round(cap2, 3), round(4.00*4.7, 3)))
+results.append(check("and it really is smaller", cap2 < cap, True))
+cap3, why3 = _live.notional_cap(_FakeB(50.0), _cfg)
+results.append(check("the absolute ceiling still binds", cap3, 25.0))
+results.append(check("the ceiling says so", "ceiling" in why3, True))
+class _Dead:
+    def balance(self): raise RuntimeError("venue down")
+cap4, why4 = _live.notional_cap(_Dead(), _cfg)
+results.append(check("an unreadable balance falls back to the configured cap",
+                     cap4, 25.0))
+results.append(check("and says why", "unreadable" in why4, True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
