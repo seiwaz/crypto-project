@@ -421,6 +421,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"cycle": cycle, "fill": filled,
                                "state": demo.state()})
 
+        if path == "/api/live":
+            from . import live                                 # noqa: PLC0415
+            return self._json(live.state())
+
+        if path == "/api/live/flatten":
+            # The kill switch. Closes every open position on the venue, whatever the
+            # local records think, and works even if the engine loop is wedged.
+            from . import live, tabdeal_broker                 # noqa: PLC0415
+            del live
+            try:
+                return self._json(tabdeal_broker.TabdealBroker(
+                    dry_run=False).flatten_all())
+            except Exception as exc:                           # noqa: BLE001
+                return self._error(500, f"flatten failed: {exc}")
+
         if path == "/api/demo/reset":
             # Wiping the account (balance, positions, trade history) is the single
             # most destructive thing this public, unauthenticated dashboard can do -
@@ -561,6 +576,16 @@ def serve(host: str | None = None, port: int | None = None,
         # was actually hit.
         threading.Thread(target=demo.scheduler_loop, args=(_stop_event,),
                          name="demo", daemon=True).start()
+        # The live engine. Started unconditionally but inert: its loop checks
+        # demo.live_trading every cycle and does nothing while that is false, so
+        # arming and disarming take effect without a restart. Every write it can
+        # make still has to pass the guard's write allowlist.
+        from . import live                                     # noqa: PLC0415
+        threading.Thread(target=live.scheduler_loop, args=(_stop_event,),
+                         name="live", daemon=True).start()
+        if live.settings()["enabled"]:
+            log.warning("LIVE TRADING IS ARMED — this process can place real orders "
+                        "on Tabdeal with real funds")
 
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True

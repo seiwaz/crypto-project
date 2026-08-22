@@ -223,6 +223,56 @@ CREATE TABLE IF NOT EXISTS paper_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_paper_decisions ON paper_decisions(ts DESC, coin);
 
+-- ---------------------------------------------------------------------------
+-- LIVE positions on Tabdeal. Real money.
+--
+-- Deliberately a separate table from paper_positions rather than a flag on it.
+-- One bad JOIN or a forgotten `WHERE live = 0` would let the demo's reporting,
+-- resets and management touch real positions; separate tables make that mistake
+-- impossible to write by accident.
+--
+-- These rows are ANNOTATIONS, not authority. The exchange is the only thing that
+-- knows what is actually open — `live.reconcile()` reads positionRisk every cycle
+-- and this table records the plan levels and timing the venue does not store.
+CREATE TABLE IF NOT EXISTS live_positions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    coin          TEXT NOT NULL,
+    symbol        TEXT NOT NULL,
+    side          TEXT NOT NULL,
+    status        TEXT NOT NULL,          -- pending | open | closed | orphan
+    quantity      REAL NOT NULL,
+    entry_price   REAL,
+    plan_entry    REAL,
+    leverage      REAL,
+    risk_amount   REAL,                   -- 1R in USDT, fixed at entry
+    stop          REAL,
+    tp1           REAL,
+    tp2           REAL,
+    order_id      TEXT,
+    venue_position_id TEXT,               -- needed by positionSlTp
+    sl_tp_set     INTEGER NOT NULL DEFAULT 0,
+    tp1_filled    INTEGER NOT NULL DEFAULT 0,
+    opened_at     TEXT,
+    opened_ts     REAL,
+    closed_at     TEXT,
+    exit_price    REAL,
+    exit_reason   TEXT,
+    realised_pnl  REAL,
+    scan_id       INTEGER,
+    score         REAL,
+    plan_json     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_live_status ON live_positions(status, opened_ts DESC);
+
+CREATE TABLE IF NOT EXISTS live_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id INTEGER REFERENCES live_positions(id) ON DELETE CASCADE,
+    at          TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_live_events ON live_events(position_id, id);
+
 -- One row per candidate per scan per outcome.
 --
 -- The filler runs every 60s but the candidate set only changes when a scan does, so
@@ -775,3 +825,61 @@ def paper_events(position_id: int | None = None, limit: int = 200) -> list[dict]
             "SELECT * FROM paper_events ORDER BY id DESC LIMIT ?", (limit,))]
     return [dict(r) for r in _rows(
         "SELECT * FROM paper_events WHERE position_id = ? ORDER BY id", (position_id,))]
+
+
+# --------------------------------------------------------------------------------
+# Live positions (real money). See the schema note: these rows annotate, they do not
+# decide. The exchange is authoritative for what is open.
+# --------------------------------------------------------------------------------
+
+_LIVE_FIELDS = (
+    "coin", "symbol", "side", "status", "quantity", "entry_price", "plan_entry",
+    "leverage", "risk_amount", "stop", "tp1", "tp2", "order_id",
+    "venue_position_id", "sl_tp_set", "tp1_filled", "opened_at", "opened_ts",
+    "scan_id", "score", "plan_json",
+)
+
+
+def live_open(**fields) -> int:
+    cols = [f for f in _LIVE_FIELDS if f in fields]
+    sql = (f"INSERT INTO live_positions ({', '.join(cols)}) "
+           f"VALUES ({', '.join('?' for _ in cols)})")
+    with tx() as conn:
+        return int(conn.execute(sql, [fields[c] for c in cols]).lastrowid)
+
+
+def live_update(position_id: int, **fields) -> None:
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with tx() as conn:
+        conn.execute(f"UPDATE live_positions SET {sets} WHERE id = ?",
+                     [*fields.values(), position_id])
+
+
+def live_close(position_id: int, *, exit_price, exit_reason, realised_pnl=None) -> None:
+    with tx() as conn:
+        conn.execute(
+            "UPDATE live_positions SET status='closed', closed_at=?, exit_price=?, "
+            "exit_reason=?, realised_pnl=? WHERE id = ?",
+            (now_iso(), exit_price, exit_reason, realised_pnl, position_id))
+
+
+def live_positions(*statuses: str) -> list[dict]:
+    statuses = statuses or ("pending", "open")
+    marks = ", ".join("?" for _ in statuses)
+    return [dict(r) for r in _rows(
+        f"SELECT * FROM live_positions WHERE status IN ({marks}) ORDER BY id",
+        statuses)]
+
+
+def live_closed() -> list[dict]:
+    return [dict(r) for r in _rows(
+        "SELECT * FROM live_positions WHERE status='closed' "
+        "ORDER BY closed_at DESC, id DESC")]
+
+
+def live_event(position_id, kind: str, detail: str = "") -> None:
+    with tx() as conn:
+        conn.execute("INSERT INTO live_events (position_id, at, kind, detail) "
+                     "VALUES (?, ?, ?, ?)", (position_id, now_iso(), kind, detail))
