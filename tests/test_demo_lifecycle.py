@@ -426,6 +426,25 @@ try:
 finally:
     D.store.result_for = _saved
 
+print("14. Live engine: TP1 is a full close, not a stop-move")
+from agent import live as _live
+import inspect as _insp
+_src = _insp.getsource(_live._manage_one)
+_tp1 = _src[_src.index("TP1 reached"):_src.index("Signal exit")]
+results.append(check("TP1 branch closes the position",
+                     'settle(broker, row, "tp1"' in _tp1, True))
+results.append(check("TP1 branch does NOT move the stop",
+                     "_attach_stop" not in _tp1, True))
+results.append(check("entry attaches TP1 to the exchange",
+                     "_attach_stop(broker, pid, symbol, stop, tp1)"
+                     in _insp.getsource(_live._enter), True))
+results.append(check("long reaches TP1 when mark is at or above it",
+                     _live._reached("long", 105.0, 100.0), True))
+results.append(check("long has not reached TP1 below it",
+                     _live._reached("long", 99.0, 100.0), False))
+results.append(check("short reaches TP1 when mark is at or below it",
+                     _live._reached("short", 95.0, 100.0), True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
