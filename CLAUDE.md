@@ -177,9 +177,16 @@ thrashing":**
 - The routine never has, and must never be given, exchange credentials of any kind.
   This stays paper-trading-only regardless of what looks promising.
 
-## Current state (updated 2026-08-21 — keep this section current, don't let it rot)
+## Current state (updated 2026-08-22 — keep this section current, don't let it rot)
 
-- **Demo account:** running since the 2026-08-20 reset after the Round 3
+- **Demo/paper account: STOPPED 2026-08-22** (`demo.enabled: false`) — the user's
+  words: "now the demo trading is not important for me focus on taking signals and
+  use them to open position in Tabdeal exchange". The *scanner* still runs and is
+  what feeds the live engine; only the paper management loop is off. Its final state
+  was ~1087 USDT from 1000 on Tabdeal data. Everything below about the paper account
+  is history unless it is re-enabled — see "LIVE TRADING IS ON" above for what is
+  actually trading now.
+- **Demo account (historical):** ran since the 2026-08-20 reset after the Round 3
   BTC-alignment fix; check `/api/demo/report` for the live closed-trade count before
   saying anything about performance — this line is kept current automatically by the
   cloud routine every ~6h, but the trading *configuration itself* has changed several
@@ -371,6 +378,30 @@ thrashing":**
      scan` calls in quick succession, one cancelled mid-flight) rather than a code bug;
      no exception or deadlock was found in logs. If it recurs without heavy manual
      testing, treat as a real bug and dig into `scanner.py`/`correlation.py`'s locking.
+  5. **Fixed 2026-08-22 — TP1 partials had NEVER fired, on either venue, for the
+     life of the project.** `demo._touched()` used `low <= level <= high`, the
+     identical range-containment bug Round 11 fixed in `paper.exit_reason()` and left
+     behind in this second copy. Once price moves cleanly past TP1 the candle's *low*
+     sits above it, so the check reads False forever. It cut both ways: winners ran to
+     TP2 at FULL size (flattering every result ever reported), and anything that
+     reached TP1 then reversed gave back the whole gain instead of banking half — so
+     the "risk-free" mechanic requested in Round 10 had never once executed. Found by
+     noticing 5 of 13 closed trades exited `tp2` with `tp1_filled=0`; ADA held 46
+     minutes and peaked at 1.95R, which is geometrically impossible for a long that
+     genuinely crossed TP1. **Why the tests missed it:** test 1 set price *exactly* at
+     tp1, where `high=low=tp1` makes range containment coincidentally true. A level
+     test that only samples the level itself cannot distinguish a one-sided check from
+     a range check — the same blind spot as Round 11.
+  6. **Fixed 2026-08-22 — a lost update silently discarded a real entry fee.**
+     `cycle()` read the balance, accumulated deltas in Python and wrote an absolute
+     total, while `_open()` did its own read-modify-write to debit a fee. Nine market
+     entries inside 11 seconds and one debit was clobbered, leaving the balance
+     permanently 0.1488 higher than the trades justified. Every credit/debit now goes
+     through `store.paper_adjust_balance()`, a single
+     `UPDATE ... SET balance = balance + ?`. `paper_set_balance` remains only for a
+     genuine reset. `open` events also record their amount now — they carried only the
+     slot and score, so the ledger could not explain the balance, which is exactly why
+     this took a full reconciliation to find.
   4. **Fixed, later the same day:** the `exit_reason()` range-containment bug
      (Round 11) and the pending-order same-coin double-entry bug (Round 13) — both
      detailed as bullets under "Live trading configuration" above rather than
@@ -378,7 +409,149 @@ thrashing":**
      against what the code should be doing, not from a report or metric alone —
      worth remembering as the pattern that keeps finding real bugs in this system.
 
-## Real-money migration — read `docs/TABDEAL_LIVE_READINESS.md` first
+## LIVE TRADING IS ON — real money on Tabdeal since 2026-08-22
+
+**This is no longer a paper project.** The account is small (~5.2 USDT) but the orders
+are real, the fills are real, and the losses are real. Read this whole section before
+touching `agent/live.py`, `agent/tabdeal_broker.py`, or anything they call.
+
+**The paper demo is switched off** (`demo.enabled: false`) at the user's request —
+"demo trading is not important for me, focus on taking signals and opening positions
+on Tabdeal". The scanner still runs and is what feeds the live engine; only the paper
+management loop is stopped. Do not re-enable it without being asked.
+
+### How it is armed, and how to stop it
+
+| | |
+|---|---|
+| Arm / disarm | `demo.live_trading` in the server's `settings.json`. Read fresh every cycle — no restart needed either way. |
+| Send nothing but log intent | `demo.live_dry_run: true` |
+| **Kill switch** | `POST /api/live/flatten` — closes every venue position, works even if the engine loop is wedged |
+| Watch it | `GET /api/live`, or `grep -iE 'live' var/logs/server.log` |
+
+Three independent things must all be true before any write reaches Tabdeal: the arm
+flag, an exact path+verb match in `guard.TABDEAL_WRITE_ALLOWLIST`, and `dry_run` off
+(the constructor default is **on**). Disarmed, every write *raises* — never a silent
+no-op, because a caller must not be able to believe it traded when it did not.
+
+### Live configuration in force
+
+`live_max_slots: 4`, `live_max_total_notional: 25.0`, `live_leverage: 5`,
+`live_cycle_seconds: 20`, `time_stop_hours: 0.5`, `max_entry_drift_r: 0.3`.
+
+**Sizing is anchored to total notional, not to capital × risk_pct.** Under cross
+margin the binding constraint is the whole book: liquidation is assessed on total
+notional, so that is the thing to control. $25 across 4 slots is ~$6.25 each, ~4.7x
+the balance, keeping liquidation roughly 20% away. Setting the top-level `capital` to
+the real 5.27 to size positions instead **broke signal generation outright** — the
+planner could no longer fund any plan (84x leverage required against a 17.5x cap) and
+all 33 coins went SKIP. Leave `capital` at 1000: it is the *planner's* number, and
+plans only need it to be fundable — the levels they emit are what matter downstream.
+
+### Who owns what — the safety split
+
+    the EXCHANGE owns both levels  — stop loss AND TP1 go onto the position itself via
+                                     positionSlTp, so a stop-out or a target is
+                                     honoured even if this process dies
+    the ENGINE owns the judgement  — which signal to take, signal_exit, time_stop
+
+A monitoring loop is a fine place for "should I still be in this trade" and a terrible
+place for "am I about to lose more than I planned". **The stop must never depend on
+`live.py` running.** Always verify a stop landed by reading `stopLossPrice` back from
+the venue — the first two live positions opened *unprotected* because the attach
+silently failed and only the log line showed it.
+
+### Closing conditions (final, after the 2026-08-22 revisions)
+
+Exchange-enforced: **stop loss**, **TP1** (a full close — there is no TP2 and no
+partial), **liquidation**. Engine-enforced: **`signal_exit`** (in profit, setup no
+longer TAKE), **`time_stop`** (≥30 min with PnL between 0 and +0.5R; a loser is never
+time-stopped, it rides its exchange stop), **`exchange_exit`** (reconcile found it
+gone; the real fill is read back from the venue).
+
+**TP1 closes outright.** An earlier revision had it moving the stop up to TP1 and
+letting the trade run — that was a misreading and was corrected. The TP1 *partial* is
+also gone: Tabdeal supports neither `reduceOnly` nor a partial close, so a half-exit
+had to be an opposing MARKET order that could **flip** the position rather than trim
+it. Removing it removed that entire failure class.
+
+### Venue quirks that cost real time to find
+
+- **`positionRisk` is close to useless here.** It carries no position id at all
+  (`positionSlTp` requires one, so no stop can ever be attached from it) and returns
+  `markPrice`, `unRealizedProfit` and `liquidationPrice` as the string `"0"` on a live
+  position. **Use `/r/fapi/v1/position`**: it has `id`, the real `entryPrice`, and
+  `stopLossPrice`/`takeProfitPrice` so stop attachment is verifiable. `positionAmt`
+  there is unsigned with a separate LONG/SHORT `side`. Compute mark and PnL yourself.
+- **Leverage must be POSTed per symbol before that symbol can trade.** An
+  unconfigured market answers `500 {"code":1300,"msg":"TraderMarketConfig matching
+  query does not exist"}`. `POST /fapi/v1/leverage` creates it.
+- **`availableBalance` is always `"0.00000000"`** even with a funded wallet and no
+  positions. It is simply not populated — it does **not** block trading. Proven by
+  placing real orders against it.
+- **There is no meaningful minimum notional** — a $0.48 order was accepted.
+- **A price band is enforced.** Orders ~30% from market are rejected with
+  `code 1209 "قیمت سفارش نامعتبر است"`. Within ~2% is fine.
+- **`orderbook` requires `limit >= 5`** (`code 1201`).
+- **`userTrades` has no `realizedPnl` field** — only price/qty/commission/time/
+  buyer/maker. Gross comes from the *position* record; fees from the fills.
+- **`/r/fapi/v3/account` currently 500s** with `name 'market' is not defined` — a
+  Python NameError leaking out of their server. Not ours; use `/balance`.
+- Writes are **never retried**. A timeout may mean the order landed, and a blind retry
+  turns one position into two. Reconcile against the venue instead.
+
+### Bugs found by running it live — and the pattern behind them
+
+Every one of these looked healthy from the outside. Six in one session:
+
+1. **No exchange stop attached** — `positionRisk` has no `positionId`, so the first two
+   real positions ran unprotected. Fixed by switching endpoints; *verify by reading the
+   stop back*.
+2. **Dry runs wrote phantom `live_positions` rows** with no order id. `reconcile()`
+   then correctly saw them missing and logged "closed by the exchange", churning the
+   record with trades that never happened.
+3. **The planner emitted an inverted plan** and scored it 71.2: BNB long, entry
+   700.281, stop 712.834 *above* it, tp1 equal to the stop — from "structural (behind
+   swing + 0.25 ATR)" when price had fallen through the swing low. `valid_geometry()`
+   now requires `stop < entry < tp1 <= tp2` (mirror for short), enforced in
+   `qualifying_signals` and again in `_enter`.
+4. **`_profit_signal_check` raised `KeyError: 'exchange'`** on live rows (that column
+   exists only on `paper_positions`). The exception aborted `_manage_one` *before* the
+   time stop, so any live position **in profit got no management at all**.
+5. **`UnboundLocalError` on `side`** in `_enter` — every entry threw, and `try_open`
+   reported it as `"no_signal"`. The engine was structurally incapable of opening a
+   position while looking merely idle.
+6. **A concurrency race double-sized a position.** A manual `try_open` ran alongside
+   the scheduler; both passed the "not held" check and both ordered, one second apart.
+   Under cross margin they netted into one venue position of double size tracked by
+   two DB rows, each recording the same close — the account was down 0.050144 while
+   the DB claimed 0.075243. Entry is now behind a non-blocking lock, the book is
+   re-read inside it, and `manage()` handles one row per symbol.
+7. **Entry timer drifted against the scan cycle.** The engine attempted entry seconds
+   before the scan that produced the signal completed, so a valid TAKE sat unacted on
+   for five minutes. Entry now fires on a **new completed scan**, with
+   `entry_interval_seconds` kept only as a floor.
+
+**The pattern: `"no_signal"` must never be the answer to "something went wrong."**
+Four of these hid behind a healthy-looking idle state. Log every attempt and its
+outcome, not just successes, and distinguish "nothing to take" from "everything I
+tried threw" (`all_entries_failed`).
+
+### Accounting on real money
+
+Record what the **venue** says, never our own estimate. `settle()` closes, then reads
+the fill back and stores price and **net of commission**. Two ways this was wrong:
+`userTrades` has no `realizedPnl` (so gross must come from the position record), and
+filtering fills by our own `opened_ts` **excluded the entry fill** — it is written
+after the order returns and lost a race with the fill's own timestamp, halving every
+trade's recorded cost. Filter by the venue's `createdTime`.
+
+At 0.1% a side on ~$6.25 notional, **a round trip costs ~$0.0124 whatever happens**.
+Both of the first two closes were signal-exited before price moved enough to cover it,
+so the fee *was* the entire result. The live record now reconciles to the account to
+the cent (DB −0.050143 vs account −0.050144).
+
+## Real-money migration — the dossier that preceded going live
 
 The user has asked for everything to be prepared so a "migrate to real trading"
 instruction can be acted on. **That dossier is the collected result** — the complete
@@ -737,9 +910,15 @@ not from docs alone. **Corrections to the section above, found during the audit:
 
 ## What needs to continue (pick this up without being re-asked)
 
-1. Keep letting the demo account run; the autonomous routine may reset gates/params
-   via `strategy-tuning.json` or code, but nothing should reset the *account itself*
-   (capital, trade history) without a clear reason — that restarts the sample.
+1. **Live trading is the focus now, not the demo.** Watch `var/logs/server.log` for
+   `live entry attempt` / `live: OPENED` / `live reconcile` lines, and reconcile the
+   `live_positions` table against the venue periodically — the DB and the account
+   agreed to the cent as of 2026-08-22 and should stay that way. The unresolved
+   economic question is unchanged and is the one that matters: at 0.1% a side a round
+   trip costs ~0.2% of notional, so the direction filter has to clear **0.2% per
+   30-minute hold** for any of this to be profitable. Both of the first two closes were
+   signal-exited before price moved enough to cover the fee. Measure that edge before
+   adding size.
 2. Watch how the Round 10 fixes actually play out with a real sample. **Partially
    confirmed 2026-08-20/21:** shorts are being generated again at the scan level (a
    live watchlist scan showed 33 long / 5 short across 38 coins, one short reaching
@@ -812,6 +991,30 @@ not from docs alone. **Corrections to the section above, found during the audit:
   reaches back to it, a range check silently stops firing forever, even with the
   position sitting far past the level. If a stop/TP is ever reported as "not
   working" again, check this pattern hasn't crept back in before looking elsewhere.
+- **Real money is live on Tabdeal.** `agent/tabdeal_broker.py` is the only module that
+  can move it, and `agent/live.py` is the only thing that drives it. Both are gated by
+  `demo.live_trading` + `guard.TABDEAL_WRITE_ALLOWLIST` + `dry_run`. Kill switch:
+  `POST /api/live/flatten`. Treat any change near these with the care that implies.
+- **A level check must be one-sided, never `low <= level <= high`.** This exact bug has
+  now been found and fixed **three separate times** in three places —
+  `paper.exit_reason()` (Round 11), `demo._touched()` (2026-08-22, which silently
+  disabled every TP1 partial the project ever had), and it is the shape to check first
+  whenever a stop or target is reported as "not working". A test that samples the level
+  *exactly* cannot tell a one-sided check from a range check, so always drive price
+  clearly past it.
+- **Never do read-modify-write on money in Python.** `UPDATE ... SET x = x + ?` in one
+  statement. A lost update cost a real entry fee on 2026-08-20 and was invisible until
+  a full reconciliation, because the event ledger did not record amounts either.
+- **"no signal" must never be how a failure surfaces.** Four separate live bugs hid
+  behind an idle-looking engine that only spoke when it succeeded. Log every attempt
+  and its outcome, and distinguish "nothing qualified" from "everything I tried threw".
+- **The venue is the source of truth, always.** `reconcile()` reads `positionRisk`
+  every cycle and believes it over our own records — that is the only reason the phantom
+  dry-run rows and the double-sized position were visible at all. Never let a local
+  record override what the exchange says is open.
+- **Verify a stop landed by reading it back.** `positionSlTp` returning
+  `{"msg":"success"}` is not proof; `stopLossPrice` on `/fapi/v1/position` is. The first
+  two live positions ran unprotected because the attach failed silently.
 - A resting maker limit order (`status='pending'` in `paper_positions`) carries the
   same committed risk as a filled one (`margin`/`risk_amount`/stop/targets are all
   set at placement, not at fill) but is easy to leave out of a guard that only reads
