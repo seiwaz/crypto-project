@@ -149,29 +149,52 @@ def settle(broker, row: dict, reason: str, fallback_price: float) -> dict:
 
 
 def _closing_fill(broker, symbol: str, row: dict) -> tuple[float | None, float | None]:
-    """The price the venue actually closed at, and the NET result after commission.
+    """The venue's own exit price and NET result, after commission.
 
-    Commission is the part that is easy to miss and never negligible here: Tabdeal
-    charges 0.1% a side, so a trade that exits at its entry price is already down
-    0.2% of notional. `realizedPnl` from the venue is gross of that.
+    Two things this must not do, both learned from real closes:
+
+    * **Do not read `realizedPnl` from `userTrades`.** Tabdeal's fill records carry
+      only symbol/price/qty/quoteQty/commission/time/buyer/maker — there is no
+      `realizedPnl` field at all, so summing it silently produced 0 and reported a
+      trade's whole result as just its fees. The authoritative gross figure is on the
+      *position* record from `/r/fapi/v1/position`.
+    * **Do not filter fills by our own `opened_ts`.** It is recorded after the order
+      returns, and on BNB it landed a fraction of a second *after* the entry fill's
+      own timestamp — so the entry was excluded and only one side's commission was
+      counted, halving the reported cost. Filter by the venue's `createdTime` for the
+      position instead, which cannot race with it.
     """
     try:
+        history = broker._get_signed("/r/fapi/v1/position") or []
         trades = broker._get_signed("/r/fapi/v1/userTrades", {"symbol": symbol}) or []
     except Exception as exc:                                   # noqa: BLE001
-        log.warning("live: could not read userTrades for %s: %s", symbol, exc)
+        log.warning("live: could not read venue records for %s: %s", symbol, exc)
         return None, None
-    opened = float(row.get("opened_ts") or 0) * 1000
-    fills = [t for t in trades if float(t.get("time") or 0) >= opened]
-    if not fills:
+
+    vpid = str(row.get("venue_position_id") or "")
+    pos = next((h for h in history
+                if h.get("symbol") == symbol
+                and (str(h.get("id")) == vpid or not vpid)), None)
+    if pos is None:
         return None, None
-    price = float(fills[-1].get("price") or 0) or None
-    gross = fees = 0.0
-    for t in fills:
+
+    created = float(pos.get("createdTime") or 0)
+    fees = 0.0
+    for t in trades:
         try:
-            gross += float(t.get("realizedPnl") or 0)
-            fees += float(t.get("commission") or 0)
+            if float(t.get("time") or 0) >= created:
+                fees += float(t.get("commission") or 0)
         except (TypeError, ValueError):
             continue
+    try:
+        gross = float(pos.get("realizedPnl") or 0)
+    except (TypeError, ValueError):
+        gross = 0.0
+    price = None
+    try:
+        price = float(pos.get("avgExitPrice") or 0) or None
+    except (TypeError, ValueError):
+        pass
     return price, gross - fees
 
 
