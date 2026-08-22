@@ -666,6 +666,32 @@ def _correlation_filter_status() -> dict:
 # --------------------------------------------------------------------------------
 
 
+def _plan_levels(row: dict) -> dict:
+    try:
+        return (json.loads(row["plan_json"]).get("levels") or {}) if row.get("plan_json") else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def valid_geometry(side: str | None, levels: dict) -> bool:
+    """Are entry/stop/tp1/tp2 ordered the way this side requires?
+
+    A long needs stop < entry < tp1 <= tp2; a short the mirror. Anything else is not
+    a tradeable plan regardless of how well it scored — see the BNB case in
+    `qualifying_signals`. Missing levels return True: absence is handled elsewhere
+    and this check must not become a second, silent reason to skip a coin.
+    """
+    e, st = levels.get("entry"), levels.get("stop")
+    t1, t2 = levels.get("tp1"), levels.get("tp2")
+    if not all(isinstance(v, (int, float)) for v in (e, st, t1, t2)):
+        return True
+    if side == "long":
+        return st < e < t1 <= t2
+    if side == "short":
+        return st > e > t1 >= t2
+    return True
+
+
 def qualifying_signals(held_coins: set[str] | None = None,
                        closed_times: dict | None = None) -> list[dict]:
     """Signals eligible to take a slot: TAKE, score at or above the floor, not open.
@@ -703,6 +729,19 @@ def qualifying_signals(held_coins: set[str] | None = None,
         # was enforced (2026-08-20). The flag already existed for the UI; it just
         # wasn't stopping anything from actually trading.
         if row.get("side_tied"):
+            continue
+        # Reject a plan whose levels are geometrically impossible.
+        #
+        # Found live 2026-08-22: the planner emitted BNB long with entry 700.281,
+        # stop 712.834 (ABOVE the entry) and tp1 equal to the stop, sourced from
+        # "structural (behind swing + 0.25 ATR)". That happens when price has fallen
+        # through the recent swing low, so "behind the swing" lands above the current
+        # price. Traded as a long it stops out the instant it opens, and the venue
+        # may reject the stop outright. Scored 71.2 and passed every other gate, so
+        # nothing else would have caught it.
+        if not valid_geometry(row.get("side"), (row.get("_levels") or
+                                                _plan_levels(row))):
+            log.warning("%s: rejecting inverted plan geometry", row.get("coin"))
             continue
         score = row.get("score")
         if score is None or float(score) < MIN_SCORE:

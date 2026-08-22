@@ -201,6 +201,12 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
     stop, tp1, tp2 = levels.get("stop"), levels.get("tp1"), levels.get("tp2")
     if not all(isinstance(v, (int, float)) for v in (plan_entry, stop, tp1, tp2)):
         raise ValueError("plan is missing levels")
+    # Checked again here, not only in qualifying_signals: this is the last point
+    # before real money moves, and an inverted plan stops out the instant it opens.
+    if not demo.valid_geometry(side, levels):
+        return {"action": "declined", "coin": row["coin"],
+                "reason": "inverted_plan_geometry",
+                "levels": {"entry": plan_entry, "stop": stop, "tp1": tp1, "tp2": tp2}}
 
     symbol = row["symbol"]
     side = row["side"]
@@ -250,6 +256,13 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
 
     order = broker.place_order(symbol, "BUY" if side == "long" else "SELL", qty,
                                order_type="MARKET", ref_price=mark)
+    # A dry run must leave no trace in live_positions. Recording one produced phantom
+    # rows the venue had never heard of, which reconcile() then correctly reported as
+    # "closed by the exchange" — churning the same coin open and shut and polluting
+    # the record with trades that never existed.
+    if order.get("dry_run"):
+        return {"action": "dry_run", "coin": row["coin"], "symbol": symbol,
+                "qty": qty, "entry": mark, "would_send": order.get("params")}
     pid = store.live_open(
         coin=row["coin"], symbol=symbol, side=side, status="open", quantity=qty,
         entry_price=mark, plan_entry=plan_entry, leverage=cfg["leverage"],

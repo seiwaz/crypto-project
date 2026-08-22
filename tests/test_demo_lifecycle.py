@@ -390,6 +390,26 @@ finally:
 results.append(check("_num avoids scientific notation", _tb._num(1e-05), "0.00001"))
 results.append(check("_num passes None through", _tb._num(None), None))
 
+print("12. Inverted plan geometry is rejected before it can be traded")
+# Live 2026-08-22: the planner emitted BNB long with entry 700.281, stop 712.834
+# ABOVE it and tp1 equal to the stop, from "structural (behind swing + 0.25 ATR)" -
+# price had fallen through the swing low, so "behind the swing" landed above price.
+# It scored 71.2 and passed every other gate. As a long it stops out on open.
+_L = lambda e, st, t1, t2: {"entry": e, "stop": st, "tp1": t1, "tp2": t2}
+results.append(check("long: normal geometry passes",
+                     demo.valid_geometry("long", _L(100, 95, 105, 110)), True))
+results.append(check("long: the real BNB inversion is rejected",
+                     demo.valid_geometry("long", _L(700.281, 712.834, 712.834, 725.386)),
+                     False))
+results.append(check("long: tp1 equal to the stop is rejected",
+                     demo.valid_geometry("long", _L(100, 95, 95, 110)), False))
+results.append(check("short: mirrored geometry passes",
+                     demo.valid_geometry("short", _L(100, 105, 95, 90)), True))
+results.append(check("short: a long-shaped plan is rejected",
+                     demo.valid_geometry("short", _L(100, 95, 105, 110)), False))
+results.append(check("missing levels never block (handled elsewhere)",
+                     demo.valid_geometry("long", _L(100, None, 105, 110)), True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
