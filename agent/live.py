@@ -240,6 +240,7 @@ def try_open(broker=None) -> dict:
 
     # Pass our own book: the paper account's positions must not gate the live one.
     held_coins = {r["coin"] for r in store.live_positions("pending", "open")}
+    errors = []
     for row in demo.qualifying_signals(held_coins=held_coins,
                                        closed_times=store.live_last_close_times()):
         if row["symbol"] in held:
@@ -248,7 +249,14 @@ def try_open(broker=None) -> dict:
             return _enter(broker, row, cfg, notional_now)
         except Exception as exc:                               # noqa: BLE001
             log.warning("live: %s entry failed: %s", row["coin"], exc)
+            errors.append({"coin": row["coin"], "error": str(exc)[:200]})
             continue
+    # "no_signal" must mean there was nothing to take, never "everything I tried
+    # threw". An UnboundLocalError in _enter was reported as no_signal for hours
+    # while the engine was in fact incapable of opening anything — the distinction
+    # is the difference between a quiet market and a broken engine.
+    if errors:
+        return {"action": "none", "reason": "all_entries_failed", "errors": errors}
     return {"action": "none", "reason": "no_signal"}
 
 
@@ -259,15 +267,19 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
     stop, tp1, tp2 = levels.get("stop"), levels.get("tp1"), levels.get("tp2")
     if not all(isinstance(v, (int, float)) for v in (plan_entry, stop, tp1, tp2)):
         raise ValueError("plan is missing levels")
+
+    symbol = row["symbol"]
+    side = row["side"]
     # Checked again here, not only in qualifying_signals: this is the last point
     # before real money moves, and an inverted plan stops out the instant it opens.
+    # Must come AFTER `side` is bound — it referenced it one line too early and threw
+    # UnboundLocalError on every single entry, which `try_open` caught and reported as
+    # the innocuous-looking "no_signal". The engine could not open a position at all.
     if not demo.valid_geometry(side, levels):
         return {"action": "declined", "coin": row["coin"],
                 "reason": "inverted_plan_geometry",
                 "levels": {"entry": plan_entry, "stop": stop, "tp1": tp1, "tp2": tp2}}
 
-    symbol = row["symbol"]
-    side = row["side"]
     mark = tabdeal.mark_price(symbol)
     if not mark:
         raise ValueError("no mark price")

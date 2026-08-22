@@ -445,6 +445,20 @@ results.append(check("long has not reached TP1 below it",
 results.append(check("short reaches TP1 when mark is at or below it",
                      _live._reached("short", 95.0, 100.0), True))
 
+print("15. try_open distinguishes a quiet market from a broken engine")
+# _enter referenced `side` one line before it was bound, so every entry raised
+# UnboundLocalError; try_open caught it and returned "no_signal". The engine looked
+# idle while being incapable of opening anything.
+_src = _insp.getsource(_live._enter)
+results.append(check("`side` is bound before the geometry check",
+                     _src.index('side = row["side"]') < _src.index("valid_geometry(side"),
+                     True))
+_ts = _insp.getsource(_live.try_open)
+results.append(check("failed entries report all_entries_failed",
+                     "all_entries_failed" in _ts, True))
+results.append(check("no_signal is still returned when there is genuinely nothing",
+                     '"reason": "no_signal"' in _ts, True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
