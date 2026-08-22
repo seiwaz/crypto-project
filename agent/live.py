@@ -172,18 +172,34 @@ def _closing_fill(broker, symbol: str, row: dict) -> tuple[float | None, float |
         log.warning("live: could not read venue records for %s: %s", symbol, exc)
         return None, None
 
+    # Identify OUR position, not merely one with the same symbol.
+    #
+    # The first version matched `str(id) == vpid or not vpid`, so whenever
+    # venue_position_id was missing — which it is whenever the stop attach failed —
+    # `not vpid` matched the FIRST entry for that symbol, i.e. the oldest. On BNB that
+    # took the gross from a position closed half an hour earlier: row 7 was recorded
+    # as -0.012409 (its fees alone) when the real net was -0.005547, because the
+    # +0.006853 gross belonged to it and was read off the wrong record.
     vpid = str(row.get("venue_position_id") or "")
-    pos = next((h for h in history
-                if h.get("symbol") == symbol
-                and (str(h.get("id")) == vpid or not vpid)), None)
+    same = [h for h in history if h.get("symbol") == symbol]
+    pos = next((h for h in same if str(h.get("id")) == vpid), None) if vpid else None
+    if pos is None:
+        opened_ms = float(row.get("opened_ts") or 0) * 1000
+        pos = min(same, key=lambda h: abs(float(h.get("createdTime") or 0) - opened_ms),
+                  default=None)
     if pos is None:
         return None, None
 
+    # Fees belong to THIS position's window only. Summing everything after
+    # `createdTime` swept in every later trade's fills too — harmless while this was
+    # the newest position, and silently wrong the moment it was not.
     created = float(pos.get("createdTime") or 0)
+    updated = float(pos.get("updateTime") or 0) or float("inf")
     fees = 0.0
     for t in trades:
         try:
-            if float(t.get("time") or 0) >= created:
+            ts = float(t.get("time") or 0)
+            if created <= ts <= updated + 2000:      # small grace for the closing fill
                 fees += float(t.get("commission") or 0)
         except (TypeError, ValueError):
             continue
@@ -399,6 +415,14 @@ def _attach_stop(broker, pid: int, symbol: str, stop, tp=None) -> None:
         store.live_event(pid, "sltp", f"exchange SL={stop:.8g} TP={tp:.8g}")
         log.warning("live: %s exchange stop set at %.8g", symbol, stop)
     except Exception as exc:                                   # noqa: BLE001
+        # Record whatever id we did manage to read: settlement needs it to identify
+        # this position later, and losing it is what made the wrong record get read.
+        try:
+            live_now = broker.position_for(symbol)
+            if live_now and live_now.get("positionId") is not None:
+                store.live_update(pid, venue_position_id=str(live_now["positionId"]))
+        except Exception:                                      # noqa: BLE001
+            pass
         store.live_event(pid, "sltp_failed", str(exc)[:200])
         log.error("live: %s HAS NO EXCHANGE STOP (%s) — position is unprotected "
                   "except by this loop", symbol, exc)

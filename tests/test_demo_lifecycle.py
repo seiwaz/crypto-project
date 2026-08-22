@@ -503,6 +503,18 @@ results.append(check("_latest_scan_id returns an int or None",
                      _live._latest_scan_id() is None
                      or isinstance(_live._latest_scan_id(), int), True))
 
+print("18. Settlement identifies OUR position and only OUR fees")
+_cf = _insp.getsource(_live._closing_fill)
+results.append(check("no `or not vpid` fallback to the first match",
+                     "or not vpid" not in _cf, True))
+results.append(check("falls back to the position nearest our opened_ts",
+                     "abs(float(h.get(\"createdTime\") or 0) - opened_ms)" in _cf, True))
+results.append(check("fees are bounded by the position's own window",
+                     "created <= ts <= updated" in _cf, True))
+results.append(check("the venue id is stored even when the stop attach fails",
+                     "venue_position_id=str(live_now" in _insp.getsource(_live._attach_stop),
+                     True))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
