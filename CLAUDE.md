@@ -712,19 +712,29 @@ left untouched.
 
 | | |
 |---|---|
-| Engine closes | held **≥ 1h** AND gross **> 1.5 × round trip** (`profit_close`) |
+| Engine closes | held **≥ 1h** AND gross **> 1.5 × round trip** AND the signal is no longer green (`profit_close`) |
+| Engine **keeps** a winner | past the hour and above the bar, but the scan still says **TAKE at ≥ `hold_take_score` (70)** on our side — logged as `riding_signal` |
 | Everything else | the exchange's own **stop** and **TP1**, attached to the position |
 | A losing position | never touched by the engine, at any hold |
 
 `signal_exit`, `time_stop` and `adverse_exit` are all gone from the live path
 (`adverse_exit` survives behind `adverse_exit_enabled: false`). Settings:
-`profit_close_after_h: 1.0`, `profit_close_fee_multiple: 1.5`,
+`profit_close_after_h: 1.0`, `profit_close_fee_multiple: 1.5`, `hold_take_score: 70`,
 `live_cycle_seconds: 3`, `allow_shorts: false`, `min_score: 75`.
 
 **The 1.5× cushion is not decoration.** The profit test reads the *mark*; the close
 is a **MARKET** order that crosses the spread. At 1.0× a close settled **negative**
 (PEPE: +0.01052 gross vs a 0.01091 round trip → −0.00039). A close that still
 settles ≤ 0 now logs an ERROR naming the setting to raise.
+
+**The hold bar (70) is deliberately above the abandon floor (65).** They answer
+different questions: the floor asks "is the thesis dead" and is right for *leaving*
+a trade; banking one needs a positive, current reason, because a position can sit
+well above the floor and still be a fading signal. Missing scan data does **not**
+hold — with profit already clear of the round trip, banking is the safe side of
+that uncertainty. Evidence: the only profitable closes this account has had were
+FLOKI **+1.288%** and SUI **+0.703%**, both reaching the exchange TP precisely
+because nothing cut them at the hour.
 
 **Position history is recorded** in `live_samples` (mark, gross/net unrealised, R,
 hold, and the verdict+score being judged against), written by the 3s loop, thinned
