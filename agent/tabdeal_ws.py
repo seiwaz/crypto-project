@@ -81,6 +81,8 @@ class DepthFeed:
         self._connected = False
         self._last_error: str | None = None
         self._msgs = 0
+        # The retry runs every cycle; the complaint should not.
+        self._warned_unavailable = False
 
     # -- public ------------------------------------------------------------------
 
@@ -88,9 +90,17 @@ class DepthFeed:
         """Begin streaming. Returns False if the feed cannot run at all."""
         try:
             import websocket                                # noqa: F401,PLC0415
-        except ImportError:
-            self._last_error = "websocket-client is not installed"
-            log.warning("tabdeal_ws: %s — marks will use REST", self._last_error)
+        except Exception as exc:                            # noqa: BLE001
+            # Not just ImportError, and not a canned message. The library raises
+            # ImportError from inside itself on some installs, and reporting every
+            # such case as "not installed" sent a real diagnosis chasing a package
+            # that was in fact present and importable from the same user, cwd and
+            # sandbox. Say what actually happened.
+            self._last_error = f"{type(exc).__name__}: {exc}"[:200]
+            if not self._warned_unavailable:
+                self._warned_unavailable = True
+                log.warning("tabdeal_ws: cannot start (%s) — marks will use REST",
+                            self._last_error)
             return False
         if self._thread and self._thread.is_alive():
             return True
