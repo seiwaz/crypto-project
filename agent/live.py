@@ -1005,6 +1005,51 @@ def btc_price() -> float | None:
     return _btc_cache["price"]
 
 
+def _live_pnl(positions: list[dict], cfg: dict) -> list[dict]:
+    """Per-position mark and P&L, computed here rather than in the browser.
+
+    Two reasons this moved server-side.
+
+    The dashboard was deriving P&L from `quantity` and a mark taken from the sampled
+    history, which is thinned to one point every 15 seconds while the tab refreshes
+    every 3 - so it showed a figure up to 15s behind the venue's own. It also showed
+    only the net number, which can never agree with Tabdeal's «سود و زیان ناخالص»
+    because that figure is gross.
+
+    Both are returned now. `gross` is (mark - entry) x qty, which is exactly what the
+    venue displays and should tie out against it. `net` subtracts the round trip -
+    what the position is worth if closed right now - and is the number the engine's
+    own exit rule tests, so the two columns explain each other.
+
+    The venue reports markPrice as "0" on a live position, so the mark is read
+    per symbol; mark_price() is cached briefly upstream, so repeated symbols and
+    repeated polls do not each cost a request.
+    """
+    out = []
+    fee_rt = (tabdeal.TAKER_FEE_PCT / 100.0) * 2
+    for p in positions:
+        sym = p.get("symbol")
+        try:
+            mark = tabdeal.mark_price(sym)
+        except Exception:                                      # noqa: BLE001
+            mark = None
+        entry = float(p.get("entryPrice") or 0)
+        qty = abs(float(p.get("positionAmt") or 0))
+        row = {"symbol": sym, "mark": mark, "entry": entry or None, "quantity": qty}
+        if mark and entry and qty:
+            sgn = 1 if float(p.get("positionAmt") or 0) > 0 else -1
+            gross = (mark - entry) * qty * sgn
+            cost = qty * mark * fee_rt
+            row.update({
+                "gross": round(gross, 8),
+                "cost": round(cost, 8),
+                "net": round(gross - cost, 8),
+                "pct": round((mark - entry) / entry * 100 * sgn, 4),
+            })
+        out.append(row)
+    return out
+
+
 def state() -> dict:
     """What the dashboard needs to show the live account."""
     broker = _broker()
@@ -1020,6 +1065,7 @@ def state() -> dict:
         "btc": btc_price(),
         "balance": bal,
         "venue_positions": positions,
+        "live": _live_pnl(positions, cfg),
         "tracked": store.live_positions("pending", "open"),
         "closed": store.live_closed()[:50],
         "slots": {"used": len(positions), "max": cfg["max_slots"]},

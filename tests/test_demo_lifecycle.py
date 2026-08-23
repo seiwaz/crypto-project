@@ -644,6 +644,41 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
 
+print("30. P&L is computed server-side, gross and net, against a live mark")
+# The browser derived P&L from the sampled history, thinned to 15s while the tab
+# refreshes every 3s, and showed only net - so it lagged the venue and could never
+# agree with Tabdeal's own gross figure.
+_lp = _insp.getsource(_live._live_pnl)
+results.append(check("state exposes a per-position pnl block",
+                     '"live": _live_pnl(positions, cfg)' in _insp.getsource(_live.state),
+                     True))
+results.append(check("gross is reported", '"gross": round(gross, 8)' in _lp, True))
+results.append(check("net is reported", '"net": round(gross - cost, 8)' in _lp, True))
+results.append(check("the mark is read per request, not sampled",
+                     "tabdeal.mark_price(sym)" in _lp, True))
+results.append(check("a failed mark read does not drop the row",
+                     "except Exception" in _lp, True))
+# arithmetic, both sides
+_long = _live._live_pnl([{"symbol": "X_USDT", "positionAmt": "10",
+                          "entryPrice": "100"}], _live.settings())[0]
+_short = _live._live_pnl([{"symbol": "X_USDT", "positionAmt": "-10",
+                           "entryPrice": "100"}], _live.settings())[0]
+results.append(check("a row is returned even with no mark available",
+                     _long["symbol"], "X_USDT"))
+if _long.get("gross") is not None:
+    _m = _long["mark"]
+    results.append(check("long gross = (mark - entry) x qty",
+                         round(_long["gross"], 6), round((_m - 100) * 10, 6)))
+    results.append(check("short gross is mirrored",
+                         round(_short["gross"], 6), round((100 - _m) * 10, 6)))
+    results.append(check("net is gross minus the round trip",
+                         round(_long["net"], 6),
+                         round(_long["gross"] - _long["cost"], 6)))
+    results.append(check("cost is 0.2% of notional",
+                         round(_long["cost"], 8), round(10 * _m * 0.002, 8)))
+_js = open("web/app.js").read()
+results.append(check("the browser no longer derives P&L", "function netPnl" in _js, False))
+
 print("29. The dashboard payload carries what the live tab renders")
 _h = _insp.getsource(_live.history)
 results.append(check("history exposes quantity (the P/L column needs it)",

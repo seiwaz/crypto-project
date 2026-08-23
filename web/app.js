@@ -1027,36 +1027,32 @@ function positionChart(positions) {
   return el('div', { class: 'poschart__wrap' }, [svg, legend]);
 }
 
-/* Net of the round trip, not gross.
- *
- * At 0.1% a side a position up 0.15% of notional is still a loss when closed, and
- * nine of the account's first 23 trades moved in our favour and lost money exactly
- * that way. A P/L column showing gross would report those as winners. */
-function netPnl(p, mark) {
-  const e = Number(p.entry), q = Number(p.quantity);
-  if (!Number.isFinite(e) || !Number.isFinite(q) || !Number.isFinite(mark)) return null;
-  const sgn = p.side === 'short' ? -1 : 1;
-  return (mark - e) * q * sgn - q * mark * 0.002;
-}
-
-function livePositionRow(p, mark) {
-  const pct = pctFromEntry(p, mark);
-  const net = netPnl(p, mark);
+/* `pnl` is the server's own figure for this symbol: gross, cost and net, all against
+ * a mark read at request time. This file does not recompute any of it — deriving P&L
+ * in the browser from a 15s-old sampled mark is what put this column out of step with
+ * the venue's «سود و زیان ناخالص» in the first place. */
+function livePositionRow(p, pnl) {
+  const mark = pnl && Number.isFinite(Number(pnl.mark)) ? Number(pnl.mark) : null;
+  const pct = pnl && pnl.pct !== undefined ? Number(pnl.pct) : null;
+  const gross = pnl && pnl.gross !== undefined ? Number(pnl.gross) : null;
+  const net = pnl && pnl.net !== undefined ? Number(pnl.net) : null;
+  const money = (v) => (v === null || !Number.isFinite(v))
+    ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(5)}`;
   const cells = [
     el('td', {}, [el('strong', { text: p.coin, dir: 'ltr' })]),
     el('td', { class: `side side--${p.side}`, text: t(`side.${p.side}`) }),
     el('td', { class: 'num', text: fmtNum(p.entry), dir: 'ltr' }),
-    el('td', { class: 'num', text: Number.isFinite(mark) ? fmtNum(mark) : '—', dir: 'ltr' }),
+    el('td', { class: 'num', text: mark === null ? '—' : fmtNum(mark), dir: 'ltr' }),
     el('td', {
-      class: pnlClass(pct),
-      text: Number.isFinite(pct) ? `${pct > 0 ? '+' : ''}${pct.toFixed(3)}%` : '—',
-      dir: 'ltr',
+      class: pnlClass(pct), dir: 'ltr',
+      text: pct === null || !Number.isFinite(pct) ? '—'
+            : `${pct > 0 ? '+' : ''}${pct.toFixed(3)}%`,
     }),
-    el('td', {
-      class: pnlClass(net),
-      text: net === null ? '—' : `${net > 0 ? '+' : ''}${net.toFixed(5)}`,
-      dir: 'ltr',
-    }),
+    /* Gross first, because that is the figure the Tabdeal app shows and the one
+     * people reconcile against; net beside it is the same trade after the round
+     * trip, which is what the engine's exit rule actually tests. */
+    el('td', { class: pnlClass(gross), text: money(gross), dir: 'ltr' }),
+    el('td', { class: pnlClass(net), text: money(net), dir: 'ltr' }),
     el('td', { class: 'num', text: heldLabel(Number(p.opened_ts)), dir: 'ltr' }),
     /* One column: the pair is read together — "where does this get out" — and
      * splitting it cost a column of width on a table that already scrolls. */
@@ -1070,15 +1066,15 @@ function livePositionRow(p, mark) {
   return el('tr', {}, cells);
 }
 
-function liveTable(positions, marks) {
+function liveTable(positions, pnlBySymbol) {
   const open = positions.filter((p) => p.status === 'open');
   if (!open.length) return el('div', { class: 'empty', text: t('live.none') });
   const head = el('tr', {},
-    ['coin', 'side', 'entry', 'mark', 'pct', 'pnl', 'held', 'sltp', 'score']
+    ['coin', 'side', 'entry', 'mark', 'pct', 'gross', 'pnl', 'held', 'sltp', 'score']
       .map((k) => el('th', { text: t(`live.col.${k}`) })));
   return el('table', { class: 'ltable' }, [
     el('thead', {}, [head]),
-    el('tbody', {}, open.map((p) => livePositionRow(p, marks.get(p.symbol)))),
+    el('tbody', {}, open.map((p) => livePositionRow(p, pnlBySymbol.get(p.symbol)))),
   ]);
 }
 
@@ -1157,25 +1153,13 @@ function renderLive() {
     return;
   }
 
-  /* Marks come from the venue snapshot in /api/live, not from the sampled history:
-   * the history is thinned to one point every 15s and would show a stale price
-   * between samples on a 5s refresh. */
-  const marks = new Map();
-  for (const vp of st.venue_positions || []) {
-    const amt = Number(vp.positionAmt);
-    const entry = Number(vp.entryPrice);
-    if (Number.isFinite(entry)) marks.set(vp.symbol, entry);
-    if (Number.isFinite(Number(vp.markPrice)) && Number(vp.markPrice) > 0) {
-      marks.set(vp.symbol, Number(vp.markPrice));
-    }
-    void amt;
-  }
-  /* The venue reports markPrice as "0" on a live position, so the freshest real
-   * price we hold is the last sampled one. */
-  for (const p of (hist && hist.positions) || []) {
-    const pts = p.points || [];
-    if (pts.length) marks.set(p.symbol, Number(pts[pts.length - 1].mark));
-  }
+  /* `st.live` is the server's per-symbol mark and P&L, read at request time. The
+   * browser used to assemble this itself from the venue snapshot and, when that came
+   * back as "0", from the last sampled history point - which is thinned to 15s while
+   * this tab refreshes every 3s, so the P&L lagged the venue by up to fifteen
+   * seconds and never agreed with it. */
+  const pnlBySymbol = new Map();
+  for (const row of st.live || []) pnlBySymbol.set(row.symbol, row);
 
   const bal = (st.balance || [])[0] || {};
   const summary = el('div', { class: 'stats' }, [
@@ -1198,7 +1182,7 @@ function renderLive() {
   host.replaceChildren(
     summary,
     el('h3', { class: 'sect', text: t('live.open') }),
-    liveTable(positions, marks),
+    liveTable(positions, pnlBySymbol),
     el('h3', { class: 'sect', text: t('live.history') }),
     historySummary(st.closed || []),
     historyTable(st.closed || []),
