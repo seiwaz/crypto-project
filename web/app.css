@@ -802,3 +802,9 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 
 .stats--hist { margin-block-end: .5rem; }
 .ltable td.num, .ltable td { font-variant-numeric: tabular-nums; }
+
+/* SL and TP share a cell: red floor, green ceiling, so the pair reads at a glance
+   without a legend. */
+.sltp__sl { color: var(--bad, #b91c1c); }
+.sltp__tp { color: var(--ok, #15803d); }
+.sltp__sep { color: var(--ink-muted); opacity: .6; }

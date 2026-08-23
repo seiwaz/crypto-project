@@ -1058,8 +1058,13 @@ function livePositionRow(p, mark) {
       dir: 'ltr',
     }),
     el('td', { class: 'num', text: heldLabel(Number(p.opened_ts)), dir: 'ltr' }),
-    el('td', { class: 'num', text: fmtNum(p.stop), dir: 'ltr' }),
-    el('td', { class: 'num', text: fmtNum(p.tp1), dir: 'ltr' }),
+    /* One column: the pair is read together — "where does this get out" — and
+     * splitting it cost a column of width on a table that already scrolls. */
+    el('td', { class: 'num sltp', dir: 'ltr' }, [
+      el('span', { class: 'sltp__sl', text: fmtNum(p.stop) }),
+      el('span', { class: 'sltp__sep', text: ' / ' }),
+      el('span', { class: 'sltp__tp', text: fmtNum(p.tp1) }),
+    ]),
     el('td', { class: 'num', text: p.score != null ? Number(p.score).toFixed(1) : '—', dir: 'ltr' }),
   ];
   return el('tr', {}, cells);
@@ -1069,7 +1074,7 @@ function liveTable(positions, marks) {
   const open = positions.filter((p) => p.status === 'open');
   if (!open.length) return el('div', { class: 'empty', text: t('live.none') });
   const head = el('tr', {},
-    ['coin', 'side', 'entry', 'mark', 'pct', 'pnl', 'held', 'stop', 'tp1', 'score']
+    ['coin', 'side', 'entry', 'mark', 'pct', 'pnl', 'held', 'sltp', 'score']
       .map((k) => el('th', { text: t(`live.col.${k}`) })));
   return el('table', { class: 'ltable' }, [
     el('thead', {}, [head]),
