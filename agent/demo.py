@@ -1152,7 +1152,9 @@ def _profit_signal_check(pos: dict) -> tuple[bool, str | None]:
     verdict, score = row.get("verdict"), row.get("score")
     if verdict == "TAKE" and score is not None and float(score) >= MIN_SCORE:
         return True, None
-    return False, f"verdict is now {verdict} ({score}) while in profit"
+    # No "while in profit" here: adverse_exit calls this on LOSING positions too, and
+    # a log line that misstates the position's state is how a bug hides in this system.
+    return False, f"verdict is now {verdict} ({score})"
 
 
 def _review(pos: dict) -> str | None:
