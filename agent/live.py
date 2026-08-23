@@ -192,6 +192,21 @@ def reconcile(broker=None) -> dict:
     for symbol, row in local.items():
         if symbol in venue:
             out["open"].append(symbol)
+            # Repair a position the venue is holding without our stop on it.
+            #
+            # _attach_stop reads the position back to get its positionId, and
+            # immediately after a market order the venue has sometimes not registered
+            # it yet. It then logged "HAS NO EXCHANGE STOP" and never tried again -
+            # so SUI sat unprotected for 40 minutes on 2026-08-23 while FLOKI, opened
+            # one second earlier in the same batch, got its stop fine. Filling several
+            # slots per scan makes that race more likely, not less.
+            #
+            # Reconcile already runs every cycle and already reads the venue, so it is
+            # the natural place to notice and fix it. The venue is the authority here:
+            # if it reports no stopLossPrice, there is no stop, whatever our row says.
+            if not _venue_has_stop(venue[symbol]) and row.get("stop"):
+                if _repair_stop(broker, row, venue[symbol]):
+                    out.setdefault("stops_repaired", []).append(symbol)
             continue
         # Gone from the venue while we still had it open. The exchange closed it —
         # normally the SL or TP we attached. Read the real fill back rather than
@@ -216,6 +231,49 @@ def reconcile(broker=None) -> dict:
                                "amount": pos.get("positionAmt"),
                                "entry": pos.get("entryPrice")})
     return out
+
+
+def _venue_has_stop(pos: dict) -> bool:
+    """Does the venue actually hold a stop on this position?
+
+    Tabdeal reports an absent level as None, "" or the string "0" depending on the
+    endpoint, so a plain truthiness test on the raw field is not enough.
+    """
+    try:
+        return float(pos.get("stopLossPrice") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _repair_stop(broker, row: dict, pos: dict) -> bool:
+    """Re-attach a missing exchange stop to an already-open position."""
+    vpid = pos.get("positionId") or pos.get("id") or row.get("venue_position_id")
+    if vpid is None:
+        return False
+    try:
+        broker.set_position_sl_tp(vpid, sl_price=row["stop"], tp_price=row.get("tp1"),
+                                  symbol=row["symbol"])
+    except Exception as exc:                                   # noqa: BLE001
+        log.error("live: %s stop repair FAILED (%s) — still unprotected",
+                  row["symbol"], exc)
+        return False
+    # Never trust the write; read it back. "success" from positionSlTp is not proof,
+    # and the first two live positions of this account ran unprotected because that
+    # distinction was not made.
+    try:
+        back = broker.position_for(row["symbol"]) or {}
+    except Exception:                                          # noqa: BLE001
+        back = {}
+    if not _venue_has_stop(back):
+        log.error("live: %s stop repair did not stick — still unprotected",
+                  row["symbol"])
+        return False
+    store.live_update(row["id"], sl_tp_set=1, venue_position_id=str(vpid))
+    store.live_event(row["id"], "sltp_repaired",
+                     f"re-attached SL={row['stop']:.8g}")
+    log.warning("live: %s exchange stop REPAIRED at %.8g (was missing)",
+                row["symbol"], row["stop"])
+    return True
 
 
 def settle(broker, row: dict, reason: str, fallback_price: float) -> dict:

@@ -624,6 +624,31 @@ results.append(check("adverse_exit is still gated on the flag if re-enabled",
 results.append(check("default profit hour is 1.0",
                      _live.settings()["profit_close_after_h"], 1.0))
 
+print("28. An unprotected position is repaired, not just logged about")
+# SUI opened 2026-08-23 17:07 and sat with no exchange stop for 40 minutes: the venue
+# had not registered the position yet when _attach_stop read it back, so there was no
+# positionId, and the failure was logged once and abandoned. FLOKI, opened one second
+# earlier in the same batch, was fine.
+results.append(check("absent stop detected when the field is None",
+                     _live._venue_has_stop({}), False))
+results.append(check('absent stop detected when the venue sends "0"',
+                     _live._venue_has_stop({"stopLossPrice": "0"}), False))
+results.append(check("absent stop detected on an empty string",
+                     _live._venue_has_stop({"stopLossPrice": ""}), False))
+results.append(check("a real stop is recognised",
+                     _live._venue_has_stop({"stopLossPrice": "0.8096"}), True))
+results.append(check("garbage does not raise",
+                     _live._venue_has_stop({"stopLossPrice": "abc"}), False))
+_rc = _insp.getsource(_live.reconcile)
+results.append(check("reconcile checks every open position's stop",
+                     "_venue_has_stop(venue[symbol])" in _rc, True))
+results.append(check("and repairs it", "_repair_stop(broker, row" in _rc, True))
+_rp = _insp.getsource(_live._repair_stop)
+results.append(check("the repair reads the stop back rather than trusting the write",
+                     "_venue_has_stop(back)" in _rp, True))
+results.append(check("a failed repair says so loudly, not silently",
+                     _rp.count("log.error"), 2))
+
 print("27. Position history is recorded for later analysis")
 _rs = _insp.getsource(_live._record_sample)
 results.append(check("sampling is thinned, not every cycle",
