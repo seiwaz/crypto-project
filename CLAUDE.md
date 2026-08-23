@@ -706,6 +706,47 @@ the old `signal_exit` banked (~+0.11R). Letting the venue's TP run the winner is
 where the profit came from. SHIB, held exactly 1.00h and in loss, was correctly
 left untouched.
 
+## Live engine rules as they now stand (2026-08-23, authoritative)
+
+**Exits — the engine takes exactly ONE, and never touches a loser:**
+
+| | |
+|---|---|
+| Engine closes | held **≥ 1h** AND gross **> 1.5 × round trip** (`profit_close`) |
+| Everything else | the exchange's own **stop** and **TP1**, attached to the position |
+| A losing position | never touched by the engine, at any hold |
+
+`signal_exit`, `time_stop` and `adverse_exit` are all gone from the live path
+(`adverse_exit` survives behind `adverse_exit_enabled: false`). Settings:
+`profit_close_after_h: 1.0`, `profit_close_fee_multiple: 1.5`,
+`live_cycle_seconds: 3`, `allow_shorts: false`, `min_score: 75`.
+
+**The 1.5× cushion is not decoration.** The profit test reads the *mark*; the close
+is a **MARKET** order that crosses the spread. At 1.0× a close settled **negative**
+(PEPE: +0.01052 gross vs a 0.01091 round trip → −0.00039). A close that still
+settles ≤ 0 now logs an ERROR naming the setting to raise.
+
+**Position history is recorded** in `live_samples` (mark, gross/net unrealised, R,
+hold, and the verdict+score being judged against), written by the 3s loop, thinned
+to 15s, pruned after 14 days. `GET /api/live/history`.
+
+**`reconcile()` repairs a missing exchange stop every cycle.** SUI ran unprotected
+for 40 minutes because `_attach_stop` read the position back before the venue had
+registered it, logged the failure once, and never retried. `_venue_has_stop()`
+treats `None`, `""` and the string `"0"` as absent — Tabdeal reports all three.
+
+**Web UI** (`live` tab, 3s refresh): BTCUSDT in the header (cached 5s, served from
+both `/api/state` and `/api/live`); open positions with a **net** P/L column and a
+combined SL/TP column; closed positions with totals above the list; the chart last.
+The P/L column is net of the round trip on purpose — nine of the first 23 trades
+moved in our favour and still lost money, and a gross column would call them wins.
+
+**Skill sync:** `skill/SKILL.md` Step 8 now carries a "What the live Tabdeal engine
+actually does" table, because the generic rules above it (TP1 50% partial, stop
+locked at TP1, time stop at 6 candles) are **not** what runs. Tabdeal supports
+neither `reduceOnly` nor a partial close, so TP1 is a full close and there is no
+TP2. Keep that table in step with `agent/live.py`.
+
 ## Real-money migration — the dossier that preceded going live
 
 The user has asked for everything to be prepared so a "migrate to real trading"

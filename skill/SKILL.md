@@ -290,9 +290,40 @@ Management rules to state in the plan, so the exit isn't improvised under pressu
   `references/risk-math.md` §10 for the reasoning and the trade-off this accepts)
 - Trail behind new swing points on the decision TF, not a tight indicator
 - Time stop: ~6 decision-TF candles (scalp) or ~12 (intraday) below 0.5R
-- On Nobitex, before each 8-hour renewal ask "would I open this now?" If no, close
+- Before each funding/renewal period ask "would I open this now?" If no, close
 - Never widen a stop, never average into a loser
 - Circuit breaker: 2 losses or −3% equity (scalp), 3 losses or −5% (intraday)
+
+### What the live Tabdeal engine actually does (differs — read before assuming)
+
+The rules above are the general form. The automated engine in `agent/live.py`
+trading real money on Tabdeal runs a deliberately narrower set, because that
+venue charges **0.1% maker *and* taker** and the fee, not the signal, was the
+dominant term in its P&L: across its first 41 closed trades, −0.467 of a −0.662
+loss was round-trip fees, i.e. **71%**.
+
+| | |
+|---|---|
+| **The exchange owns both levels** | Stop **and** TP1 are attached to the position via `positionSlTp`, so they are honoured even if the engine process dies. Verify by reading `stopLossPrice` back — a `success` response is not proof. |
+| **TP1 is a full close** | Not a 50% partial. Tabdeal supports neither `reduceOnly` nor a partial close, so a half-exit would have to be an opposing MARKET order that can **flip** the position instead of trimming it. There is no TP2. |
+| **The engine takes exactly one exit** | Held **≥ 1 hour** *and* gross **> 1.5 × the round trip**. Nothing else. |
+| **A losing position is never touched** | It rides its exchange stop. No time stop, no signal exit, no adverse exit. |
+
+Why the engine's own exits were removed, all measured on its live record:
+
+- A signal-based exit that fired as soon as profit cleared the fee banked winners
+  at a median hold of **11 minutes** for ~**+0.11R**, while losers ran the full
+  **−1.0R** — roughly 1:9 against, needing a ~90% win rate to break even.
+- A time stop firing on `0 ≤ upnl < floor` includes a position in profit but
+  *below* the round trip, so it booked a certain loss on a trade that had merely
+  not paid for itself yet.
+- Closing a barely-negative position burns the whole fee for nothing: one exit at
+  **−0.035%** realised −0.01297, of which **85% was commission**.
+
+**The margin that makes the rule safe:** the profit test reads the *mark*, but the
+close is a **MARKET** order, so the fill crosses the spread. Testing against 1.0×
+the round trip produced a close that settled **negative** (+0.01052 gross against
+a 0.01091 fee). Hence 1.5×.
 
 ---
 
