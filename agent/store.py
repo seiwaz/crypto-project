@@ -264,6 +264,26 @@ CREATE TABLE IF NOT EXISTS live_positions (
 );
 CREATE INDEX IF NOT EXISTS idx_live_status ON live_positions(status, opened_ts DESC);
 
+-- A time series of what each live position was actually doing, sampled by the
+-- monitoring loop. The closed-trade row records only the endpoints - entry, exit,
+-- realised - which is why every post-mortem so far has had to reconstruct the middle
+-- from exchange candles. This keeps the middle: what WE saw, at the moment we saw it,
+-- including the verdict and score the engine was judging it against.
+CREATE TABLE IF NOT EXISTS live_samples (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id INTEGER NOT NULL REFERENCES live_positions(id) ON DELETE CASCADE,
+    ts          REAL NOT NULL,            -- unix seconds
+    at          TEXT NOT NULL,            -- ISO, for reading by eye
+    mark        REAL,                     -- live price at this instant
+    upnl        REAL,                     -- unrealised, gross
+    upnl_net    REAL,                     -- after the round-trip fee
+    r           REAL,                     -- unrealised in R
+    held_h      REAL,
+    verdict     TEXT,                     -- what the scanner said at this instant
+    score       REAL
+);
+CREATE INDEX IF NOT EXISTS idx_live_samples ON live_samples(position_id, ts);
+
 CREATE TABLE IF NOT EXISTS live_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     position_id INTEGER REFERENCES live_positions(id) ON DELETE CASCADE,
@@ -890,3 +910,48 @@ def live_last_close_times() -> dict[str, str]:
     return {r["coin"]: r["closed_at"] for r in _rows(
         "SELECT coin, MAX(closed_at) AS closed_at FROM live_positions "
         "WHERE status = 'closed' AND closed_at IS NOT NULL GROUP BY coin")}
+
+
+# --------------------------------------------------------------------------------
+# Live position history
+# --------------------------------------------------------------------------------
+
+def live_sample_add(position_id: int, **fields) -> None:
+    """Record one observation of an open position."""
+    cols = ["position_id"] + list(fields)
+    vals = [position_id] + list(fields.values())
+    with connect() as conn:
+        conn.execute(
+            f"INSERT INTO live_samples ({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' * len(cols))})", vals)
+
+
+def live_samples(position_id: int, limit: int = 5000) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM live_samples WHERE position_id = ? "
+            "ORDER BY ts LIMIT ?", (position_id, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def live_samples_for(position_ids, limit_each: int = 2000) -> dict[int, list[dict]]:
+    """History for several positions at once, keyed by position id."""
+    out: dict[int, list[dict]] = {}
+    for pid in position_ids:
+        out[int(pid)] = live_samples(int(pid), limit_each)
+    return out
+
+
+def live_samples_prune(older_than_ts: float) -> int:
+    """Drop samples for positions that closed before `older_than_ts`.
+
+    Sampling every few seconds is small per row and unbounded over time, so the
+    series is kept only while it can still inform a post-mortem.
+    """
+    with connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM live_samples WHERE position_id IN ("
+            "  SELECT id FROM live_positions "
+            "  WHERE status = 'closed' AND COALESCE(opened_ts, 0) < ?)",
+            (older_than_ts,))
+        return cur.rowcount or 0

@@ -68,12 +68,30 @@ def settings() -> dict:
         "entry_interval_seconds": int(d.get("entry_interval_seconds")
                                       or DEFAULT_ENTRY_INTERVAL),
         "leverage": float(d.get("live_leverage") or 10.0),
+        # Retained for the paper engine and for history; the live manager no longer
+        # has a time stop - see _manage_one.
         "time_stop_hours": float(d.get("time_stop_hours") or 0.5),
         # How long a losing trade is given before a lapsed setup closes it. Not zero:
         # a position needs a little room to breathe past entry noise before "the
         # signal changed" means anything. Defaults to the time stop's own window.
         "adverse_exit_after_h": float(d.get("adverse_exit_after_h")
                                       or d.get("time_stop_hours") or 0.5),
+        # Whether a losing position may be closed by the engine at all. Turned OFF at
+        # the operator's instruction 2026-08-23 ("do not touch positions in loss") -
+        # a loser then has exactly one exit, its exchange stop. Worth knowing before
+        # flipping this: adding the adverse exit was measured as the single largest
+        # loss reduction available (six stop-outs were 89% of all loss at a median
+        # hold of 548 minutes), and switching it off restores that exposure.
+        "adverse_exit_enabled": bool(d.get("adverse_exit_enabled", False)),
+        # A position held this long that is NET profitable - after the round trip, not
+        # merely above entry - is banked, whatever the setup says.
+        "profit_close_after_h": float(d.get("profit_close_after_h") or 1.0),
+        # How often the monitoring loop writes a position sample. The loop itself runs
+        # every `cycle_seconds`; recording at that rate would be ~1.2M rows a day for
+        # four positions, so the series is thinned to something a chart still reads
+        # smoothly.
+        "history_interval_seconds": float(d.get("history_interval_seconds") or 15.0),
+        "history_keep_days": float(d.get("history_keep_days") or 14.0),
         "max_entry_drift_r": float(d.get("max_entry_drift_r") or 0.3),
         # An absolute ceiling, and the multiple of live equity that normally binds.
         # The multiple is what keeps risk proportional as the account moves; the
@@ -583,6 +601,43 @@ def manage(broker=None) -> list[dict]:
     return out
 
 
+_last_sample: dict[int, float] = {}
+
+
+def _record_sample(row: dict, cfg: dict, *, mark, upnl, qty, r_now, held_h) -> None:
+    """Write one point of a position's history, thinned to the configured interval.
+
+    Why keep this at all: a closed trade records only its endpoints, so every
+    post-mortem in this project so far has had to reconstruct what happened in the
+    middle from exchange candles - which shows what the market did, but not what the
+    engine could see or what it was judging against. This records our own view:
+    the mark we acted on, the unrealised P&L net of the round trip, and the verdict
+    and score live at that instant.
+
+    Never allowed to break management: a monitoring loop must not stop managing real
+    money because a write failed.
+    """
+    pid = row.get("id")
+    if not pid:
+        return
+    now = time.time()
+    if now - _last_sample.get(pid, 0.0) < cfg["history_interval_seconds"]:
+        return
+    _last_sample[pid] = now
+    try:
+        scan = store.result_for(row["coin"], settings()["exchange"]) or {}
+        round_trip = qty * mark * (tabdeal.TAKER_FEE_PCT / 100.0) * 2
+        store.live_sample_add(
+            pid, ts=now,
+            at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            mark=round(float(mark), 10), upnl=round(float(upnl), 8),
+            upnl_net=round(float(upnl) - round_trip, 8), r=round(float(r_now), 4),
+            held_h=round(float(held_h), 4),
+            verdict=scan.get("verdict"), score=scan.get("score"))
+    except Exception as exc:                                   # noqa: BLE001
+        log.debug("live: sample write failed for %s: %s", row.get("symbol"), exc)
+
+
 def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     symbol = row["symbol"]
     # The venue reports markPrice and unRealizedProfit as "0" on a live position, so
@@ -599,6 +654,9 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     r_now = (upnl / risk) if risk else 0.0
     held_h = (time.time() - float(row.get("opened_ts") or time.time())) / 3600.0
 
+    _record_sample(row, cfg, mark=mark, upnl=upnl, qty=qty, r_now=r_now,
+                   held_h=held_h)
+
     # The stop and the target belong to the exchange. Everything below is judgement.
 
     # TP1 reached: CLOSE. It is the take-profit, not a stop-move.
@@ -614,59 +672,50 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
                     out["exit_price"], out["realised_pnl"])
         return {"symbol": symbol, "action": "CLOSE", "reason": "tp1", **out}
 
-    # Signal exit: the setup has lapsed AND the trade has actually paid for itself.
-    #
-    # `upnl > 0` was the wrong bar. A round trip costs 0.1% a side, so ~0.0124 USDT on
-    # a $6.20 position, and closing at +0.0018 of gross books a 0.0107 loss. Six of
-    # the first eight live closes did exactly that: gross across them was POSITIVE
-    # (+0.0643) and the account still lost 0.0475, because the exits kept firing
-    # before the move had covered its own cost.
-    #
-    # Below the cost line the choice is not "take the profit" versus "give it back" —
-    # it is "book a certain loss now" versus "let the exchange stop bound it". The
-    # stop is already on the position, so holding is the cheaper of the two. Above the
-    # line the original logic stands: bank it rather than wait for a level.
     round_trip_cost = qty * mark * (tabdeal.TAKER_FEE_PCT / 100.0) * 2
-    if upnl > round_trip_cost:
+
+    # The ONLY exit this engine takes: held an hour or more, and net profitable.
+    #
+    # "Net" is after the round trip, not merely above entry. At 0.1% a side a
+    # position up 0.15% of notional is still a loss once closed, and nine of the
+    # first 23 live trades moved in our favour and lost money exactly that way.
+    #
+    # There used to be a `signal_exit` here that banked a winner as soon as profit
+    # cleared the fee, whatever the clock said. It fired at a median hold of ELEVEN
+    # minutes for a mean +0.230% gross - about +0.11R - while losers ran to the full
+    # -1.0R. Cutting winners at a tenth of R and losers at a whole one is roughly 1:9
+    # against us, and needs a ~90% win rate to break even. The hour is what lets a
+    # winner become worth more than its own fee.
+    #
+    # Everything below the hour, and everything in loss at any hour, is left to the
+    # exchange's own stop and take-profit. That is deliberate: the venue holds both
+    # levels on the position itself, so they are honoured even if this process dies.
+    if held_h >= cfg["profit_close_after_h"] and upnl > round_trip_cost:
         still, reason = demo._profit_signal_check(row)
-        if reason is not None:
-            out = settle(broker, row, "signal_exit", mark)
-            log.warning("live: %s signal_exit at %s (net %s)", symbol,
-                        out["exit_price"], out["realised_pnl"])
-            return {"symbol": symbol, "action": "CLOSE", "reason": "signal_exit",
-                    "detail": reason, **out}
-        if still:
-            return {"symbol": symbol, "action": "HOLD", "reason": "still_favoured",
-                    "r": r_now}
-    elif upnl > 0:
-        # In profit but not yet past the fee. Say so explicitly, so a run of these is
-        # visible as "the edge is too small to clear costs" rather than looking idle.
-        still, reason = demo._profit_signal_check(row)
-        if reason is not None:
-            return {"symbol": symbol, "action": "HOLD", "reason": "below_cost_line",
-                    "detail": f"setup lapsed but gross {upnl:.6f} < round trip "
-                              f"{round_trip_cost:.6f}; holding to the stop",
-                    "r": round(r_now, 3)}
+        out = settle(broker, row, "profit_close", mark)
+        log.warning("live: %s profit_close after %.2fh at %.3fR (net %s, setup %s)",
+                    symbol, held_h, r_now, out["realised_pnl"],
+                    "intact" if still else (reason or "lapsed"))
+        return {"symbol": symbol, "action": "CLOSE", "reason": "profit_close",
+                "held_h": round(held_h, 2), "r": round(r_now, 3),
+                "detail": ("setup intact" if still else (reason or "setup lapsed")),
+                **out}
 
     # Adverse exit: the setup has lapsed and the trade is DOWN.
     #
-    # This branch did not exist, and its absence was the single largest source of
-    # loss in the account's first 23 live trades. A winner was checked against the
-    # latest verdict every cycle and closed the moment the setup lapsed; a loser was
-    # checked against nothing at all. Its only exit was the exchange stop.
+    # DISABLED by default since 2026-08-23 at the operator's instruction ("do not
+    # touch positions in loss"). A losing position is left entirely to its exchange
+    # stop.
     #
-    # The asymmetry that produced: winners banked +0.11R (signal_exit fires as soon
-    # as profit clears the fee), losers realised the full -1.0R. Six stop-outs were
-    # 89% of all losses, at a MEDIAN hold of 548 minutes - nine hours, on a strategy
-    # whose intended hold is 5-20 minutes. Those positions were not being managed;
-    # they were being waited out.
-    #
-    # "The setup is no longer valid" is a reason to leave whether the trade is up or
-    # down. Holding a dead setup for nine hours to reach a stop that was sized for a
-    # signal that no longer exists is not risk management, it is hope. The exchange
-    # stop stays exactly where it is as the backstop - this only stops us waiting for
-    # it when we already know the reason for the trade is gone.
-    if upnl < 0 and held_h >= cfg["adverse_exit_after_h"]:
+    # The measurement that motivated this branch, kept because switching the flag
+    # back on is a one-line change and the trade-off should be visible at the point
+    # of decision: across the first 23 live trades a winner was re-checked every
+    # cycle and closed once its setup lapsed, while a loser was checked against
+    # nothing. Winners banked +0.11R, losers realised the full -1.0R, and six
+    # stop-outs were 89% of all loss at a median hold of 548 minutes. Leaving losers
+    # alone restores that asymmetry.
+    if (cfg["adverse_exit_enabled"] and upnl < 0
+            and held_h >= cfg["adverse_exit_after_h"]):
         still, reason = demo._profit_signal_check(row)
         if reason is not None and not still:
             out = settle(broker, row, "adverse_exit", mark)
@@ -676,16 +725,18 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
                     "detail": reason, "r": round(r_now, 3),
                     "held_h": round(held_h, 2), **out}
 
-    # Time stop: only for a trade that is going nowhere. A loser that still has a
-    # live setup is left to its exchange stop; one whose setup has lapsed was taken
-    # by the adverse exit above.
-    floor = 0.5 * risk
-    if held_h >= cfg["time_stop_hours"] and 0 <= upnl < floor:
-        out = settle(broker, row, "time_stop", mark)
-        log.warning("live: %s time_stop after %.2fh (net %s)", symbol, held_h,
-                    out["realised_pnl"])
-        return {"symbol": symbol, "action": "CLOSE", "reason": "time_stop",
-                "held_h": round(held_h, 2), **out}
+    # No time stop.
+    #
+    # It used to close anything held past `time_stop_hours` with `0 <= upnl < floor`.
+    # That range includes a position in profit but BELOW the round trip, so firing it
+    # booked a certain loss on a trade that had simply not paid for itself yet - the
+    # same mistake the old signal_exit made, just later. Anything genuinely net
+    # profitable is already taken by profit_close at the one-hour mark, so all this
+    # could still catch was the cases where closing costs money.
+    #
+    # A position that is flat or down now waits for the exchange's own stop or
+    # take-profit. Both sit on the position at the venue, so neither depends on this
+    # process being alive.
 
     return {"symbol": symbol, "action": "HOLD", "r": round(r_now, 3),
             "held_h": round(held_h, 2)}
@@ -719,7 +770,11 @@ def _spec(symbol: str) -> dict:
 # --------------------------------------------------------------------------------
 
 
+_last_prune = 0.0
+
+
 def cycle() -> dict:
+    global _last_prune
     broker = _broker()
     rec = reconcile(broker)
     managed = manage(broker)
@@ -727,7 +782,51 @@ def cycle() -> dict:
     out = {"reconcile": rec, "managed": managed}
     if filled:
         out["backfilled"] = filled
+
+    # Bound the sample table. Hourly is often enough for a table that grows a few
+    # rows a minute, and keeps this off the hot path of a 3-second loop.
+    cfg = settings()
+    now = time.time()
+    if now - _last_prune > 3600:
+        _last_prune = now
+        try:
+            dropped = store.live_samples_prune(now - cfg["history_keep_days"] * 86400)
+            if dropped:
+                out["pruned_samples"] = dropped
+        except Exception as exc:                               # noqa: BLE001
+            log.debug("live: sample prune failed: %s", exc)
     return out
+
+
+def history(include_closed: int = 5) -> dict:
+    """Per-position price history for the dashboard chart.
+
+    Returns open positions first, each with its sampled series, plus the most
+    recently closed ones so a chart does not lose a line the instant a trade ends.
+    """
+    open_rows = store.live_positions("open")
+    closed_rows = store.live_closed()[:max(0, include_closed)]
+    rows = list(open_rows) + list(closed_rows)
+    series = store.live_samples_for([r["id"] for r in rows])
+    out = []
+    for r in rows:
+        pts = series.get(int(r["id"]), [])
+        out.append({
+            "id": r["id"], "coin": r["coin"], "symbol": r["symbol"],
+            "side": r["side"], "status": r["status"],
+            "entry": r.get("entry_price"), "stop": r.get("stop"),
+            "tp1": r.get("tp1"), "leverage": r.get("leverage"),
+            "score": r.get("score"), "opened_at": r.get("opened_at"),
+            "opened_ts": r.get("opened_ts"),
+            "closed_at": r.get("closed_at"), "exit_price": r.get("exit_price"),
+            "exit_reason": r.get("exit_reason"),
+            "realised_pnl": r.get("realised_pnl"),
+            "points": [{"ts": p["ts"], "mark": p["mark"], "upnl": p["upnl"],
+                        "upnl_net": p["upnl_net"], "r": p["r"],
+                        "verdict": p["verdict"], "score": p["score"]}
+                       for p in pts],
+        })
+    return {"positions": out, "server_ts": time.time()}
 
 
 def scheduler_loop(stop_event) -> None:

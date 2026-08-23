@@ -430,7 +430,11 @@ print("14. Live engine: TP1 is a full close, not a stop-move")
 from agent import live as _live
 import inspect as _insp
 _src = _insp.getsource(_live._manage_one)
-_tp1 = _src[_src.index("TP1 reached"):_src.index("Signal exit")]
+# Anchored on the round_trip_cost assignment, which is the next statement after the
+# TP1 branch. The old anchor was the "Signal exit" comment, and that exit was later
+# removed - a test that slices source between two comments breaks when either is
+# reworded, which is not the same thing as the behaviour changing.
+_tp1 = _src[_src.index("TP1 reached"):_src.index("round_trip_cost = qty")]
 results.append(check("TP1 branch closes the position",
                      'settle(broker, row, "tp1"' in _tp1, True))
 results.append(check("TP1 branch does NOT move the stop",
@@ -538,15 +542,21 @@ print("19. Signal exit must clear the round-trip cost first")
 _m1 = _insp.getsource(_live._manage_one)
 results.append(check("a round-trip cost is computed",
                      "round_trip_cost = qty * mark" in _m1, True))
-results.append(check("signal exit is gated on it, not on upnl > 0",
-                     "if upnl > round_trip_cost:" in _m1, True))
+# The exit this gates is now profit_close (signal_exit was removed 2026-08-23 when
+# the engine was restricted to closing only a net-profitable position past its hour).
+results.append(check("the exit is gated on the round trip, not on upnl > 0",
+                     "upnl > round_trip_cost" in _m1, True))
 # `elif upnl > 0:` is the correct below-the-line branch; what must be gone is the
 # bare `if upnl > 0:` that used to trigger the exit itself.
 results.append(check("the bare `if upnl > 0:` trigger is gone",
                      not any(l.strip() == "if upnl > 0:" for l in _m1.splitlines()),
                      True))
-results.append(check("below the line it holds and says why",
-                     "below_cost_line" in _m1, True))
+# Below the cost line there is now no branch at all: the engine simply holds and
+# lets the exchange's own stop and take-profit stand. Closing a position that has
+# not paid for itself books a certain loss, which is what below_cost_line existed to
+# avoid - removing every early exit removes the need for the guard.
+results.append(check("nothing closes below the cost line",
+                     _m1.count("settle(broker, row,"), 3))
 # the arithmetic itself: 0.1% a side, both sides
 _qty, _mark = 0.0089, 697.0
 _expect = _qty * _mark * (_tab.TAKER_FEE_PCT / 100.0) * 2
@@ -594,6 +604,37 @@ results.append(check("a TAKE scoring 74 is rejected",
 _below["score"] = 76.0
 results.append(check("and 76 is accepted",
                      [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
+
+print("26. The live engine closes only a net-profitable position past its hour")
+_mo2 = _insp.getsource(_live._manage_one)
+_mo2c = "\n".join(l for l in _mo2.splitlines() if not l.lstrip().startswith("#"))
+results.append(check("profit_close needs BOTH the hour and net profit",
+                     'held_h >= cfg["profit_close_after_h"] and upnl > round_trip_cost'
+                     in _mo2c, True))
+results.append(check("net means past the round trip, not above entry",
+                     "round_trip_cost = qty * mark" in _mo2c, True))
+results.append(check("the early signal_exit is gone",
+                     '"signal_exit"' in _mo2c, False))
+results.append(check("the time stop is gone (it closed sub-fee winners)",
+                     '"time_stop"' in _mo2c, False))
+results.append(check("a loser is not touched by default",
+                     _live.settings()["adverse_exit_enabled"], False))
+results.append(check("adverse_exit is still gated on the flag if re-enabled",
+                     'cfg["adverse_exit_enabled"] and upnl < 0' in _mo2c, True))
+results.append(check("default profit hour is 1.0",
+                     _live.settings()["profit_close_after_h"], 1.0))
+
+print("27. Position history is recorded for later analysis")
+_rs = _insp.getsource(_live._record_sample)
+results.append(check("sampling is thinned, not every cycle",
+                     'cfg["history_interval_seconds"]' in _rs, True))
+results.append(check("a failed write cannot break management",
+                     "except Exception" in _rs, True))
+results.append(check("it records the verdict it was judged against",
+                     "verdict=scan.get" in _rs, True))
+results.append(check("history() exists for the dashboard", callable(_live.history), True))
+_cy = _insp.getsource(_live.cycle)
+results.append(check("old samples are pruned", "live_samples_prune" in _cy, True))
 
 print("25. Shorts can be switched off without deleting the short path")
 # 21,315 replayed signals: shorts net negative at every horizon and worsening with
@@ -679,21 +720,22 @@ results.append(check("conviction collapse closes the position",
 results.append(check("missing scan data is still 'no opinion'",
                      _pc.count("return False, None"), 2))
 
-print("22. A losing trade with a lapsed setup is closed, not waited out")
-# 23 live trades: winners banked +0.11R (signal_exit fires once profit clears the
-# fee), losers rode to the full -1.0R exchange stop because nothing ever checked
-# them. Six stop-outs were 89% of all loss, median hold 548 minutes.
+print("22. The adverse exit exists but is off: a loser is never touched")
+# It was added because six stop-outs were 89% of all loss at a median hold of 548
+# minutes. It is disabled at the operator's instruction: on a 1-tick loser it burns
+# the full 0.2% round trip for nothing (FLOKI closed at -0.035%, of which the fee was
+# 85%). Kept behind a flag so the trade-off stays visible and reversible.
 _mo = _insp.getsource(_live._manage_one)
-results.append(check("a losing position is signal-checked at all",
-                     "upnl < 0 and held_h >=" in _mo, True))
+results.append(check("a losing position is only checked when enabled",
+                     'cfg["adverse_exit_enabled"] and upnl < 0' in _mo, True))
 results.append(check("it closes as adverse_exit",
                      '"adverse_exit", mark' in _mo, True))
 results.append(check("only when the setup has actually lapsed",
                      "reason is not None and not still" in _mo, True))
 results.append(check("adverse window is configurable",
                      "adverse_exit_after_h" in _insp.getsource(_live.settings), True))
-results.append(check("the exchange stop is still the backstop",
-                     "time_stop_hours" in _mo, True))
+results.append(check("it is off by default", _live.settings()["adverse_exit_enabled"],
+                     False))
 
 print("21. Entry fills every free slot in one pass")
 _lk = _insp.getsource(_live._try_open_locked)

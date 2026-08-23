@@ -425,6 +425,16 @@ class Handler(BaseHTTPRequestHandler):
             from . import live                                 # noqa: PLC0415
             return self._json(live.state())
 
+        if path == "/api/live/history":
+            # Sampled price/PnL series per position, for the dashboard chart.
+            from . import live                                 # noqa: PLC0415
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                keep = int((q.get("closed") or ["5"])[0])
+            except (TypeError, ValueError):
+                keep = 5
+            return self._json(live.history(include_closed=keep))
+
         if path == "/api/live/flatten":
             # The kill switch. Closes every open position on the venue, whatever the
             # local records think, and works even if the engine loop is wedged.

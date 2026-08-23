@@ -21,10 +21,8 @@ const API = {
   manual:     (body) => fetchJSON('/api/manual-check', body),
   commentary: (body) => fetchJSON('/api/commentary', body),
   reassess:   () => fetchJSON('/api/llm/reassess', {}),
-  demo:       () => fetchJSON('/api/demo'),
-  demoReport: () => fetchJSON('/api/demo/report'),
-  demoCycle:  () => fetchJSON('/api/demo/cycle', {}),
-  demoReset:  (password) => fetchJSON('/api/demo/reset', { password }),
+  live:        () => fetchJSON('/api/live'),
+  liveHistory: () => fetchJSON('/api/live/history'),
 };
 
 async function fetchJSON(url, body) {
@@ -47,12 +45,14 @@ const state = {
   charts: new Map(),
   openCoins: new Set(JSON.parse(localStorage.getItem('openCoins') || '[]')),
   pollTimer: null,
-  tab: localStorage.getItem('tab') || 'screener',
-  demo: null,
-  report: null,
-  demoTimer: null,
-  demoInFlight: false,
-  demoError: null,
+  /* 'demo' is the retired tab's id and may still be in localStorage from a previous
+   * visit; without this the saved value matches no panel and the page opens blank. */
+  tab: (localStorage.getItem('tab') === 'demo' ? 'live'
+        : localStorage.getItem('tab')) || 'screener',
+  live: null,
+  liveHistory: null,
+  liveTimer: null,
+  liveInFlight: false,
 };
 
 async function loadStrings(lang) {
@@ -790,12 +790,14 @@ function renderScan() {
 }
 
 function renderSettingsForm() {
+  /* Only the controls that actually change what this deployment does. The exchange
+   * selector, capital and risk % were removed from the header: the venue is fixed to
+   * Tabdeal, `capital` is the planner's sizing number and setting it to the real
+   * balance breaks signal generation outright, and `risk_pct` is ignored entirely
+   * while demo.auto_slots is on. Showing a control that silently does nothing is
+   * worse than not showing it. */
   const s = state.data.settings || {};
-  const ex = document.getElementById('exchange');
-  if (ex && s.exchange) ex.value = s.exchange;
   document.getElementById('profile').value = s.profile;
-  document.getElementById('capital').value = s.capital;
-  document.getElementById('risk').value = s.risk_pct;
   document.getElementById('interval').value = s.scan_interval_minutes;
 }
 
@@ -844,7 +846,7 @@ function renderDrawer() {
   if (wl.margin_detection) body.append(el('p', { class: 'check__meta', dir: 'auto', text: wl.margin_detection }));
 }
 
-/* ------------------------------------------------------------------ demo */
+/* --------------------------------------------------------------- formatting */
 
 /* Sign carries the meaning, not colour: "+0.42" and "−0.42" are already distinct
  * without it, so the class only reinforces what the glyph already says. */
@@ -889,396 +891,254 @@ function inUsdt(rMultiple, riskAmount) {
   return rMultiple * riskAmount;
 }
 
-function demoAccount(acc, agg) {
-  const cells = [
-    stat(t('demo.equity'), num(acc.equity, { digits: 2, suffix: ' USDT' })),
-    stat(t('demo.balance'), num(acc.balance, { digits: 2 })),
-    stat(t('demo.openPnl'), signed(acc.open_pnl, { digits: 4 })),
-    stat(t('demo.usedMargin'), num(acc.used_margin, { digits: 2 })),
-    stat(t('demo.available'), num(acc.available_margin, { digits: 2 })),
-    stat(t('demo.return'), signed(acc.return_pct, { digits: 3, suffix: '%' })),
-  ];
-  /* Win rate belongs at the top, not only in the report further down — it is the
-   * first thing anyone looks for. The closed-trade count travels with it, because a
-   * win rate over three trades and one over three hundred are different claims and
-   * the number alone cannot tell them apart. */
-  if (agg) {
-    cells.push(stat(t('demo.winRate'), el('span', {}, [
-      num(agg.win_rate, { digits: 1, suffix: '%' }),
-      el('span', { class: 'stat__sub' }, [
-        document.createTextNode(' '),
-        num(agg.closed),
-        document.createTextNode(` ${t('demo.trades')}`),
-      ]),
-    ])));
-  }
-  return el('div', { class: 'demo__account' }, cells);
+/* ------------------------------------------------------- live positions
+
+ * Replaces the demo-trading panel. The paper account is switched off; what matters
+ * now is the four real positions on Tabdeal, so this shows those and their price
+ * history rather than a simulated ledger.
+ */
+
+function pnlClass(v) {
+  if (!Number.isFinite(v) || v === 0) return 'num';
+  return v > 0 ? 'num num--up' : 'num num--down';
 }
 
-/* An empty slot is a legitimate state, so it is labelled with its cause rather than
- * left blank. "No qualifying signal" points at the market; "insufficient margin"
- * points at the sizing. Reading one as the other wastes a lot of time. */
-function slotReason(reason) {
-  if (!reason) return null;
-  const detail = reason.detail || {};
-  const body = [el('strong', { text: t(`demo.slot.${reason.code}`) })];
-  if (reason.code === 'insufficient_margin') {
-    body.push(el('span', { class: 'demo__hint' }, [
-      document.createTextNode(`${t('demo.slot.needs')} `),
-      num(detail.needs, { digits: 2 }),
-      document.createTextNode(` · ${t('demo.available')} `),
-      num(detail.available, { digits: 2 }),
-    ]));
-    body.push(el('p', { class: 'demo__note' },
-                  sentenceWithCode('demo.slot.slotsHint', '--slots')));
-  } else if (reason.code === 'heat_cap') {
-    body.push(el('span', { class: 'demo__hint' }, [
-      num(reason.heat, { digits: 2, suffix: '%' }),
-      document.createTextNode(` / `),
-      num(reason.cap, { digits: 1, suffix: '%' }),
-    ]));
-  } else if (reason.candidates) {
-    body.push(el('span', { class: 'demo__hint' }, [
-      num(reason.candidates), document.createTextNode(` ${t('demo.slot.candidates')}`),
-    ]));
-  }
-  return el('div', { class: 'demo__slotreason' }, body);
+function pctFromEntry(p, mark) {
+  const e = Number(p.entry);
+  if (!Number.isFinite(e) || !e || !Number.isFinite(mark)) return null;
+  return ((mark - e) / e) * 100 * (p.side === 'short' ? -1 : 1);
 }
 
-function demoSlots(d) {
-  const { slots, heat } = d;
-  const pips = el('div', { class: 'slots__pips' });
-  for (let i = 0; i < slots.total; i += 1) {
-    pips.append(el('span', {
-      class: `slots__pip${i < slots.filled ? ' slots__pip--filled' : ''}`,
-      attrs: { 'aria-hidden': 'true' },
+function heldLabel(openedTs, closedTs) {
+  if (!Number.isFinite(openedTs)) return '—';
+  const end = Number.isFinite(closedTs) ? closedTs : Date.now() / 1000;
+  const mins = Math.max(0, Math.floor((end - openedTs) / 60));
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+/* One line per position, y = % away from ITS OWN entry.
+ *
+ * Plotting raw price would need one axis per coin — FLOKI trades near 0.000027 and
+ * BTC near 77,000, so on a shared axis every line but the largest collapses onto the
+ * baseline. Percent-from-entry is also the quantity the exit rules actually act on,
+ * and it puts the 0.2% round-trip cost on the chart as a fixed reference band. */
+const LINE_COLOURS = ['#3b82f6', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#06b6d4'];
+
+function positionChart(positions) {
+  const W = 720, H = 210, PADL = 44, PADR = 12, PADT = 12, PADB = 22;
+  const live = positions.filter((p) => (p.points || []).length > 1);
+  if (!live.length) {
+    return el('div', { class: 'empty', text: t('live.chart.empty') });
+  }
+
+  let tMax = 0, yMin = 0, yMax = 0;
+  const series = live.map((p, i) => {
+    const t0 = Number(p.opened_ts) || (p.points[0] || {}).ts;
+    const pts = p.points.map((s) => {
+      const pct = pctFromEntry(p, Number(s.mark));
+      return { x: Math.max(0, (Number(s.ts) - t0) / 60), y: pct };
+    }).filter((d) => Number.isFinite(d.x) && Number.isFinite(d.y));
+    for (const d of pts) {
+      if (d.x > tMax) tMax = d.x;
+      if (d.y < yMin) yMin = d.y;
+      if (d.y > yMax) yMax = d.y;
+    }
+    return { p, pts, colour: LINE_COLOURS[i % LINE_COLOURS.length] };
+  }).filter((s) => s.pts.length > 1);
+
+  if (!series.length) return el('div', { class: 'empty', text: t('live.chart.empty') });
+
+  /* Always show at least the cost band, so a flat line is visibly flat against the
+   * fee rather than filling the plot with noise. */
+  yMin = Math.min(yMin, -0.25);
+  yMax = Math.max(yMax, 0.25);
+  const pad = (yMax - yMin) * 0.1 || 0.1;
+  yMin -= pad; yMax += pad;
+  tMax = Math.max(tMax, 1);
+
+  const sx = (x) => PADL + (x / tMax) * (W - PADL - PADR);
+  const sy = (y) => PADT + (1 - (y - yMin) / (yMax - yMin)) * (H - PADT - PADB);
+  const svgEl = (tag, attrs) => {
+    const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+
+  const svg = svgEl('svg', {
+    viewBox: `0 0 ${W} ${H}`, class: 'poschart',
+    preserveAspectRatio: 'none', role: 'img',
+    'aria-label': t('live.chart.title'),
+  });
+
+  // the 0.2% round-trip band: inside it, a position has not paid for itself
+  svg.append(svgEl('rect', {
+    x: PADL, y: sy(0.2), width: W - PADL - PADR,
+    height: Math.max(1, sy(-0.2) - sy(0.2)),
+    fill: 'currentColor', opacity: '0.06',
+  }));
+  svg.append(svgEl('line', {
+    x1: PADL, x2: W - PADR, y1: sy(0), y2: sy(0),
+    stroke: 'currentColor', 'stroke-opacity': '0.35', 'stroke-dasharray': '3 3',
+  }));
+
+  for (const gy of [yMax, 0, yMin]) {
+    const lab = svgEl('text', {
+      x: PADL - 6, y: sy(gy) + 3, 'text-anchor': 'end',
+      class: 'poschart__axis',
+    });
+    lab.textContent = `${gy > 0 ? '+' : ''}${gy.toFixed(2)}%`;
+    svg.append(lab);
+  }
+  const xlab = svgEl('text', {
+    x: W - PADR, y: H - 6, 'text-anchor': 'end', class: 'poschart__axis',
+  });
+  xlab.textContent = `${Math.round(tMax)}m`;
+  svg.append(xlab);
+
+  for (const s of series) {
+    svg.append(svgEl('polyline', {
+      points: s.pts.map((d) => `${sx(d.x).toFixed(1)},${sy(d.y).toFixed(1)}`).join(' '),
+      fill: 'none', stroke: s.colour, 'stroke-width': '1.8',
+      'stroke-linejoin': 'round', 'stroke-opacity': s.p.status === 'open' ? '1' : '0.4',
+    }));
+    const last = s.pts[s.pts.length - 1];
+    svg.append(svgEl('circle', {
+      cx: sx(last.x), cy: sy(last.y), r: '2.8', fill: s.colour,
     }));
   }
-  const heatPct = Math.min(100, (heat.used_pct / heat.cap_pct) * 100);
-  return el('section', { class: 'demo__slots' }, [
-    el('div', { class: 'slots__head' }, [
-      el('h3', { text: t('demo.slots') }),
-      el('span', { class: 'slots__count' }, [
-        num(slots.filled), document.createTextNode(` ${t('bar.of')} `), num(slots.total),
-      ]),
-    ]),
-    pips,
-    slotReason(slots.reason),
-    el('div', { class: 'heat' }, [
-      el('div', { class: 'heat__head' }, [
-        el('span', { text: t('demo.heat') }),
-        /* Heat is an amount of risk, not a gain — showing it with a "+" and the
-           profit colour made 3.88% of equity at risk read as money made.
-           Reported in USDT, with the percentage that defines the cap after it. */
-        el('span', {}, [
-          num(heat.used_usdt, { digits: 2 }),
-          document.createTextNode(` / `),
-          num(heat.cap_usdt, { digits: 2, suffix: ' USDT' }),
-          el('span', { class: 'demo__hint' }, [
-            document.createTextNode('  ('),
-            num(heat.used_pct, { digits: 2, suffix: '%' }),
-            document.createTextNode(' / '),
-            num(heat.cap_pct, { digits: 1, suffix: '%' }),
-            document.createTextNode(')'),
-          ]),
-        ]),
-      ]),
-      el('div', { class: 'heat__track' }, [
-        el('div', { class: 'heat__fill', attrs: { style: `inline-size:${heatPct}%` } }),
-      ]),
-    ]),
-    /* Three states, not two. Unavailable is a warning; enforced by the local
-       stand-in is a note, because the thresholds are chosen here rather than
-       calibrated by the skill; enforced by market_context.py needs no comment. */
-    d.correlation_filter && !d.correlation_filter.available
-      ? el('p', { class: 'demo__warn' },
-           sentenceWithCode('demo.corrUnavailable', 'market_context.py'))
-      : (d.correlation_filter && d.correlation_filter.source === 'local'
-          ? el('p', { class: 'demo__note' }, [
-              document.createTextNode(`${t('demo.corrLocal')} `),
-              num(d.correlation_filter.threshold, { digits: 2 }),
-              document.createTextNode(`, ${t('demo.corrCap')} `),
-              num(d.correlation_filter.max_same_side),
-            ])
-          : null),
-  ]);
+
+  const legend = el('div', { class: 'poschart__legend' },
+    series.map((s) => el('span', { class: 'poschart__key' }, [
+      el('i', { attrs: { style: `background:${s.colour}` } }),
+      el('span', { text: s.p.coin, dir: 'ltr' }),
+    ])));
+
+  return el('div', { class: 'poschart__wrap' }, [svg, legend]);
 }
 
-function positionRow(p) {
-  const s = p.state;
+function livePositionRow(p, mark) {
+  const pct = pctFromEntry(p, mark);
   const cells = [
-    el('td', {}, [el('div', { class: 'pos__coin', text: p.coin }),
-                  el('div', { class: 'pos__sym', text: p.symbol, dir: 'ltr' })]),
-    el('td', { class: `pos__side pos__side--${p.side}`,
-               text: t(`card.side.${p.side}`) }),
-    /* Toobit sizes an order in USDT, so the notional leads. Contracts and coins stay
-     * underneath: the contract count is what a venue ticket actually takes, and the
-     * two differ by the contract multiplier — 10x on FIL, 1000x on some others. */
-    el('td', {}, [
-      num(s ? s.notional : null, { digits: 2 }),
-      el('div', { class: 'pos__sub' }, [
-        num(p.contracts, { digits: 1 }),
-        el('span', { text: ` ${t('demo.contracts')} · ` }),
-        num(s ? s.coins : null, { digits: 4 }),
-      ]),
-    ]),
-    el('td', {}, [num(p.entry_price, { digits: 6 })]),
-    /* Last traded price sits with the mark. They are different numbers: mark comes
-     * from a cross-venue index and is what liquidation is judged on, last is what
-     * traded on this book. Showing only one would leave a reader comparing the board
-     * against Toobit's ticker and finding a mismatch with no explanation. */
-    el('td', {}, [num(s ? s.mark : null, { digits: 6 }),
-                  el('div', { class: 'pos__sub' }, [
-                    el('span', { text: `${t('demo.last')} ` }),
-                    num(p.last_price, { digits: 6 })]),
-                  el('div', { class: 'pos__sub', text: p.mark_source || '' })]),
-    /* Targets sit under the stop rather than in columns of their own: the row already
-     * carries twelve figures, and what a reader needs at a glance is the three levels
-     * that end the trade, together. A filled TP1 is marked, because a position whose
-     * stop now sits at breakeven is a different trade from the one that was opened. */
-    el('td', {}, [
-      num(p.stop, { digits: 6 }),
-      el('div', { class: 'pos__sub' }, [
-        el('span', { text: `${t('demo.tp1')} ` }), num(p.tp1, { digits: 6 }),
-        p.tp1_filled ? el('span', { class: 'pos__filled', text: ` ${t('demo.filled')}` }) : null,
-      ]),
-      el('div', { class: 'pos__sub' }, [
-        el('span', { text: `${t('demo.tp2')} ` }), num(p.tp2, { digits: 6 }),
-      ]),
-      p.stop_moved_to_be
-        ? el('div', { class: 'pos__sub pos__be', text: t('demo.stopAtBe') }) : null,
-    ]),
-    el('td', {}, [num(s ? s.liquidation_price : null, { digits: 6 })]),
-    el('td', {}, [num(p.leverage, { digits: 2, suffix: '×' })]),
-    /* Funding rides under margin rather than taking a column of its own: at 13
-       columns the last one fell outside the viewport, and an accrued cost nobody can
-       see is the same as not showing it. Both are collateral-side figures. */
-    el('td', {}, [num(p.margin, { digits: 2 }),
-                  el('div', { class: 'pos__sub' }, [
-                    signed(p.funding_paid, { digits: 5 })])]),
-    el('td', {}, [signed(s ? s.unrealised_pnl : null, { digits: 4 })]),
-    /* MFE gets its own column rather than hiding in a detail panel: a trade that ran
-     * to +1.4R and came back is a management failure, one that never moved is a
-     * thesis failure, and they are indistinguishable from P&L alone.
-     *
-     * Shown in USDT with R underneath. R is the comparable unit across coins, but
-     * cash is the one the number is actually felt in, so it leads. */
-    el('td', {}, [signed(inUsdt(p.mfe_r, p.risk_amount), { digits: 4 }),
-                  el('div', { class: 'pos__sub' }, [
-                    signed(inUsdt(p.mae_r, p.risk_amount), { digits: 4 })])]),
-    el('td', {}, [num(s ? s.margin_ratio_pct : null, { digits: 2, suffix: '%' })]),
+    el('td', {}, [el('strong', { text: p.coin, dir: 'ltr' })]),
+    el('td', { class: `side side--${p.side}`, text: t(`side.${p.side}`) }),
+    el('td', { class: 'num', text: fmtNum(p.entry), dir: 'ltr' }),
+    el('td', { class: 'num', text: Number.isFinite(mark) ? fmtNum(mark) : '—', dir: 'ltr' }),
+    el('td', {
+      class: pnlClass(pct),
+      text: Number.isFinite(pct) ? `${pct > 0 ? '+' : ''}${pct.toFixed(3)}%` : '—',
+      dir: 'ltr',
+    }),
+    el('td', { class: 'num', text: heldLabel(Number(p.opened_ts)), dir: 'ltr' }),
+    el('td', { class: 'num', text: fmtNum(p.stop), dir: 'ltr' }),
+    el('td', { class: 'num', text: fmtNum(p.tp1), dir: 'ltr' }),
+    el('td', { class: 'num', text: p.score != null ? Number(p.score).toFixed(1) : '—', dir: 'ltr' }),
   ];
-  const row = el('tr', {}, cells);
-  if (!s) row.classList.add('pos--stale');
-  return row;
+  return el('tr', {}, cells);
 }
 
-function demoPositions(d) {
-  if (!d.positions.length) {
-    return el('div', { class: 'empty', text: t('demo.noPositions') });
-  }
-  const headers = ['demo.col.coin', 'demo.col.side', 'demo.col.sizeUsdt', 'demo.col.entry',
-                   'demo.col.mark', 'demo.col.levels', 'demo.col.liq', 'demo.col.lev',
-                   'demo.col.marginFunding', 'demo.col.upnl', 'demo.col.mfe',
-                   'demo.col.marginRatio'];
-  /* The unit is stated once, above the table, rather than repeated in every header.
-     Putting "(USDT)" on four headers pushed the table 91px past its container, and a
-     column that scrolls out of sight tells the reader nothing. */
-  return el('div', {}, [
-    el('p', { class: 'demo__unit', text: t('demo.unitNote') }),
-    el('div', { class: 'table-wrap' }, [
-    el('table', { class: 'postable' }, [
-      el('thead', {}, [el('tr', {}, headers.map((k) => el('th', { text: t(k) })))]),
-      el('tbody', {}, d.positions.map(positionRow)),
-    ]),
-    ]),
+function liveTable(positions, marks) {
+  const open = positions.filter((p) => p.status === 'open');
+  if (!open.length) return el('div', { class: 'empty', text: t('live.none') });
+  const head = el('tr', {}, ['coin', 'side', 'entry', 'mark', 'pnl', 'held', 'stop', 'tp1', 'score']
+    .map((k) => el('th', { text: t(`live.col.${k}`) })));
+  return el('table', { class: 'ltable' }, [
+    el('thead', {}, [head]),
+    el('tbody', {}, open.map((p) => livePositionRow(p, marks.get(p.symbol)))),
   ]);
 }
 
-function reportBlock(r) {
-  if (!r) return null;
-  const a = r.aggregate;
-  const kids = [el('h3', { text: t('demo.report') })];
-
-  if (!r.sample.sufficient) {
-    kids.push(el('p', { class: 'demo__warn' }, [
-      document.createTextNode(`${t('demo.sampleShort')} `),
-      num(r.sample.closed), document.createTextNode(' / '), num(r.sample.minimum),
-    ]));
-  }
-
-  kids.push(el('div', { class: 'demo__account' }, [
-    stat(t('demo.closed'), num(a.closed)),
-    stat(t('demo.winRate'), num(a.win_rate, { digits: 1, suffix: '%' })),
-    stat(t('demo.expectancy'), signed(a.expectancy_usdt, { digits: 4 })),
-    stat(t('demo.netPnl'), signed(a.net_pnl, { digits: 4 })),
-    stat(t('demo.maxDd'), signed(a.max_drawdown_usdt, { digits: 4 })),
-    stat(t('demo.costs'), num(a.costs_paid, { digits: 4 })),
-  ]));
-
-  if (r.by_exit_reason.length) {
-    /* A sum row, not an average of averages: avg_pnl/avg_mfe below are each
-     * bucket's own mean, so the total row re-derives its own mean from the raw
-     * per-bucket totals (weighted by count) rather than averaging the averages -
-     * that would silently misweight a 1-trade bucket the same as a 50-trade one. */
-    const totalCount = r.by_exit_reason.reduce((s, b) => s + (b.count || 0), 0);
-    const totalSharePct = r.by_exit_reason.reduce((s, b) => s + (b.share_pct || 0), 0);
-    const totalPnl = r.by_exit_reason.reduce((s, b) => s + (b.total_pnl || 0), 0);
-    const totalMfeUsdt = r.by_exit_reason.reduce(
-      (s, b) => s + (b.avg_mfe_usdt || 0) * (b.count || 0), 0);
-    kids.push(el('h4', { text: t('demo.byExit') }));
-    kids.push(el('div', { class: 'table-wrap' }, [
-      el('table', { class: 'postable' }, [
-        el('thead', {}, [el('tr', {}, ['demo.col.reason', 'demo.col.count',
-          'demo.col.share', 'demo.col.avgPnl', 'demo.col.totalPnl', 'demo.col.avgMfe']
-          .map((k) => el('th', { text: t(k) })))]),
-        el('tbody', {}, r.by_exit_reason.map((b) => el('tr', {}, [
-          el('td', { text: t(`demo.exit.${b.reason}`) }),
-          el('td', {}, [num(b.count)]),
-          el('td', {}, [num(b.share_pct, { digits: 1, suffix: '%' })]),
-          el('td', {}, [signed(b.avg_pnl, { digits: 4 })]),
-          el('td', {}, [signed(b.total_pnl, { digits: 4 })]),
-          el('td', {}, [signed(b.avg_mfe_usdt, { digits: 4 })]),
-        ]))),
-        el('tfoot', {}, [el('tr', { class: 'postable__total' }, [
-          el('td', { text: t('demo.col.total') }),
-          el('td', {}, [num(totalCount)]),
-          el('td', {}, [num(totalSharePct, { digits: 1, suffix: '%' })]),
-          el('td', {}, [signed(totalCount ? totalPnl / totalCount : 0, { digits: 4 })]),
-          el('td', {}, [signed(totalPnl, { digits: 4 })]),
-          el('td', {}, [signed(totalCount ? totalMfeUsdt / totalCount : 0, { digits: 4 })]),
-        ])]),
-      ]),
-    ]));
-  }
-
-  /* Every closed trade, most recent first. The aggregates above are computed from
-   * exactly these rows, so anything surprising up there can be traced to a trade
-   * down here rather than taken on trust. */
-  if (r.trades && r.trades.length) {
-    kids.push(el('h4', { text: t('demo.history') }));
-    const cols = ['demo.col.coin', 'demo.col.side', 'demo.col.reason',
-                  'demo.col.entry', 'demo.col.exitPrice', 'demo.col.netPnl',
-                  'demo.col.mfe', 'demo.col.held', 'demo.col.lev', 'demo.col.score',
-                  'demo.col.closedAt'];
-    kids.push(el('div', { class: 'table-wrap' }, [
-      el('table', { class: 'postable' }, [
-        el('thead', {}, [el('tr', {}, cols.map((k) => el('th', { text: t(k) })))]),
-        el('tbody', {}, r.trades.map((tr) => {
-          const risk = tr.r ? (tr.net_pnl / tr.r) : null;
-          return el('tr', {}, [
-            el('td', {}, [el('div', { class: 'pos__coin', text: tr.coin })]),
-            el('td', { class: `pos__side pos__side--${tr.side}`,
-                       text: t(`card.side.${tr.side}`) }),
-            el('td', { text: t(`demo.exit.${tr.exit_reason || 'unknown'}`) }),
-            el('td', {}, [num(tr.entry_price, { digits: 6 })]),
-            el('td', {}, [num(tr.exit_price, { digits: 6 })]),
-            el('td', {}, [signed(tr.net_pnl, { digits: 4 })]),
-            el('td', {}, [signed(inUsdt(tr.mfe_r, risk), { digits: 4 }),
-                          el('div', { class: 'pos__sub' }, [
-                            signed(inUsdt(tr.mae_r, risk), { digits: 4 })])]),
-            el('td', {}, [num(tr.hours_held, { digits: 1, suffix: 'h' })]),
-            el('td', {}, [num(tr.leverage, { digits: 2, suffix: '×' })]),
-            el('td', {}, [num(tr.score_at_entry, { digits: 1 })]),
-            el('td', { class: 'pos__sub', text: (tr.closed_at || '').replace('T', ' ').slice(0, 16) }),
-          ]);
-        })),
-      ]),
-    ]));
-  }
-  return el('section', { class: 'demo__report' }, kids);
-}
-
-function renderDemo() {
-  const host = document.getElementById('demoBody');
-  const d = state.demo;
-  if (!d) {
-    host.replaceChildren(el('div', { class: 'empty', text: t('demo.loading') }));
+function renderLive() {
+  const host = document.getElementById('liveBody');
+  const st = state.live;
+  const hist = state.liveHistory;
+  if (!st) {
+    host.replaceChildren(el('div', { class: 'empty', text: t('live.loading') }));
     return;
   }
-  host.replaceChildren(
-    el('section', { class: 'demo__head' }, [
-      el('div', {}, [
-        el('h2', { text: t('demo.title') }),
-        el('p', { class: 'demo__note', text: t('demo.subtitle') }),
-        /* The rule currently in force, spelled out. A time stop that fires is much
-           easier to trust when the reader already knew what it was set to. */
-        d.strategy ? el('p', { class: 'demo__note' }, [
-          document.createTextNode(`${t('demo.strategy')}: `),
-          el('strong', { text: t(`bar.profile.${d.strategy.profile}`) }),
-          document.createTextNode(` · ${t('demo.timeStop')} `),
-          num(d.strategy.time_stop_hours, { digits: 0, suffix: 'h' }),
-          document.createTextNode(` ${t('demo.below')} `),
-          num(d.strategy.time_stop_floor_usdt, { digits: 2, suffix: ' USDT' }),
-        ]) : null,
-      ]),
-      el('div', { class: 'demo__actions' }, [
-        el('button', { class: 'btn', attrs: { id: 'demoCycle' }, text: t('demo.runCycle') }),
-        el('button', { class: 'btn btn--ghost', attrs: { id: 'demoReset' }, text: t('demo.reset') }),
-      ]),
-    ]),
-    demoAccount(d.account, state.report && state.report.aggregate),
-    demoSlots(d),
-    demoPositions(d),
-    reportBlock(state.report),
-  );
+  if (st.error) {
+    host.replaceChildren(el('div', { class: 'empty', text: `${t('error.load')} ${st.error}` }));
+    return;
+  }
 
-  document.getElementById('demoCycle').addEventListener('click', async (e) => {
-    e.target.disabled = true;
-    e.target.textContent = t('demo.running');
-    try { await API.demoCycle(); } finally { await refreshDemo(); }
-  });
-  document.getElementById('demoReset').addEventListener('click', async () => {
-    if (!window.confirm(t('demo.resetConfirm'))) return;
-    const password = window.prompt(t('demo.resetPassword'));
-    if (password === null) return;   // cancelled the prompt itself
-    try {
-      await API.demoReset(password);
-    } catch (err) {
-      window.alert(err.message || t('demo.resetWrongPassword'));
-      return;
+  /* Marks come from the venue snapshot in /api/live, not from the sampled history:
+   * the history is thinned to one point every 15s and would show a stale price
+   * between samples on a 5s refresh. */
+  const marks = new Map();
+  for (const vp of st.venue_positions || []) {
+    const amt = Number(vp.positionAmt);
+    const entry = Number(vp.entryPrice);
+    if (Number.isFinite(entry)) marks.set(vp.symbol, entry);
+    if (Number.isFinite(Number(vp.markPrice)) && Number(vp.markPrice) > 0) {
+      marks.set(vp.symbol, Number(vp.markPrice));
     }
-    await refreshDemo();
-  });
+    void amt;
+  }
+  /* The venue reports markPrice as "0" on a live position, so the freshest real
+   * price we hold is the last sampled one. */
+  for (const p of (hist && hist.positions) || []) {
+    const pts = p.points || [];
+    if (pts.length) marks.set(p.symbol, Number(pts[pts.length - 1].mark));
+  }
+
+  const bal = (st.balance || [])[0] || {};
+  const summary = el('div', { class: 'stats' }, [
+    stat(t('live.wallet'), el('span', { class: 'num', text: fmtNum(bal.walletBalance), dir: 'ltr' })),
+    stat(t('live.slots'), el('span', {
+      class: 'num', dir: 'ltr',
+      text: `${(st.slots || {}).used ?? '—'} / ${(st.slots || {}).max ?? '—'}`,
+    })),
+    stat(t('live.notional'), el('span', {
+      class: 'num', dir: 'ltr',
+      text: `${fmtNum((st.notional || {}).used)} / ${fmtNum((st.notional || {}).cap)}`,
+    })),
+    stat(t('live.armed'), el('span', {
+      class: st.enabled ? 'pill pill--on' : 'pill',
+      text: st.enabled ? (st.dry_run ? t('live.dryrun') : t('live.on')) : t('live.off'),
+    })),
+  ]);
+
+  host.replaceChildren(
+    summary,
+    el('h3', { class: 'sect', text: t('live.chart.title') }),
+    positionChart((hist && hist.positions) || []),
+    el('h3', { class: 'sect', text: t('live.open') }),
+    liveTable((hist && hist.positions) || [], marks),
+  );
 }
 
-async function refreshDemo() {
-  /* One request at a time. Marks come from a live endpoint that can take over a
-   * second, so a 3s timer would otherwise stack requests it never waits for, and the
-   * page would render them out of order — an older mark landing after a newer one. */
-  if (state.demoInFlight) return;
-  state.demoInFlight = true;
+async function refreshLive() {
+  /* One request at a time: the venue call can take over a second, so a 5s timer
+   * would otherwise stack requests and render an older mark after a newer one. */
+  if (state.liveInFlight) return;
+  state.liveInFlight = true;
   try {
-    const [d, r] = await Promise.all([API.demo(), API.demoReport()]);
-    state.demo = d;
-    state.report = r;
-    state.demoError = null;
+    const [s, h] = await Promise.all([API.live(), API.liveHistory()]);
+    state.live = s;
+    state.liveHistory = h;
   } catch (err) {
-    /* A dropped poll keeps the last good board rather than blanking it. Losing one
-     * refresh should not throw away every figure on screen. */
-    state.demoError = err.message || String(err);
-    if (!state.demo) {
-      document.getElementById('demoBody').replaceChildren(
-        el('div', { class: 'empty', text: `${t('error.load')} ${state.demoError}` }));
+    /* Keep the last good board rather than blanking it on a dropped poll. */
+    if (!state.live) {
+      document.getElementById('liveBody').replaceChildren(
+        el('div', { class: 'empty', text: `${t('error.load')} ${err.message || err}` }));
       return;
     }
   } finally {
-    state.demoInFlight = false;
+    state.liveInFlight = false;
   }
-  renderDemo();
+  renderLive();
 }
 
-const DEMO_POLL_MS = 3000;
+const LIVE_POLL_MS = 5000;
 
-function startDemoPolling() {
-  clearInterval(state.demoTimer);
-  state.demoTimer = setInterval(() => {
-    /* Only while the tab is visible and in front. Polling a hidden tab every 3s
-     * spends requests on a board nobody is reading. */
-    if (state.tab !== 'demo' || document.hidden) return;
-    refreshDemo();
-  }, DEMO_POLL_MS);
+function startLivePolling() {
+  clearInterval(state.liveTimer);
+  state.liveTimer = setInterval(() => {
+    if (state.tab !== 'live' || document.hidden) return;
+    refreshLive();
+  }, LIVE_POLL_MS);
 }
+
 
 function renderTabs() {
   for (const btn of document.querySelectorAll('.tab')) {
@@ -1287,7 +1147,7 @@ function renderTabs() {
     btn.classList.toggle('tab--active', active);
   }
   document.getElementById('panelScreener').hidden = state.tab !== 'screener';
-  document.getElementById('panelDemo').hidden = state.tab !== 'demo';
+  document.getElementById('panelLive').hidden = state.tab !== 'live';
 }
 
 function render() {
@@ -1330,19 +1190,10 @@ function wireControls() {
   const push = async (patch) => { await API.settings(patch); await refresh(); };
 
   document.getElementById('profile').addEventListener('change', (e) => push({ profile: e.target.value }));
-  /* Switching venue changes which results are in scope, so the board is rebuilt
-     from scratch rather than reconciled — the two venues share no symbols. */
-  document.getElementById('exchange').addEventListener('change', async (e) => {
-    for (const chart of state.charts.values()) chart.remove();
-    state.charts.clear();
-    await push({ exchange: e.target.value });
+  document.getElementById('interval').addEventListener('change', (e) => {
+    const v = parseFloat(e.target.value);
+    if (Number.isFinite(v) && v > 0) push({ scan_interval_minutes: v });
   });
-  for (const [id, key] of [['capital', 'capital'], ['risk', 'risk_pct'], ['interval', 'scan_interval_minutes']]) {
-    document.getElementById(id).addEventListener('change', (e) => {
-      const v = parseFloat(e.target.value);
-      if (Number.isFinite(v) && v > 0) push({ [key]: v });
-    });
-  }
 
   document.getElementById('rescan').addEventListener('click', async () => {
     const running = state.data && state.data.scan && state.data.scan.running;
@@ -1366,9 +1217,9 @@ function wireControls() {
       state.tab = btn.dataset.panel;
       localStorage.setItem('tab', state.tab);
       renderTabs();
-      /* The demo reads live marks, so it is fetched when opened rather than kept warm
-         behind a hidden panel — polling prices nobody is looking at is wasted work. */
-      if (state.tab === 'demo') await refreshDemo();
+      /* Fetched when opened rather than kept warm behind a hidden panel — polling
+         prices nobody is looking at is wasted work. */
+      if (state.tab === 'live') await refreshLive();
     });
   }
 
@@ -1382,11 +1233,11 @@ function wireControls() {
   await loadStrings(state.lang);
   wireControls();
   await refresh();
-  startDemoPolling();
+  startLivePolling();
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && state.tab === 'demo') refreshDemo();
+    if (!document.hidden && state.tab === 'live') refreshLive();
   });
-  if (state.tab === 'demo') await refreshDemo();
+  if (state.tab === 'live') await refreshLive();
   if (state.data && state.data.scan && state.data.scan.running) startPolling();
   else state.pollTimer = setInterval(refresh, SCREENER_POLL_MS);
 })();

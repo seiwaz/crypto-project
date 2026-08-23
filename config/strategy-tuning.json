@@ -19,7 +19,11 @@
     "live_max_total_notional": 25.0,
     "live_leverage": 5,
     "live_max_leverage": 20,
-    "adverse_exit_after_h": 1.0
+    "adverse_exit_after_h": 1.0,
+    "profit_close_after_h": 1.0,
+    "adverse_exit_enabled": false,
+    "history_interval_seconds": 15.0,
+    "history_keep_days": 14.0
   },
   "min_score": 75.0,
   "allow_shorts": false

@@ -14,15 +14,7 @@
   <div class="topbar__inner">
     <div class="brand">
       <h1 data-i18n="app.title">Crypto Screener</h1>
-      <span data-i18n="app.subtitle">Read-only analysis</span>
-    </div>
-
-    <div class="field">
-      <label for="exchange" data-i18n="bar.exchange">Exchange</label>
-      <select id="exchange">
-        <option value="toobit">Toobit</option>
-        <option value="nobitex">Nobitex</option>
-      </select>
+      <span class="brand__venue" data-i18n="app.subtitle">Tabdeal · live</span>
     </div>
 
     <div class="field">
@@ -32,16 +24,6 @@
         <option value="intraday" data-i18n="bar.profile.intraday">Intraday</option>
         <option value="swing" data-i18n="bar.profile.swing">Swing</option>
       </select>
-    </div>
-
-    <div class="field">
-      <label for="capital" data-i18n="bar.capital">Capital</label>
-      <input id="capital" type="number" min="1" step="any" dir="ltr" inputmode="decimal">
-    </div>
-
-    <div class="field">
-      <label for="risk" data-i18n="bar.risk">Risk %</label>
-      <input id="risk" type="number" min="0.01" max="100" step="0.05" dir="ltr" inputmode="decimal" style="inline-size:4.2rem">
     </div>
 
     <div class="field">
@@ -66,8 +48,8 @@
   <nav class="tabs" id="tabs" role="tablist">
     <button class="tab" id="tabScreener" role="tab" aria-controls="panelScreener"
             aria-selected="true" data-panel="screener" data-i18n="tab.screener">Screener</button>
-    <button class="tab" id="tabDemo" role="tab" aria-controls="panelDemo"
-            aria-selected="false" data-panel="demo" data-i18n="tab.demo">Demo trading</button>
+    <button class="tab" id="tabLive" role="tab" aria-controls="panelLive"
+            aria-selected="false" data-panel="live" data-i18n="tab.live">Live positions</button>
   </nav>
 </header>
 
@@ -84,12 +66,12 @@
     </details>
   </section>
 
-  <section id="panelDemo" role="tabpanel" aria-labelledby="tabDemo" hidden>
-    <div id="demoBody"></div>
+  <section id="panelLive" role="tabpanel" aria-labelledby="tabLive" hidden>
+    <div id="liveBody"></div>
   </section>
 
-  <p class="footer-note" id="footerNote" data-i18n="app.readonly">
-    Read-only. This tool never places orders.
+  <p class="footer-note footer-note--live" id="footerNote" data-i18n="app.livewarning">
+    Live trading is armed. Orders placed here use real funds on Tabdeal.
   </p>
 </main>
 

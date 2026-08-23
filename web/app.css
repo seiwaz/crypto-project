@@ -702,3 +702,81 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 
 /* A qualifier riding alongside a headline figure — the sample behind a win rate. */
 .stat__sub { color: var(--ink-muted); font-size: 0.75rem; }
+
+/* ---------------------------------------------------------- live positions */
+
+.brand__venue { font-size: .72rem; color: var(--ink-muted); }
+
+.footer-note--live {
+  color: var(--warn, #b45309);
+  font-weight: 600;
+}
+
+.sect {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  margin: 1.1rem 0 .45rem;
+}
+
+.poschart__wrap { margin-block-end: .5rem; }
+
+/* Percent-from-entry, so every coin shares one axis — see positionChart(). The box
+   is fixed-height and the SVG stretches: a chart that reflows on every 5s poll is
+   harder to read than one that holds still. */
+.poschart {
+  inline-size: 100%;
+  block-size: 210px;
+  display: block;
+  color: var(--ink-muted);
+  overflow: visible;
+}
+
+.poschart__axis {
+  font-size: 9px;
+  fill: currentColor;
+  opacity: .75;
+}
+
+.poschart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem .9rem;
+  font-size: .72rem;
+  color: var(--ink-muted);
+  margin-block-start: .3rem;
+}
+
+.poschart__key { display: inline-flex; align-items: center; gap: .3rem; }
+.poschart__key i {
+  inline-size: .6rem;
+  block-size: .18rem;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.ltable {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+}
+.ltable th {
+  text-align: start;
+  font-weight: 600;
+  color: var(--ink-muted);
+  font-size: .72rem;
+  padding: .3rem .5rem;
+  border-block-end: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ltable td {
+  padding: .38rem .5rem;
+  border-block-end: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ltable tr:last-child td { border-block-end: 0; }
+
+.num--up { color: var(--ok, #15803d); }
+.num--down { color: var(--bad, #b91c1c); }
+
+.pill--on { background: var(--ok, #15803d); color: #fff; }
