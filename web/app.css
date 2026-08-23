@@ -703,27 +703,290 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 /* A qualifier riding alongside a headline figure — the sample behind a win rate. */
 .stat__sub { color: var(--ink-muted); font-size: 0.75rem; }
 
-/* ---------------------------------------------------------- live positions */
+/* Shown only when app.js failed to arrive whole — see the boot check in index.html. */
+#bootFail {
+  margin: 2rem auto;
+  max-inline-size: 34rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--hairline);
+  border-radius: .5rem;
+  background: var(--raised);
+  color: var(--ink);
+  font: 500 .9rem/1.5 system-ui, sans-serif;
+}
+#bootFail p { color: var(--ink-muted); font-weight: 400; margin: .5rem 0 .8rem; }
+#bootFail button { padding: .4rem .9rem; cursor: pointer; }
 
-.brand__venue { font-size: .72rem; color: var(--ink-muted); }
+/* ==========================================================================
+   Live positions — trading-terminal treatment
+   ==========================================================================
+   Design system: "Modern Dark" (fintech/trading dashboards), density 9,
+   subtle motion only. Two deliberate deviations from the generated system:
 
-.footer-note--live {
-  color: var(--warn, #b45309);
+   * No Google Fonts link for Fira Code / Fira Sans. This app self-hosts its
+     faces on purpose and Google Fonts is routinely unreachable from Iran, so a
+     linked face would fall back silently and inconsistently. The typographic
+     intent — mono for data, humanist sans for prose — is kept with Vazirmatn
+     plus a system mono stack.
+   * Light mode is not dropped. The system calls dark primary and this palette
+     is built dark-first, but the app already ships three theme states and the
+     operator did not ask to lose one.
+
+   This is a panel that is scanned, not read: the summary reads before the
+   detail, state is carried by shape as well as number, and semantic up/down is
+   kept separate from the accent hue so profit never competes with chrome.     */
+
+:root {
+  --t-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+            "Liberation Mono", monospace;
+
+  /* Dashboard density scale (8–32px), tighter than the document scale above. */
+  --d-1: .25rem;
+  --d-2: .5rem;
+  --d-3: .75rem;
+  --d-4: 1rem;
+  --d-6: 1.5rem;
+  --d-8: 2rem;
+
+  /* Semantic P&L, independent of --accent so a green number never reads as a
+     link and the accent can change without touching profit and loss. */
+  --pnl-up:      #0f7a3d;
+  --pnl-down:    #c0392b;
+  --pnl-up-bg:   rgba(15, 122, 61, .09);
+  --pnl-down-bg: rgba(192, 57, 43, .09);
+  --panel:       var(--raised);
+  --panel-edge:  var(--hairline);
+  --tape:        rgba(11, 11, 11, .035);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pnl-up:      #35d07f;
+    --pnl-down:    #ff6b6b;
+    --pnl-up-bg:   rgba(53, 208, 127, .12);
+    --pnl-down-bg: rgba(255, 107, 107, .12);
+    --panel:       #141821;
+    --panel-edge:  #232a36;
+    --tape:        rgba(255, 255, 255, .028);
+  }
+}
+
+:root[data-theme="dark"] {
+  --pnl-up:      #35d07f;
+  --pnl-down:    #ff6b6b;
+  --pnl-up-bg:   rgba(53, 208, 127, .12);
+  --pnl-down-bg: rgba(255, 107, 107, .12);
+  --panel:       #141821;
+  --panel-edge:  #232a36;
+  --tape:        rgba(255, 255, 255, .028);
+}
+
+/* -- header ticker --------------------------------------------------------- */
+
+.brand__venue {
+  font-size: .7rem;
+  color: var(--ink-muted);
+  letter-spacing: .02em;
+}
+
+.btcprice {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  padding-inline: var(--d-3);
+  border-inline-start: 1px solid var(--hairline);
+}
+
+.btcprice__k {
+  font-size: .6rem;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
   font-weight: 600;
 }
+
+.btcprice__v {
+  font-family: var(--t-mono);
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-inline-size: 6ch;
+  color: var(--ink);
+}
+
+/* -- section headings ------------------------------------------------------ */
 
 .sect {
-  font-size: .8rem;
-  font-weight: 600;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
   color: var(--ink-muted);
-  margin: 1.1rem 0 .45rem;
+  margin: var(--d-6) 0 var(--d-2);
+  display: flex;
+  align-items: center;
+  gap: var(--d-3);
 }
 
-.poschart__wrap { margin-block-end: .5rem; }
+.sect::after {
+  content: "";
+  flex: 1;
+  block-size: 1px;
+  background: var(--hairline);
+}
 
-/* Percent-from-entry, so every coin shares one axis — see positionChart(). The box
-   is fixed-height and the SVG stretches: a chart that reflows on every 5s poll is
-   harder to read than one that holds still. */
+/* -- KPI tiles ------------------------------------------------------------- */
+/* Summary before detail: these are the four numbers that answer "where do I
+   stand" without reading a single row. */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1px;
+  background: var(--panel-edge);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-block-end: var(--d-3);
+}
+
+.stat {
+  background: var(--panel);
+  padding: var(--d-3) var(--d-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--d-1);
+}
+
+.stat__k {
+  font-size: .66rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.stat .num,
+.stat__v {
+  font-family: var(--t-mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats--hist { margin-block-end: var(--d-3); }
+
+/* -- state pill ------------------------------------------------------------ */
+/* Shape as well as colour: a dot plus a word, so "armed" survives greyscale. */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: .18rem .5rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  color: var(--ink-2);
+  inline-size: fit-content;
+}
+
+.pill::before {
+  content: "";
+  inline-size: .45rem;
+  block-size: .45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pill--on {
+  color: var(--pnl-up);
+  border-color: color-mix(in srgb, var(--pnl-up) 45%, transparent);
+  background: var(--pnl-up-bg);
+}
+
+/* -- data tables ----------------------------------------------------------- */
+
+.ltable {
+  inline-size: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: .78rem;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ltable th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  text-align: start;
+  font-size: .64rem;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background: var(--panel);
+  padding: var(--d-2) var(--d-3);
+  border-block-end: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+.ltable td {
+  padding: var(--d-2) var(--d-3);
+  border-block-end: 1px solid var(--panel-edge);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Every figure is monospaced so columns align on the decimal and a changing
+   price does not reflow the row beside it. */
+.ltable td.num,
+.ltable td[dir="ltr"] { font-family: var(--t-mono); }
+
+.ltable tbody tr { transition: background 160ms ease; }
+.ltable tbody tr:hover { background: var(--tape); }
+.ltable tbody tr:last-child td { border-block-end: 0; }
+
+/* -- P&L ------------------------------------------------------------------- */
+/* The sign already carries the meaning; colour reinforces it and never
+   replaces it, so this stays legible in greyscale and to a red-green viewer. */
+
+.num--up   { color: var(--pnl-up); font-weight: 600; }
+.num--down { color: var(--pnl-down); font-weight: 600; }
+
+/* -- side marker ----------------------------------------------------------- */
+
+.side {
+  font-size: .64rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.side--long  { color: var(--pnl-up); }
+.side--short { color: var(--pnl-down); }
+
+/* -- stop / target pair ---------------------------------------------------- */
+
+.sltp { font-family: var(--t-mono); }
+.sltp__sl  { color: var(--pnl-down); }
+.sltp__tp  { color: var(--pnl-up); }
+.sltp__sep { color: var(--ink-muted); opacity: .55; }
+
+/* -- chart ----------------------------------------------------------------- */
+
+.poschart__wrap {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  padding: var(--d-3);
+}
+
 .poschart {
   inline-size: 100%;
   block-size: 210px;
@@ -733,92 +996,44 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 }
 
 .poschart__axis {
+  font-family: var(--t-mono);
   font-size: 9px;
   fill: currentColor;
-  opacity: .75;
+  opacity: .7;
 }
 
 .poschart__legend {
   display: flex;
   flex-wrap: wrap;
-  gap: .35rem .9rem;
-  font-size: .72rem;
-  color: var(--ink-muted);
-  margin-block-start: .3rem;
+  gap: var(--d-2) var(--d-4);
+  font-size: .7rem;
+  color: var(--ink-2);
+  margin-block-start: var(--d-2);
+  padding-block-start: var(--d-2);
+  border-block-start: 1px solid var(--panel-edge);
 }
 
-.poschart__key { display: inline-flex; align-items: center; gap: .3rem; }
+.poschart__key { display: inline-flex; align-items: center; gap: .35rem; }
 .poschart__key i {
-  inline-size: .6rem;
-  block-size: .18rem;
+  inline-size: .7rem;
+  block-size: .2rem;
   border-radius: 1px;
   display: inline-block;
 }
 
-.ltable {
-  inline-size: 100%;
-  border-collapse: collapse;
-  font-size: .8rem;
-}
-.ltable th {
-  text-align: start;
-  font-weight: 600;
-  color: var(--ink-muted);
-  font-size: .72rem;
-  padding: .3rem .5rem;
-  border-block-end: 1px solid var(--line);
-  white-space: nowrap;
-}
-.ltable td {
-  padding: .38rem .5rem;
-  border-block-end: 1px solid var(--line);
-  white-space: nowrap;
-}
-.ltable tr:last-child td { border-block-end: 0; }
+/* -- accessibility --------------------------------------------------------- */
 
-.num--up { color: var(--ok, #15803d); }
-.num--down { color: var(--bad, #b91c1c); }
-
-.pill--on { background: var(--ok, #15803d); color: #fff; }
-
-/* BTCUSDT reference price in the header. Fixed-width digits so a changing price
-   does not shuffle the controls beside it on every poll. */
-.btcprice {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.15;
-}
-.btcprice__k {
-  font-size: .62rem;
-  letter-spacing: .04em;
-  color: var(--ink-muted);
-}
-.btcprice__v {
-  font-size: .95rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  min-inline-size: 5.5rem;
+.ltable tbody tr:focus-visible,
+.pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.stats--hist { margin-block-end: .5rem; }
-.ltable td.num, .ltable td { font-variant-numeric: tabular-nums; }
-
-/* SL and TP share a cell: red floor, green ceiling, so the pair reads at a glance
-   without a legend. */
-.sltp__sl { color: var(--bad, #b91c1c); }
-.sltp__tp { color: var(--ok, #15803d); }
-.sltp__sep { color: var(--ink-muted); opacity: .6; }
-
-/* Shown only when app.js failed to arrive whole — see the boot check in index.html. */
-#bootFail {
-  margin: 2rem auto;
-  max-inline-size: 34rem;
-  padding: 1rem 1.2rem;
-  border: 1px solid var(--line, #d4d4d8);
-  border-radius: .5rem;
-  background: var(--surface, #fff);
-  color: var(--ink, #18181b);
-  font: 500 .9rem/1.5 system-ui, sans-serif;
+@media (prefers-reduced-motion: reduce) {
+  .ltable tbody tr { transition: none; }
 }
-#bootFail p { color: var(--ink-muted, #71717a); font-weight: 400; margin: .5rem 0 .8rem; }
-#bootFail button { padding: .4rem .9rem; cursor: pointer; }
+
+@media (max-width: 640px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .btcprice { border-inline-start: 0; padding-inline: 0; }
+}
