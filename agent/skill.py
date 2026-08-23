@@ -247,10 +247,19 @@ def side_from_direction(snap: dict) -> tuple[str, dict]:
     if longs is None or shorts is None:
         return "long", {"side": "long", "tied": True, "reason": "no direction score"}
     margin = longs - shorts
-    if margin > DIRECTION_MARGIN:
+    # DIRECTION_MARGIN was calibrated against integer votes out of 9 raw checks.
+    # Scoring now groups duplicated checks into families and votes fractionally, so
+    # the same absolute margin is a much larger share of a smaller total: measured on
+    # live data, a typical 4.00-3.00 split is a margin of exactly 1.00, which under an
+    # unscaled ">1" test reads as TIED and blocks the trade. Left unscaled this change
+    # would have silently stopped almost all signal generation - the same shape of
+    # failure as setting `capital` to the real balance did.
+    span = ds.get("auto_checks")
+    need = DIRECTION_MARGIN * (span / 9.0) if span else DIRECTION_MARGIN
+    if margin > need:
         return "long", {"side": "long", "tied": False,
                          "long_score": longs, "short_score": shorts}
-    if margin < -DIRECTION_MARGIN:
+    if margin < -need:
         return "short", {"side": "short", "tied": False,
                          "long_score": longs, "short_score": shorts}
     side = "long" if longs >= shorts else "short"

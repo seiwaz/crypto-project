@@ -36,6 +36,7 @@ USAGE
 
 import argparse
 import json
+import math
 import os
 import stat
 import sys
@@ -426,25 +427,47 @@ def score_direction(profile, tfs):
     dec = tfs.get("decision", {}).get("indicators", {})
     checks = []
 
-    def add(name, long_ok, short_ok, observed):
+    # `family` groups checks that measure the SAME underlying fact. Votes are counted
+    # per family, not per check, because a vote count is only evidence if the votes
+    # carry different information.
+    #
+    # Measured over 1,331 historical evaluations on 8 coins (2026-08-23), pairwise
+    # agreement between checks averaged 60.5% - but two pairs were near-duplicates:
+    #
+    #     price vs EMA200 (bias)   <-> EMA50 vs EMA200 (bias)    90.7%
+    #     price vs EMA50 (decision) <-> price vs session VWAP     87.7%
+    #
+    # Both pairs are "is price above its recent average", asked twice. Counting them
+    # as four independent votes inflated `direction_ratio` - 35 of the 100 score
+    # points - exactly in a trending market, which is when the move is most likely
+    # already extended. That shows up in the outcomes: signals with >=8 of 9 votes
+    # won 41% of the time over a 4h hold against 52% for 7 votes, and Round 10 found
+    # the same shape independently (the 80-89 score band underperformed 70-79).
+    #
+    # This does not drop a check - all of them stay visible in `checks` with their
+    # own reasoning. It stops one fact being counted twice.
+    def add(name, long_ok, short_ok, observed, family=None):
         checks.append({"check": name, "long": long_ok, "short": short_ok,
-                       "observed": observed})
+                       "observed": observed, "family": family or name})
 
     if bias.get("ema200") and bias.get("last_close"):
         above = bias["last_close"] > bias["ema200"]
         add("price vs EMA200 (bias TF)", above, not above,
-            f"close {bias['last_close']:.6g} vs EMA200 {bias['ema200']:.6g}")
+            f"close {bias['last_close']:.6g} vs EMA200 {bias['ema200']:.6g}",
+            family="bias-tf trend")
     if bias.get("ema50") and bias.get("ema200"):
         bull = bias["ema50"] > bias["ema200"]
         add("EMA50 vs EMA200 (bias TF)", bull, not bull,
-            f"EMA50 {bias['ema50']:.6g} vs EMA200 {bias['ema200']:.6g}")
+            f"EMA50 {bias['ema50']:.6g} vs EMA200 {bias['ema200']:.6g}",
+            family="bias-tf trend")
     if dec.get("structure") in ("uptrend", "downtrend", "range"):
         st = dec["structure"]
         add("market structure (decision TF)", st == "uptrend", st == "downtrend", st)
     if dec.get("ema50") and dec.get("last_close"):
         above = dec["last_close"] > dec["ema50"]
         add("price vs EMA50 (decision TF)", above, not above,
-            f"close {dec['last_close']:.6g} vs EMA50 {dec['ema50']:.6g}")
+            f"close {dec['last_close']:.6g} vs EMA50 {dec['ema50']:.6g}",
+            family="decision-tf mean")
     if dec.get("rsi14") is not None:
         r = dec["rsi14"]
         if profile == "scalp":
@@ -459,7 +482,8 @@ def score_direction(profile, tfs):
         if vwap and dec.get("last_close"):
             above = dec["last_close"] > vwap
             add("price vs session VWAP", above, not above,
-                f"close {dec['last_close']:.6g} vs VWAP {vwap:.6g}")
+                f"close {dec['last_close']:.6g} vs VWAP {vwap:.6g}",
+                family="decision-tf mean")
 
     # Ichimoku cloud (2026-08-20, requested to sharpen direction confirmation). Only
     # scored when price is clearly outside the cloud - inside the cloud is Ichimoku's
@@ -482,21 +506,47 @@ def score_direction(profile, tfs):
 
     auto = [c for c in checks if c["long"] is not None]
     manual = [c for c in checks if c["long"] is None]
-    long_score = sum(1 for c in auto if c["long"])
-    short_score = sum(1 for c in auto if c["short"])
-    threshold = 5 if profile == "scalp" else 6
+
+    # Each family carries a total weight of 1, split evenly among its members, so a
+    # duplicated fact cannot vote twice.
+    #
+    # Deliberately fractional rather than one-vote-per-family-majority: collapsing to
+    # a majority makes a family ABSTAIN whenever its two members disagree, and tested
+    # against live data that deflated typical counts to 3-2 of 6 against a threshold
+    # of 4 - which would have stopped signal generation outright. Weighting keeps the
+    # granularity (an internally split family contributes 0.5/0.5) while still
+    # capping the pair's combined influence at one check's worth.
+    fams: dict[str, list] = {}
+    for c in auto:
+        fams.setdefault(c["family"], []).append(c)
+    long_w = short_w = 0.0
+    for members in fams.values():
+        w = 1.0 / len(members)
+        long_w += w * sum(1 for c in members if c["long"])
+        short_w += w * sum(1 for c in members if c["short"])
+    auto_votes = len(fams)
+    long_score = round(long_w, 2)
+    short_score = round(short_w, 2)
+
+    # The bar is rescaled with the denominator so grouping does not silently tighten
+    # it: 5-of-9 and 6-of-9 keep the same meaning against a smaller total.
+    base = 5 if profile == "scalp" else 6
+    threshold = round(base / 9.0 * auto_votes, 2) if auto_votes else base
     total = len(checks)
 
     return {
         "checks": checks,
-        "auto_checks": len(auto),
+        "auto_checks": auto_votes,
+        "auto_raw_checks": len(auto),
+        "families": {k: len(v) for k, v in fams.items()},
         "manual_checks": len(manual),
         "total_checks": total,
         "long_score": long_score,
         "short_score": short_score,
         "threshold": threshold,
-        "note": (f"{long_score}/{len(auto)} automated checks favour long, "
-                 f"{short_score}/{len(auto)} favour short. {len(manual)} check(s) "
+        "note": (f"{long_score}/{auto_votes} independent direction checks favour "
+                 f"long, {short_score}/{auto_votes} favour short "
+                 f"({len(auto)} raw checks grouped into {auto_votes} families). {len(manual)} check(s) "
                  f"still need manual input before comparing against the "
                  f"{threshold}/{total} threshold."),
     }

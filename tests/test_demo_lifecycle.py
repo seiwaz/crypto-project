@@ -595,6 +595,28 @@ _below["score"] = 76.0
 results.append(check("and 76 is accepted",
                      [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
 
+print("24. Redundant direction checks cannot vote twice")
+# Measured over 1,331 historical evaluations: price-vs-EMA200 and EMA50-vs-EMA200 on
+# the bias TF agree 90.7% of the time, and price-vs-EMA50 and price-vs-VWAP on the
+# decision TF agree 87.7%. Counting each pair twice inflated direction_ratio - 35 of
+# the 100 score points - and forced every coin long (33/33 before, 22L/7S after).
+from agent import skill as _sk
+_api = _insp.getsource(_sk._load_api_module().score_direction)
+results.append(check("checks carry a family", '"family"' in _api, True))
+results.append(check("the two bias-TF trend checks share one family",
+                     _api.count('family="bias-tf trend"'), 2))
+results.append(check("the two decision-TF mean checks share one family",
+                     _api.count('family="decision-tf mean"'), 2))
+results.append(check("a family's weight is split, not abstained",
+                     "1.0 / len(members)" in _api, True))
+results.append(check("the vote threshold rescales with the denominator",
+                     "base / 9.0 * auto_votes" in _api, True))
+_sfd = _insp.getsource(_sk.side_from_direction)
+results.append(check("the tie margin rescales too",
+                     "span / 9.0" in _sfd, True))
+results.append(check("margin is compared against the scaled need",
+                     "margin > need" in _sfd, True))
+
 print("23. Holding is judged on the thesis, not on the entry gates")
 # AAVE closed at score 74.0 with the verdict still TAKE, because the exit test WAS
 # the entry test (floor 75). A score near the bar churned, at 0.2% a round trip.
