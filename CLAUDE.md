@@ -551,6 +551,79 @@ Both of the first two closes were signal-exited before price moved enough to cov
 so the fee *was* the entire result. The live record now reconciles to the account to
 the cent (DB −0.050143 vs account −0.050144).
 
+## 2026-08-23 — why the account was losing, and what changed (Rounds 15-17)
+
+The account was down 0.544 USDT on 23 closed trades (−10%). Root-caused with the
+live record and two replays, not from reports. **Read `docs/RESEARCH_LOG.md`
+Rounds 15-17 before changing anything here.**
+
+**The loss was an exit asymmetry, not the signals and not the ATR.**
+Six `exchange_exit`s (the venue stop firing) were **89% of all loss**, at a median
+hold of **548 minutes** on a 5-20 minute strategy. `_manage_one` re-checked a
+*winner* every cycle and closed it once the setup lapsed; a *loser* was checked
+against nothing (`_profit_signal_check` ran only in the in-profit branch, and the
+time stop is guarded by `0 <= upnl`). Winners banked **+0.11R**, losers realised
+**−1.0R** — about 1:9 against us. Fixed with `adverse_exit`.
+
+**Tested and REJECTED, so it is not retried:** tightening the ATR timeframe. The
+intuitive fix makes it worse — 1.5×ATR15m gives a 0.788% stop and 0.254R of cost,
+1.5×ATR5m gives 0.403%/0.496R, 1.0×ATR5m gives 0.269%/0.744R, needing a 75-87%
+win rate at 1:1. The scalp profile's 15m ATR choice is correct.
+
+**Holding is now judged on the thesis, not the entry gates.** The exit test *was*
+the entry test, so a position closed the moment it wouldn't be worth opening
+again — AAVE left at 76.9→74.0 with the verdict still TAKE. Worse, `verdict` goes
+SKIP on cost/spread/liquidity, which are questions about *opening*. A held
+position now closes only on a direction flip or conviction below a hold floor
+(`exit_score_margin`, default 10 points under the entry bar). Without this a
+multi-hour hold is impossible.
+
+**Signal scoring double-counted.** Measured pairwise agreement between the 9
+direction checks: `price vs EMA200 (bias)` ↔ `EMA50 vs EMA200 (bias)` **90.7%**,
+`price vs EMA50 (decision)` ↔ `price vs VWAP` **87.7%**. Checks now carry a
+`family` and share one vote's weight via `skill.weigh_votes()`.
+**Three calibration traps, all caught before they did damage** — worth knowing
+because each would have silently stopped trading:
+  1. Collapsing a family to its *majority* makes it abstain on internal
+     disagreement; typical counts fell to 3-2 of 6 against a threshold of 4.
+     Fractional weighting instead.
+  2. `DIRECTION_MARGIN` was calibrated for integers out of 9; a weighted
+     4.00-3.00 split is a margin of exactly 1.00, read as TIED. Both the vote
+     threshold and the tie margin now rescale with the denominator.
+  3. **`tabdeal.build_snapshot` re-counted the votes with plain integer sums after
+     resolving the manual checks, throwing the weighting away.** Production scored
+     unchanged while the unit tests passed, because they tested `score_direction`
+     and the discarding happened one function later. Found only by reading a live
+     stored snapshot. *Any change to scoring must be verified in a live snapshot,
+     not in a test harness* — see also the 22L/7S figure below.
+
+**Hold extended to 8 hours; shorts switched off.** From a replay of **21,315
+signals** (33 coins, ~25 days, the real scoring code). Net of the 0.200% round
+trip: longs go −0.172% at 30m → +0.086% at 4h → **+0.348% at 8h** → +1.392% at
+24h, while **shorts are negative at every horizon and worsen with time** (−0.209%
+→ −0.706%, n=9,741). `time_stop_hours: 8.0`, `allow_shorts: false` (a setting, not
+a deletion — the window is one rising regime).
+
+**A smaller replay misled on two of three conclusions.** An earlier 1,331-signal
+run (8 coins) reported that ≥8-of-9 votes underperform (n=134, 41% win). At
+n=1,461 score≥8 is the *best* bucket at every horizon. It also put 4h at +0.28%
+when the large sample says −0.079%. Sample size is part of the evidence.
+
+**Corrected claim, for the record:** a "22 long / 7 short" watchlist result quoted
+during this work came from a test harness feeding **15m** decision candles; the
+scalp profile uses **5m**. Production still scores broadly long because the market
+is broadly long.
+
+**Also fixed:** entry filled only one slot per scan (`_try_open_locked` returned on
+its first fill) and the scheduler required both a fresh scan *and*
+`entry_interval_seconds`, so it skipped whole scans. That is why an XRP at 80.8
+sat unacted on with three slots free.
+
+**Still open, and bigger than any of these fixes.** The edge is close to the fee.
+At 0.1% a side the round trip is 0.2% of notional, and the filter only clears it
+at an 8h+ hold. Nothing here manufactures edge; it removes unforced losses. Judge
+the 8h long-only configuration on its own sample before adding size.
+
 ## Real-money migration — the dossier that preceded going live
 
 The user has asked for everything to be prepared so a "migrate to real trading"
