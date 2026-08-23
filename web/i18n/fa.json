@@ -22,6 +22,8 @@
   "bar.risk": "ریسک ٪",
   "bar.scanning": "در حال پویش",
   "bar.settings": "تنظیمات",
+  "card.belowBar": "زیر آستانهٔ ورود",
+  "card.belowBar.meaning": "حکم TAKE گرفته (اسکیل از ۷۰ به بالا TAKE می‌دهد)، اما موتور معاملهٔ واقعی فقط از {bar} به بالا پوزیشن باز می‌کند، پس این سیگنال معامله نخواهد شد.",
   "card.coverage": "پوشش داده",
   "card.noData": "بدون داده",
   "card.perLot": "قیمت‌ها به ازای هر {lot} {coin} است",

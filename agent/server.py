@@ -59,7 +59,29 @@ def public_settings(settings: dict) -> dict:
         "exchange_label": exchange.label(settings["exchange"]),
         "exchanges": list(exchange.SUPPORTED),
         "chart_candles": settings["chart_candles"],
+        # The live engine's entry bar. The skill's TAKE verdict means score >= 70
+        # with every gate passed, while this deployment only trades at >= 75, so
+        # there is a band where the board shows a green TAKE that will never open a
+        # position. The browser needs the number to say so.
+        "min_score": _min_score(),
+        "allow_shorts": _allow_shorts(),
     }
+
+
+def _min_score() -> float:
+    from . import demo                                       # noqa: PLC0415
+    try:
+        return float(demo.min_score())
+    except Exception:                                        # noqa: BLE001
+        return 0.0
+
+
+def _allow_shorts() -> bool:
+    from . import demo                                       # noqa: PLC0415
+    try:
+        return bool(demo.allow_shorts())
+    except Exception:                                        # noqa: BLE001
+        return True
 
 
 def _manual_checks(snapshot: dict, saved: dict, fetched_at: str | None) -> list[dict]:

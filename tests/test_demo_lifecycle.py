@@ -16,6 +16,9 @@ missing from the R-multiple.
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import demo, paper, store
+from agent import server as _srv
+from agent import config
+import json as _json
 
 store.init()
 
@@ -644,6 +647,30 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
                      False))
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
+
+print("35. The board says which TAKEs the engine will not act on")
+# The skill grades TAKE at score >= 70 with every gate passed; this deployment only
+# opens at min_score (75). ZEC scored TAKE 74.1 on scan 926 and never became a
+# position, which reads as "the signal fired and nothing happened".
+_ps = _srv.public_settings(config.load_settings())
+results.append(check("the browser is told the entry bar",
+                     _ps.get("min_score"), demo.min_score()))
+results.append(check("and whether shorts are on",
+                     _ps.get("allow_shorts"), demo.allow_shorts()))
+results.append(check("the entry bar is above the skill's TAKE grade (70)",
+                     demo.min_score() > 70.0, True))
+_js35 = open("web/app.js").read()
+results.append(check("the card flags a TAKE under the bar",
+                     "function belowEntryBar" in _js35, True))
+results.append(check("it compares the score against min_score, not a literal",
+                     "settings || {}).min_score" in _js35, True))
+results.append(check("only TAKE is flagged, not WATCH or SKIP",
+                     "card.verdict === 'TAKE'" in _js35, True))
+_en35 = _json.load(open("web/i18n/en.json"))
+_fa35 = _json.load(open("web/i18n/fa.json"))
+results.append(check("the explanation interpolates the real bar",
+                     "{bar}" in _en35["card.belowBar.meaning"], True))
+results.append(check("and is translated", "{bar}" in _fa35["card.belowBar.meaning"], True))
 
 print("34. Banking is decided on the exit-side price, not the mid")
 from agent import tabdeal_ws as _tws

@@ -1037,3 +1037,18 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   .stats { grid-template-columns: repeat(2, 1fr); }
   .btcprice { border-inline-start: 0; padding-inline: 0; }
 }
+
+/* A TAKE the engine will not act on: the skill grades TAKE at 70+, this
+   deployment opens at min_score. Muted, not alarming — the signal is real, it
+   simply does not clear this account's bar. */
+.nogate {
+  font-size: .66rem;
+  font-weight: 600;
+  letter-spacing: .03em;
+  color: var(--ink-muted);
+  border: 1px dashed var(--rule);
+  border-radius: 3px;
+  padding: .08rem .4rem;
+  white-space: nowrap;
+  align-self: center;
+}

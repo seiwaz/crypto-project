@@ -22,6 +22,8 @@
   "bar.risk": "Risk %",
   "bar.scanning": "Scanning",
   "bar.settings": "Settings",
+  "card.belowBar": "below entry bar",
+  "card.belowBar.meaning": "Scored as TAKE (the skill grades that at 70+), but the live engine only opens at {bar} or above, so this will not become a position.",
   "card.coverage": "data coverage",
   "card.noData": "no data",
   "card.perLot": "prices are per {lot} {coin}",

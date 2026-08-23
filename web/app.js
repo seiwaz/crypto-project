@@ -205,6 +205,19 @@ const VERDICT_CLASS = {
 
 /* ------------------------------------------------------------------ cards */
 
+/* A TAKE the live engine will not act on.
+ *
+ * The skill grades TAKE at score >= 70 with every gate passed. This deployment only
+ * opens at >= min_score (75), so 70-74.9 renders as a green TAKE that never becomes
+ * a position — which reads as "the signal fired and nothing happened". Say it on the
+ * card instead of leaving it to be inferred. */
+function belowEntryBar(card) {
+  const bar = Number(((state.data || {}).settings || {}).min_score);
+  const sc = Number(card.score);
+  return card.verdict === 'TAKE' && Number.isFinite(bar) && Number.isFinite(sc)
+         && sc < bar;
+}
+
 function verdictBadge(card) {
   const v = card.verdict || 'ERROR';
   const badge = el('span', { class: 'badge', attrs: { title: t(`verdict.${v}.meaning`) } }, [
@@ -272,7 +285,16 @@ function buildCard(card) {
     meta.append(el('span', { class: 'pill pill--provisional', text: `⚠ ${t('card.provisional')}` }));
   }
 
-  const head = el('summary', { class: 'card__head' }, [verdictBadge(card), idBlock, meta]);
+  const bar = Number(((state.data || {}).settings || {}).min_score);
+  const gate = belowEntryBar(card)
+    ? el('span', {
+        class: 'nogate',
+        text: t('card.belowBar', { bar: fmtNum(bar) }),
+        attrs: { title: t('card.belowBar.meaning', { bar: fmtNum(bar) }) },
+      })
+    : null;
+  const head = el('summary', { class: 'card__head' },
+                  [verdictBadge(card), idBlock, meta, gate]);
   details.append(head);
 
   /* -- body -- */
