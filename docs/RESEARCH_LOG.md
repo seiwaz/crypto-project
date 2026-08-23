@@ -843,6 +843,107 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 18 (2026-08-23) — does the geometry resolve inside a 5m-1h hold?
+
+**Question asked:** the strategy is meant for 5-minute to 1-hour trades. Are the
+indicators and gates timed for that?
+
+**Answer: the indicators and gates are internally coherent and working. The
+GEOMETRY they produce is not a 5m-1h trade, and the live record proves it.**
+
+### Measurement 1 — replay, 19,855 gated entries, 33 symbols, real 5m candles
+
+Every 5m bar taken as a hypothetical entry, with the stop the planner would
+actually set (1.5 x ATR(14) on 15m, ATR read only from bars already closed), then
+walked forward to see which level is touched first.
+
+| horizon | TP1 first | stop first | still open | med MFE | med MAE | mean net |
+|---|---|---|---|---|---|---|
+| 5m  | 0.7%  | 0.5%  | **98.9%** | +0.155% | -0.136% | -0.176% |
+| 15m | 5.1%  | 3.0%  | 91.8% | +0.301% | -0.247% | -0.132% |
+| 30m | 14.2% | 8.9%  | 77.0% | +0.457% | -0.354% | -0.071% |
+| 1h  | 28.9% | 18.3% | **52.8%** | +0.705% | -0.480% | **+0.053%** |
+| 2h  | 47.6% | 26.9% | 25.6% | +1.070% | -0.640% | +0.302% |
+
+- **At five minutes 98.9% of positions have touched nothing.** The bottom of the
+  intended range is geometrically impossible at this stop distance.
+- **At one hour 52.8% still have not resolved.** The median 1h excursion is
+  +0.705% against a TP1 sitting at 0.943%.
+- Net of the 0.2% round trip the average trade does not turn positive until 1h,
+  and only clears it meaningfully at 2h. This agrees with the 21,315-signal
+  replay in Round 17 (+0.348% at 8h).
+
+**The cost gate is the binding volatility constraint, not `atr_pct_min`.**
+Median stop 0.943%, median cost 0.212R against a 0.25R ceiling; the gate needs
+stop >= 0.80%, i.e. ATR15m >= 0.533%, well above the profile's 0.3% floor. It
+rejects **33.0%** of otherwise valid entries. That is the gate working.
+
+**Why the stop cannot simply be tightened to fit the window** (re-confirmed, do
+not retry): `cost_in_R = 2 x fee / stop_pct`. Halving the stop doubles the cost
+in R. Round 15 measured 1.0xATR5m at 0.744R of cost, needing 75-87% win rates.
+
+### Measurement 2 — the live record, 58 closed trades
+
+| exit reason | n | mean R | median R | sum R |
+|---|---|---|---|---|
+| signal_exit (removed) | 21 | +0.025 | +0.022 | +0.523 |
+| **exchange_exit** | **13** | **-0.742** | **-1.147** | **-9.644** |
+| profit_close | 11 | +0.049 | +0.062 | +0.535 |
+| adverse_exit (off) | 7 | -0.318 | -0.277 | -2.225 |
+| time_stop (removed) | 4 | -0.073 | -0.082 | -0.293 |
+| **tp1** | **1** | **+1.187** | | +1.187 |
+| ALL | 58 | -0.171 | -0.034 | -9.918 |
+
+Winners **+0.216R** mean, losers **-0.464R**, win rate 43.1%, breakeven needed
+**68.2%**.
+
+**Exactly ONE trade in 58 has ever reached TP1** — and that single trade
+(+1.187R) out-earned all eleven `profit_close`s combined (+0.535R).
+
+**This is the mismatch, stated precisely.** The plan sets a 1R target the replay
+says needs 1-2 hours to reach. The engine banks at the 1-hour mark for a
+fraction of R, while the stop keeps its full 1R. Winners are cut at a fifth of
+their planned size; losers are paid in full. The replay predicts 28.9% TP-first
+vs 18.3% stop-first at 1h — a favourable ratio — and the live record turns that
+into 1 TP against 13 stop-outs, because the engine takes the winner off the
+table before the geometry can complete.
+
+**Stop fills are fine.** Overshoot on 13 `exchange_exit`s: median **+0.082%**,
+worst +2.972% (a genuine gap, e.g. ZEC 2026-08-23 filling 842.2 against a stop at
+848.42 for -0.165 where -0.134 was planned). The stop mechanism is not the
+problem; what the stop is measured against is.
+
+### Indicator lookbacks, for the record
+
+Nothing in the stack measures a five-minute move:
+
+| input | timeframe | real lookback |
+|---|---|---|
+| EMA200 (bias) | 1H | ~8.3 days |
+| ATR(14) | 15m | 3.5 h |
+| Ichimoku 9/26/52 | 5m | 45m / 2.2h / 4.3h |
+| EMA50 (decision) | 5m | 4.2 h |
+| RSI(14) | 5m | 70 min |
+| session VWAP | 5m | since 00:00 UTC |
+
+The fastest meaningful signal is Tenkan-sen at 45 minutes. For a trade intended
+to last five minutes there is no input that can see it.
+
+### Changed this round
+
+Only one thing, and it is a correctness fix rather than a re-timing: **the plan's
+`management` block was describing rules the live engine does not follow** — bank
+50% at TP1, trail the stop, exit after 4 decision candles. Tabdeal supports
+neither `reduceOnly` nor a partial close, so TP1 is a full close and there is no
+time stop at all. `trade_plan._management()` now emits the real rules for
+Tabdeal and keeps the generic ones for other venues. Same class of drift as
+Round 12, but in program output rather than documentation.
+
+**Not changed, because it is the operator's call:** `profit_close_after_h`,
+`hold_take_score`, and whether to let a winner run to TP1 instead of banking it
+at the hour.
+
+
 ## Round 17 (2026-08-23) — the big replay corrects Round 16, and kills shorts
 
 **What was run.** `/tmp/replay2.py`: the real `skill.score_direction` over ~25 days

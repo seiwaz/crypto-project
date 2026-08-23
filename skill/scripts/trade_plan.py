@@ -280,6 +280,48 @@ def find_swings(highs, lows, left=2, right=2):
     return sw_highs, sw_lows
 
 
+def _management(prof, ex, args):
+    """How the position is actually managed once it is open.
+
+    Two sets of rules exist and only one of them runs. The generic ones below —
+    a 50% partial at TP1, a stop moved up behind it, a time stop after N decision
+    candles — describe a venue that supports a partial close. **Tabdeal does not.**
+    It has no `reduceOnly` and no partial close, so a half-exit would have to be an
+    opposing MARKET order that can FLIP the position rather than trim it, and the
+    live engine therefore closes TP1 outright and carries no time stop at all.
+
+    Emitting the generic rules on a Tabdeal plan is not a documentation nicety: the
+    plan is what a human reads before entering, and it was telling them to bank half
+    at TP1 and bail after four candles when the engine does neither. This project has
+    already had SKILL.md drift the same way (Round 12). Keep this in step with
+    `agent/live.py`.
+    """
+    if (args.exchange or "").lower() == "tabdeal":
+        return {
+            "on_tp1": "FULL close at TP1 — the exchange holds it as a take-profit on "
+                      "the position itself. Tabdeal supports neither reduceOnly nor a "
+                      "partial close, so there is no TP2 and no runner.",
+            "stop": "Held by the exchange on the position, so it survives the engine "
+                    "process dying. Never moved by the engine.",
+            "engine_exit": "ONE exit only: held >= 1h AND profitable at the EXIT-SIDE "
+                           "price by more than 1.5x the round trip AND the scan no "
+                           "longer calls it TAKE at >= 70. A position in loss is never "
+                           "touched at any hold.",
+            "time_stop": "None. A time stop fired on positions in profit but below "
+                         "the round trip, which books a certain loss.",
+            "review_cadence": f"Re-scored every scan ({prof['decision_tf']} decision "
+                              f"candles); the engine re-reads the verdict every cycle.",
+        }
+    return {
+        "on_tp1": "Close 50%, move stop to breakeven + accumulated cost",
+        "trail": f"Behind new swing points on the {prof['decision_tf']} chart",
+        "time_stop": f"Exit after ~{prof['time_stop_candles']} {prof['decision_tf']} "
+                     f"candles if price has not reached 0.5R",
+        "review_cadence": f"Re-evaluate before every {ex['funding_period_hours']}h "
+                          f"renewal/funding charge",
+    }
+
+
 def session_vwap(rows):
     """VWAP for the most recent UTC day present in the data.
 
@@ -858,14 +900,7 @@ def cmd_plan(args):
             "expectancy_gross_R": round(e_gross, 3),
             "expectancy_net_R": round(e_net, 3),
         },
-        "management": {
-            "on_tp1": "Close 50%, move stop to breakeven + accumulated cost",
-            "trail": f"Behind new swing points on the {prof['decision_tf']} chart",
-            "time_stop": f"Exit after ~{prof['time_stop_candles']} {prof['decision_tf']} "
-                         f"candles if price has not reached 0.5R",
-            "review_cadence": f"Re-evaluate before every {ex['funding_period_hours']}h "
-                              f"renewal/funding charge",
-        },
+        "management": _management(prof, ex, args),
         "data_source": ({"snapshot": args.snapshot,
                          "fetched_at": snapshot.get("fetched_at"),
                          "fields_used": snapshot_used,

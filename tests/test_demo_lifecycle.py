@@ -1298,6 +1298,31 @@ _send_src = _insp.getsource(_tbk.TabdealBroker._send)
 results.append(check("writes still never retry",
                      "1101" not in _send_src and "for attempt" not in _send_src, True))
 
+print("36. A Tabdeal plan states the rules that actually run")
+# The plan's management block told the reader to bank 50% at TP1, trail the stop, and
+# bail after 4 decision candles. The live engine does NONE of that: Tabdeal supports
+# neither reduceOnly nor a partial close, so TP1 is a full close, and there is no time
+# stop at all. The plan is what a human reads before entering.
+import argparse as _ap
+_tp_mod = __import__("skill.scripts.trade_plan", fromlist=["x"]) if False else None
+import importlib.util as _ilu, pathlib as _pl
+_spec = _ilu.spec_from_file_location(
+    "tp_plan", _pl.Path(__file__).resolve().parents[1] / "skill/scripts/trade_plan.py")
+_tp = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_tp)
+
+_prof, _ex = _tp.PROFILES["scalp"], _tp.EXCHANGES["tabdeal"]
+_m = _tp._management(_prof, _ex, _ap.Namespace(exchange="tabdeal"))
+results.append(check("TP1 is a full close, not a partial", "FULL close" in _m["on_tp1"], True))
+results.append(check("and says why there is no runner", "reduceOnly" in _m["on_tp1"], True))
+results.append(check("no time stop is claimed", _m["time_stop"].startswith("None"), True))
+results.append(check("the one real exit is stated", "1.5x the round trip" in _m["engine_exit"], True))
+results.append(check("a loser being untouched is stated", "never" in _m["engine_exit"], True))
+results.append(check("the exchange owns the stop", "survives" in _m["stop"], True))
+
+# Other venues keep the generic rules — this is a Tabdeal fact, not a global one.
+_g = _tp._management(_prof, _tp.EXCHANGES["toobit"], _ap.Namespace(exchange="toobit"))
+results.append(check("another venue keeps the generic rules", "Close 50%" in _g["on_tp1"], True))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
