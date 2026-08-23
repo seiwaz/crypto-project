@@ -644,6 +644,84 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
 
+print("32. A short is the exact mirror of a long, not a special case")
+# Shorts were switched off after the 21,315-signal replay; switching them back on is
+# only safe if every side-dependent calculation mirrors cleanly. This project has
+# already shipped one real long-bias bug (side_from_direction defaulting to long,
+# which produced 213 consecutive long trades), so this is asserted, not assumed.
+#
+# Method: take a long scenario, reflect every price around the entry, and require the
+# short to produce the same magnitudes.
+_E = 100.0
+_long_lv = {"entry": _E, "stop": 98.0, "tp1": 103.0, "tp2": 106.0}
+_short_lv = {"entry": _E, "stop": 102.0, "tp1": 97.0, "tp2": 94.0}
+results.append(check("long geometry accepted", demo.valid_geometry("long", _long_lv), True))
+results.append(check("mirrored short geometry accepted",
+                     demo.valid_geometry("short", _short_lv), True))
+results.append(check("a long-shaped plan is rejected for a short",
+                     demo.valid_geometry("short", _long_lv), False))
+results.append(check("a short-shaped plan is rejected for a long",
+                     demo.valid_geometry("long", _short_lv), False))
+
+# TP reached: same distance, opposite direction
+results.append(check("long reaches tp1 at +3", _live._reached("long", 103.0, 103.0), True))
+results.append(check("short reaches tp1 at -3", _live._reached("short", 97.0, 97.0), True))
+results.append(check("long has not reached tp1 at -3",
+                     _live._reached("long", 97.0, 103.0), False))
+results.append(check("short has not reached tp1 at +3",
+                     _live._reached("short", 103.0, 97.0), False))
+
+# Entry drift is signed AGAINST the position on both sides
+_pl = {"plan": {"levels": {"entry": _E}}, "stop": 98.0, "entry": 101.0}   # long filled worse
+_ps = {"plan": {"levels": {"entry": _E}}, "stop": 102.0, "entry": 99.0}   # short filled worse
+_dl = demo._entry_drift_r({"side": "long"}, _pl)
+_ds = demo._entry_drift_r({"side": "short"}, _ps)
+results.append(check("a long filled 1.0 above plan drifts +0.5R", round(_dl, 6), 0.5))
+results.append(check("a short filled 1.0 below plan drifts the same +0.5R",
+                     round(_ds, 6), 0.5))
+_plb = {"plan": {"levels": {"entry": _E}}, "stop": 98.0, "entry": 99.0}   # long filled better
+_psb = {"plan": {"levels": {"entry": _E}}, "stop": 102.0, "entry": 101.0}  # short filled better
+results.append(check("a better long fill is negative drift, never blocked",
+                     round(demo._entry_drift_r({"side": "long"}, _plb), 6), -0.5))
+results.append(check("a better short fill mirrors it",
+                     round(demo._entry_drift_r({"side": "short"}, _psb), 6), -0.5))
+
+# P&L arithmetic: a short that moves in its favour earns what the long earns
+_cfg32 = _live.settings()
+_savedmp = _tab.mark_price
+try:
+    _tab.mark_price = lambda sym: 102.0          # +2 from entry
+    _pnl_long = _live._live_pnl(
+        [{"symbol": "M_USDT", "positionAmt": "10", "entryPrice": "100"}], _cfg32)[0]
+    _tab.mark_price = lambda sym: 98.0           # -2 from entry, the mirror
+    _pnl_short = _live._live_pnl(
+        [{"symbol": "M_USDT", "positionAmt": "-10", "entryPrice": "100"}], _cfg32)[0]
+finally:
+    _tab.mark_price = _savedmp
+results.append(check("long +2 gives +20 gross", round(_pnl_long["gross"], 6), 20.0))
+results.append(check("short -2 gives the same +20 gross",
+                     round(_pnl_short["gross"], 6), 20.0))
+results.append(check("long pct is +2%", round(_pnl_long["pct"], 4), 2.0))
+results.append(check("short pct is also +2% (in its own favour)",
+                     round(_pnl_short["pct"], 4), 2.0))
+results.append(check("both pay a cost on the same notional basis",
+                     round(_pnl_long["cost"], 6) > 0 and round(_pnl_short["cost"], 6) > 0,
+                     True))
+
+# the side gate itself
+_savedres = _live.store.result_for
+try:
+    _live.store.result_for = lambda c, e: {"verdict": "TAKE", "score": 80.0,
+                                           "side": "short", "side_tied": 0}
+    results.append(check("a green short holds a short position",
+                         _live._signal_supports_holding({"coin": "Z", "side": "short"},
+                                                        _cfg32)[0], True))
+    results.append(check("a green short does NOT hold a long position",
+                         _live._signal_supports_holding({"coin": "Z", "side": "long"},
+                                                        _cfg32)[0], False))
+finally:
+    _live.store.result_for = _savedres
+
 print("31. A profitable position past its hour is KEPT while the signal is green")
 # Rule: >=1h AND net profitable -> hold if the scan still says TAKE at >= 70 on our
 # side, close otherwise. Letting a live signal run is what produced the only
@@ -814,8 +892,7 @@ results.append(check("qualifying_signals consults the setting",
                      "allow_shorts()" in _qs, True))
 results.append(check("only shorts are gated by it",
                      'row.get("side") == "short"' in _qs, True))
-results.append(check("shorts are allowed by default",
-                     demo.allow_shorts(), True))
+results.append(check("shorts are allowed", demo.allow_shorts(), True))
 
 print("24. Redundant direction checks cannot vote twice")
 # Measured over 1,331 historical evaluations: price-vs-EMA200 and EMA50-vs-EMA200 on
