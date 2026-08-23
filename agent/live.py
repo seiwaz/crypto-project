@@ -118,7 +118,45 @@ def _broker() -> tabdeal_broker.TabdealBroker:
     return tabdeal_broker.TabdealBroker(dry_run=settings()["dry_run"])
 
 
-def account_equity(broker) -> float | None:
+# One venue read, shared by the engine and the dashboard.
+#
+# /api/live used to make SIX signed REST calls per request — balance, positions,
+# account_equity (another balance), total_notional (another positions), and
+# notional_cap TWICE (another balance each). At ~600ms a signed round trip that is a
+# 3.8s response, so a "3 second" board actually refreshed every 4-5s: the poll timer
+# is 3s but a request already in flight is skipped. The refresh rate was a claim, not
+# a measurement.
+#
+# The engine already reads both every cycle, so the dashboard can ride on that. Marks
+# are NOT cached here — they come from the websocket per request, so the P/L column
+# stays as live as the socket while the slow account reads happen once.
+_venue_cache: dict = {"ts": 0.0, "bal": None, "positions": None}
+
+# How stale the account snapshot may be before the dashboard reads it itself. Wider
+# than the 3s cycle so an ordinary slow cycle does not force a duplicate read, tight
+# enough that a stopped engine is noticed rather than served indefinitely.
+VENUE_CACHE_MAX_AGE_S = 12.0
+
+
+def _cache_venue(*, bal=None, positions=None) -> None:
+    if bal is not None:
+        _venue_cache["bal"] = bal
+    if positions is not None:
+        _venue_cache["positions"] = positions
+    _venue_cache["ts"] = time.time()
+
+
+def venue_snapshot(broker, max_age: float = VENUE_CACHE_MAX_AGE_S):
+    """(balance, positions) — from the engine's last read when it is recent enough."""
+    fresh = (time.time() - _venue_cache["ts"]) < max_age
+    if fresh and _venue_cache["bal"] is not None and _venue_cache["positions"] is not None:
+        return _venue_cache["bal"], _venue_cache["positions"]
+    bal, positions = broker.balance(), broker.positions()
+    _cache_venue(bal=bal, positions=positions)
+    return bal, positions
+
+
+def account_equity(broker, bal=None) -> float | None:
     """Live equity from the venue, read fresh. None if it cannot be read.
 
     Unrealised losses count against it, unrealised gains do not. Sizing off paper
@@ -126,7 +164,7 @@ def account_equity(broker) -> float | None:
     one next to it, which is how a drawdown compounds under cross margin.
     """
     try:
-        row = (broker.balance() or [{}])[0]
+        row = ((bal if bal is not None else broker.balance()) or [{}])[0]
         wallet = float(row.get("walletBalance") or 0)
         unreal = float(row.get("crossUnPnl") or 0)
         return wallet + min(0.0, unreal)
@@ -135,7 +173,7 @@ def account_equity(broker) -> float | None:
         return None
 
 
-def notional_cap(broker, cfg: dict) -> tuple[float, str]:
+def notional_cap(broker, cfg: dict, equity=None) -> tuple[float, str]:
     """How much total notional the account may carry RIGHT NOW.
 
     Re-read before every entry rather than taken from config. A fixed cap silently
@@ -145,7 +183,7 @@ def notional_cap(broker, cfg: dict) -> tuple[float, str]:
 
     Returns (cap, why) so the reason appears in the decision log.
     """
-    equity = account_equity(broker)
+    equity = account_equity(broker) if equity is None else equity
     if equity is None or equity <= 0:
         # Never size off a number we could not read. The configured ceiling is the
         # conservative fallback because it cannot be larger than the intended cap.
@@ -195,7 +233,9 @@ def backfill_unsettled(broker=None) -> list[dict]:
 def reconcile(broker=None) -> dict:
     """Align local records with the venue. Returns what changed."""
     broker = broker or _broker()
-    venue = {p["symbol"]: p for p in broker.positions()}
+    live_positions = broker.positions()
+    _cache_venue(positions=live_positions)      # the dashboard rides on this read
+    venue = {p["symbol"]: p for p in live_positions}
     local = {r["symbol"]: r for r in store.live_positions("open")}
     out = {"open": [], "closed": [], "orphans": []}
 
@@ -494,10 +534,10 @@ def _open_symbols() -> set[str]:
     return {r["symbol"] for r in store.live_positions("pending", "open")}
 
 
-def total_notional(broker=None) -> float:
+def total_notional(broker=None, positions=None) -> float:
     broker = broker or _broker()
     tot = 0.0
-    for p in broker.positions():
+    for p in (broker.positions() if positions is None else positions):
         try:
             px = float(p.get("markPrice") or 0) or (tabdeal.mark_price(p["symbol"]) or 0)
             tot += abs(float(p["positionAmt"])) * px
@@ -1011,6 +1051,13 @@ def _sync_price_feed() -> None:
 def cycle() -> dict:
     global _last_prune
     broker = _broker()
+    # Refresh the shared account snapshot once here, so /api/live serves from it
+    # instead of making its own signed calls on every poll. Failure is not fatal:
+    # venue_snapshot() falls back to reading for itself once the cache goes stale.
+    try:
+        _cache_venue(bal=broker.balance())
+    except Exception as exc:                                   # noqa: BLE001
+        log.debug("live: balance refresh for the dashboard failed: %s", exc)
     rec = reconcile(broker)
     _sync_price_feed()
     managed = manage(broker)
@@ -1085,9 +1132,33 @@ def history(include_closed: int = 5) -> dict:
             "points": [{"ts": p["ts"], "mark": p["mark"], "upnl": p["upnl"],
                         "upnl_net": p["upnl_net"], "r": p["r"],
                         "verdict": p["verdict"], "score": p["score"]}
-                       for p in pts],
+                       for p in _thin(pts, MAX_CHART_POINTS)],
         })
     return {"positions": out, "server_ts": time.time()}
+
+
+# A line on a chart a few hundred pixels wide cannot show more than a few hundred
+# points, and this endpoint is polled every 3 seconds. At one sample per 15s an 8-hour
+# hold is ~1900 points per position; the payload had reached 198KB, which is 65KB/s
+# down the wire for a picture that looks identical either way — and a slow response is
+# what makes the board's refresh rate a claim rather than a measurement.
+MAX_CHART_POINTS = 240
+
+
+def _thin(points: list, limit: int) -> list:
+    """Evenly sample `points` down to `limit`, always keeping the last one.
+
+    The newest point is the position's current state and is what the eye goes to, so
+    it must survive the thinning even when the stride would step over it.
+    """
+    n = len(points)
+    if n <= limit:
+        return points
+    step = n / float(limit)
+    out = [points[int(i * step)] for i in range(limit)]
+    if out[-1] is not points[-1]:
+        out[-1] = points[-1]
+    return out
 
 
 def scheduler_loop(stop_event) -> None:
@@ -1234,11 +1305,16 @@ def state() -> dict:
     """What the dashboard needs to show the live account."""
     broker = _broker()
     try:
-        bal = broker.balance()
-        positions = broker.positions()
+        bal, positions = venue_snapshot(broker)
     except Exception as exc:                                   # noqa: BLE001
         return {"error": str(exc), "enabled": settings()["enabled"]}
     cfg = settings()
+    # Everything below reuses those two reads. Equity comes out of `bal`, the cap out
+    # of that equity, and the notional out of `positions` — where each used to issue
+    # its own signed request.
+    equity = account_equity(broker, bal=bal)
+    cap, basis = notional_cap(broker, cfg, equity=equity)
+    age = round(time.time() - _venue_cache["ts"], 1)
     return {
         "enabled": cfg["enabled"],
         "dry_run": cfg["dry_run"],
@@ -1246,13 +1322,15 @@ def state() -> dict:
         "price_feed": _feed_status(),
         "balance": bal,
         "venue_positions": positions,
+        # Marks are read per request from the websocket, so the P/L column is as live
+        # as the socket even when the account snapshot behind it is a few seconds old.
         "live": _live_pnl(positions, cfg),
+        "account_age_s": age,
         "tracked": store.live_positions("pending", "open"),
         "decisions": last_decisions(),
         "closed": store.live_closed()[:50],
         "slots": {"used": len(positions), "max": cfg["max_slots"]},
-        "equity": account_equity(broker),
-        "notional": {"used": round(total_notional(broker), 2),
-                     "cap": round(notional_cap(broker, cfg)[0], 2),
-                     "basis": notional_cap(broker, cfg)[1]},
+        "equity": equity,
+        "notional": {"used": round(total_notional(broker, positions=positions), 2),
+                     "cap": round(cap, 2), "basis": basis},
     }

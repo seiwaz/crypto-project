@@ -54,6 +54,10 @@ const state = {
   liveHistory: null,
   liveTimer: null,
   liveInFlight: false,
+  liveHistoryAt: 0,
+  liveTickAt: 0,
+  liveGapMs: 0,
+  liveLatencyMs: 0,
 };
 
 async function loadStrings(lang) {
@@ -1277,6 +1281,17 @@ function renderLive() {
       class: st.enabled ? 'pill pill--on' : 'pill',
       text: st.enabled ? (st.dry_run ? t('live.dryrun') : t('live.on')) : t('live.off'),
     })),
+    /* The measured refresh, not the configured one, plus how old the account
+     * snapshot behind it is. Marks come from the websocket per request; the balance
+     * and position list are the engine's last read. */
+    stat(t('live.refresh'), el('span', {
+      class: 'num', dir: 'ltr',
+      text: state.liveGapMs
+        ? `${(state.liveGapMs / 1000).toFixed(1)}s · ${state.liveLatencyMs}ms`
+        : '—',
+      attrs: { title: st.account_age_s != null
+        ? t('live.refresh.hint', { age: st.account_age_s }) : '' },
+    })),
   ]);
 
   const positions = (hist && hist.positions) || [];
@@ -1292,15 +1307,32 @@ function renderLive() {
   );
 }
 
+/* The chart's own data is sampled every 15s server-side, so pulling it on the 3s
+ * board tick re-fetched an identical 198KB payload four times out of five. */
+const HISTORY_POLL_MS = 15000;
+
 async function refreshLive() {
   /* One request at a time: the venue call can take over a second, so a 5s timer
    * would otherwise stack requests and render an older mark after a newer one. */
   if (state.liveInFlight) return;
   state.liveInFlight = true;
+  const started = performance.now();
   try {
-    const [s, h] = await Promise.all([API.live(), API.liveHistory()]);
+    const wantHistory = !state.liveHistory
+      || Date.now() - state.liveHistoryAt > HISTORY_POLL_MS;
+    const [s, h] = await Promise.all([
+      API.live(),
+      wantHistory ? API.liveHistory() : Promise.resolve(null),
+    ]);
     state.live = s;
-    state.liveHistory = h;
+    if (h) { state.liveHistory = h; state.liveHistoryAt = Date.now(); }
+    /* Measure the achieved interval instead of quoting the timer. The timer said 3s
+     * while /api/live took 3.8s and an in-flight poll is skipped, so the board really
+     * refreshed every 4-5s - a claim, not a measurement. Now it is on screen. */
+    const now = Date.now();
+    if (state.liveTickAt) state.liveGapMs = now - state.liveTickAt;
+    state.liveTickAt = now;
+    state.liveLatencyMs = Math.round(performance.now() - started);
     renderBtc(s.btc);
   } catch (err) {
     /* Keep the last good board rather than blanking it on a dropped poll. */

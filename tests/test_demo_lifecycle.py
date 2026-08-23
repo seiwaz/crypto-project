@@ -1220,6 +1220,64 @@ results.append(check("it is not the kill switch",
                      "flatten" not in _srv.split('"/api/live/close"')[1].split("flatten_all")[0]
                      or True, True))
 
+print("34. The board's refresh rate is real")
+# /api/live made SIX signed calls per request - balance, positions, account_equity
+# (balance again), total_notional (positions again) and notional_cap TWICE (balance
+# each). Measured 3.8-4.1s against a 3s timer that skips a poll already in flight, so
+# the real rate was 4-5s. The claim and the measurement have to agree.
+class _CountingBroker:
+    def __init__(self): self.calls = collections.Counter()
+    def balance(self):
+        self.calls["balance"] += 1
+        return [{"walletBalance": "4.3140", "crossUnPnl": "0"}]
+    def positions(self):
+        self.calls["positions"] += 1
+        return [{"symbol": "TAO_USDT", "side": "long", "positionAmt": 0.021,
+                 "entryPrice": "237.85", "markPrice": "240.0"}]
+
+import collections
+_lv._venue_cache.update(ts=0.0, bal=None, positions=None)
+_cb = _CountingBroker()
+_bal, _pos = _lv.venue_snapshot(_cb)
+results.append(check("a cold snapshot reads balance once", _cb.calls["balance"], 1))
+results.append(check("and positions once", _cb.calls["positions"], 1))
+_lv.venue_snapshot(_cb)
+results.append(check("a warm snapshot reads nothing", sum(_cb.calls.values()), 2))
+
+# The engine's own cycle feeds it, so the dashboard normally never reads at all.
+_src_cycle = _insp.getsource(_lv.cycle)
+results.append(check("the cycle refreshes the shared balance",
+                     "_cache_venue(bal=" in _src_cycle, True))
+results.append(check("reconcile shares its position read",
+                     "_cache_venue(positions=" in _insp.getsource(_lv.reconcile), True))
+
+# The derived figures must reuse what was read, not re-read it.
+_src_state = _insp.getsource(_lv.state)
+results.append(check("state() takes one snapshot", _src_state.count("venue_snapshot("), 1))
+results.append(check("equity reuses that balance", "account_equity(broker, bal=bal)" in _src_state, True))
+results.append(check("the cap reuses that equity", "equity=equity" in _src_state, True))
+results.append(check("notional reuses those positions",
+                     "positions=positions" in _src_state, True))
+results.append(check("notional_cap is computed once", _src_state.count("notional_cap("), 1))
+
+# Marks are deliberately NOT cached: the P/L column has to stay as live as the socket
+# even when the account snapshot behind it is a few seconds old.
+results.append(check("marks are still read per request",
+                     "_live_pnl(positions, cfg)" in _src_state, True))
+
+# Chart payload. One sample per 15s over an 8h hold is ~1900 points per position, and
+# it was being re-sent every 3 seconds.
+_pts = [{"ts": float(i)} for i in range(2000)]
+_thinned = _lv._thin(_pts, _lv.MAX_CHART_POINTS)
+results.append(check("thinned to the cap", len(_thinned), _lv.MAX_CHART_POINTS))
+results.append(check("keeps the newest point", _thinned[-1]["ts"], 1999.0))
+results.append(check("keeps the oldest point", _thinned[0]["ts"], 0.0))
+results.append(check("stays in order",
+                     all(_thinned[i]["ts"] < _thinned[i + 1]["ts"]
+                         for i in range(len(_thinned) - 1)), True))
+results.append(check("a short series is untouched", _lv._thin(_pts[:10], 240), _pts[:10]))
+_lv._venue_cache.update(ts=0.0, bal=None, positions=None)
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
