@@ -905,12 +905,33 @@ def _spec(symbol: str) -> dict:
 
 
 _last_prune = 0.0
+_feed_started = False
+
+
+def _sync_price_feed() -> None:
+    """Point the websocket at the symbols we currently hold.
+
+    Subscriptions follow the book rather than the whole watchlist: streaming 33
+    symbols to price 4 positions is wasted bandwidth, and the feed exists to remove
+    work, not move it.
+    """
+    global _feed_started
+    try:
+        from . import tabdeal_ws                            # noqa: PLC0415
+        if not _feed_started:
+            _feed_started = tabdeal_ws.FEED.start()
+            if not _feed_started:
+                return                          # unavailable; REST keeps working
+        tabdeal_ws.FEED.track(r["symbol"] for r in store.live_positions("open"))
+    except Exception as exc:                                # noqa: BLE001
+        log.debug("live: price feed sync skipped: %s", exc)
 
 
 def cycle() -> dict:
     global _last_prune
     broker = _broker()
     rec = reconcile(broker)
+    _sync_price_feed()
     managed = manage(broker)
     filled = backfill_unsettled(broker)
     out = {"reconcile": rec, "managed": managed}
@@ -1050,6 +1071,15 @@ def btc_price() -> float | None:
     return _btc_cache["price"]
 
 
+def _feed_status() -> dict:
+    """Whether marks are coming from the socket or falling back to REST."""
+    try:
+        from . import tabdeal_ws                            # noqa: PLC0415
+        return tabdeal_ws.FEED.status()
+    except Exception as exc:                                # noqa: BLE001
+        return {"connected": False, "last_error": str(exc)[:120]}
+
+
 def _live_pnl(positions: list[dict], cfg: dict) -> list[dict]:
     """Per-position mark and P&L, computed here rather than in the browser.
 
@@ -1108,6 +1138,7 @@ def state() -> dict:
         "enabled": cfg["enabled"],
         "dry_run": cfg["dry_run"],
         "btc": btc_price(),
+        "price_feed": _feed_status(),
         "balance": bal,
         "venue_positions": positions,
         "live": _live_pnl(positions, cfg),

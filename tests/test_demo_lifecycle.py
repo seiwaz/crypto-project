@@ -429,6 +429,7 @@ finally:
 print("14. Live engine: TP1 is a full close, not a stop-move")
 from agent import live as _live
 import inspect as _insp
+import time as _time
 _src = _insp.getsource(_live._manage_one)
 # Anchored on the round_trip_cost assignment, which is the next statement after the
 # TP1 branch. The old anchor was the "Signal exit" comment, and that exit was later
@@ -643,6 +644,62 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
                      False))
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
+
+print("33. The websocket price feed accelerates marks and never gates them")
+from agent import tabdeal_ws as _tws
+# The socket is strict and its convention is the OPPOSITE of REST's: REST needs the
+# underscore, the socket rejects it. BTC_USDT@depth came back INVALID_FORMAT while
+# btcusdt@depth@2000ms streamed a full 100-level snapshot.
+results.append(check("stream name drops the underscore and lowercases",
+                     _tws.stream_name("BTC_USDT"), "btcusdt@depth@2000ms"))
+results.append(check("multi-digit symbols map too",
+                     _tws.stream_name("1000SATS_USDT"), "1000satsusdt@depth@2000ms"))
+
+_f = _tws.DepthFeed()
+_f.track(["BTC_USDT", "SUI_USDT"])
+results.append(check("an untracked symbol has no mark", _f.mark("XRP_USDT"), None))
+results.append(check("a tracked symbol with no frame yet has no mark",
+                     _f.mark("BTC_USDT"), None))
+# a frame arrives: mid of best bid/ask, the same quantity REST mark_price computes
+_f._absorb("btcusdt@depth@2000ms",
+           {"s": "BTCUSDT", "b": [["100.0", "1"], ["99.0", "2"]],
+            "a": [["102.0", "1"], ["103.0", "2"]]})
+results.append(check("mark is the bid/ask mid", _f.mark("BTC_USDT"), 101.0))
+results.append(check("it did not leak onto another symbol", _f.mark("SUI_USDT"), None))
+# routed by the `s` field when the stream name is absent
+_f._absorb(None, {"s": "SUIUSDT", "b": [["1.0", "1"]], "a": [["1.2", "1"]]})
+results.append(check("a frame routes by its symbol field too",
+                     round(_f.mark("SUI_USDT"), 6), 1.1))
+# staleness: a dropped socket must degrade to REST, not serve a frozen price
+_f._prices["BTC_USDT"] = (101.0, _time.time() - (_tws.MAX_AGE_S + 1))
+results.append(check("a stale price is withheld so REST takes over",
+                     _f.mark("BTC_USDT"), None))
+# malformed frames are ignored rather than raising into the monitoring loop
+for _bad in ({"s": "BTCUSDT", "b": [], "a": []},
+             {"s": "BTCUSDT", "b": [["x", "1"]], "a": [["2", "1"]]},
+             {"s": "BTCUSDT"},
+             {"s": "BTCUSDT", "b": [["-1", "1"]], "a": [["-1", "1"]]}):
+    _f._absorb("btcusdt@depth@2000ms", _bad)
+results.append(check("malformed frames neither raise nor set a price",
+                     _f.mark("BTC_USDT"), None))
+results.append(check("an unknown symbol is dropped, not guessed",
+                     _f._symbol_for("dogeusdt@depth@2000ms", {"s": "DOGEUSDT"}), None))
+# the accelerator must never become a dependency
+_savedfeed = _tws.FEED
+try:
+    class _Broken:
+        def mark(self, s): raise RuntimeError("socket exploded")
+    _tws.FEED = _Broken()
+    results.append(check("a throwing feed still returns None to mark_price",
+                         _tab._ws_mark("BTC_USDT"), None))
+finally:
+    _tws.FEED = _savedfeed
+results.append(check("mark_price consults the feed before REST",
+                     _insp.getsource(_tab.mark_price).index("_ws_mark")
+                     < _insp.getsource(_tab.mark_price).index("orderbook("), True))
+results.append(check("the engine tracks only open symbols, not the watchlist",
+                     'store.live_positions("open")'
+                     in _insp.getsource(_live._sync_price_feed), True))
 
 print("32. A short is the exact mirror of a long, not a special case")
 # Shorts were switched off after the 21,315-signal replay; switching them back on is

@@ -10,6 +10,13 @@
 #
 #   * Installs python3 and python3-pip from dnf. Nothing else — the app is stdlib
 #     only, so there is no pip install step and the host needs no package index
+#
+#     One OPTIONAL accelerator exists: `pip3 install websocket-client` lets the live
+#     engine take position marks from Tabdeal's pushed order book (a full snapshot
+#     every 2s) instead of a REST call per position per 3s cycle. It is strictly an
+#     optimisation — without it agent/tabdeal_ws.py reports itself unavailable and
+#     every mark falls back to REST, which is the behaviour this installer assumes.
+#     Nothing else in the app has a non-stdlib dependency, and nothing should.
 #     access after these two.
 #   * Creates a locked system account. The service never needs a login shell, and
 #     the dashboard is read-only by design; running it as root would be the single

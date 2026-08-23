@@ -348,7 +348,16 @@ def mark_price(symbol: str) -> float | None:
     There is no index or `edp` equivalent here, so mid is the closest honest thing.
     Mid is preferred over last-close because on a thin book the two can drift, and a
     position should be marked against what it could actually be closed at.
+
+    Three sources, in order of freshness. The websocket pushes a full 100-level book
+    snapshot every 2s for the symbols the engine is tracking, and computes the very
+    same bid/ask mid as the REST path below — same number, no round trip. It is an
+    optimisation and never a dependency: a missing library, a dropped socket or a
+    price older than a few seconds all return None here and fall through to REST.
     """
+    live = _ws_mark(symbol)
+    if live is not None:
+        return live
     try:
         ob = orderbook(symbol, 5)
         if ob["bids"] and ob["asks"]:
@@ -359,6 +368,15 @@ def mark_price(symbol: str) -> float | None:
         rows = klines_cached(symbol, "5", 2)
         return rows[-1]["close"] if rows else None
     except TabdealError:
+        return None
+
+
+def _ws_mark(symbol: str) -> float | None:
+    """Pushed mid, if the feed has a fresh one. Never raises."""
+    try:
+        from . import tabdeal_ws                            # noqa: PLC0415
+        return tabdeal_ws.FEED.mark(symbol)
+    except Exception:                                       # noqa: BLE001
         return None
 
 
