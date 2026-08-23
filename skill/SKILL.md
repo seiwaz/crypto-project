@@ -306,7 +306,8 @@ loss was round-trip fees, i.e. **71%**.
 |---|---|
 | **The exchange owns both levels** | Stop **and** TP1 are attached to the position via `positionSlTp`, so they are honoured even if the engine process dies. Verify by reading `stopLossPrice` back — a `success` response is not proof. |
 | **TP1 is a full close** | Not a 50% partial. Tabdeal supports neither `reduceOnly` nor a partial close, so a half-exit would have to be an opposing MARKET order that can **flip** the position instead of trimming it. There is no TP2. |
-| **The engine takes exactly one exit** | Held **≥ 1 hour** *and* gross **> 1.5 × the round trip**. Nothing else. |
+| **The engine takes exactly one exit** | Held **≥ 1 hour** *and* the position is profitable **at the price it could actually exit at**, by more than 1.5 × the round trip. Nothing else. |
+| **…unless the signal still backs it** | Past the hour and above the bar, it is still **held** while the scan says `TAKE` at ≥ 70 on the same side. It banks only when that lapses. |
 | **A losing position is never touched** | It rides its exchange stop. No time stop, no signal exit, no adverse exit. |
 
 Why the engine's own exits were removed, all measured on its live record:
@@ -320,10 +321,33 @@ Why the engine's own exits were removed, all measured on its live record:
 - Closing a barely-negative position burns the whole fee for nothing: one exit at
   **−0.035%** realised −0.01297, of which **85% was commission**.
 
-**The margin that makes the rule safe:** the profit test reads the *mark*, but the
-close is a **MARKET** order, so the fill crosses the spread. Testing against 1.0×
-the round trip produced a close that settled **negative** (+0.01052 gross against
-a 0.01091 fee). Hence 1.5×.
+**Price the exit side, not the mid.** A long exits by selling into the best bid, so
+testing the mid overstates what the position is worth closing by half the spread —
+and on these books that is a large share of the whole round trip. Three consecutive
+closes settled *negative* while each cleared a 1.5× fee bar measured on the mid:
+
+| | at the mid | vs bar | settled |
+|---|---|---|---|
+| NEAR | 0.01543 | 0.01508 | **−0.00501** |
+| WIF | 0.01625 | 0.01509 | **−0.00004** |
+| POL | — | — | **−0.09155** |
+
+WIF is the clearest: the mid implied a fill at 0.20115 and it filled at 0.2009, a
+**0.125%** gap against a cushion sized to absorb 0.1%. A bigger multiple is only a
+better guess; valuing the position at the touch it must cross is the measurement.
+
+**Holding a winner needs a positive reason, not merely the absence of a negative
+one.** The hold bar (70) sits *above* the abandon floor (65) deliberately: the floor
+answers "is the thesis dead", which is the right test for leaving a trade and the
+wrong one for banking it — a position can sit well above the floor and still be a
+fading signal, and holding a fading winner re-exposes a profit that has already paid
+for its own fees. Missing scan data does **not** hold.
+
+**`TAKE` is not the same as "will trade".** This skill grades TAKE at score ≥ 70 with
+every gate passed. The live engine has its own entry bar (`min_score`, currently 75),
+so 70–74.9 is a genuine TAKE that will never open a position. If you are reading a
+board and wondering why a green signal did nothing, check the score against the
+engine's bar before looking for a fault.
 
 ---
 

@@ -712,7 +712,7 @@ left untouched.
 
 | | |
 |---|---|
-| Engine closes | held **≥ 1h** AND gross **> 1.5 × round trip** AND the signal is no longer green (`profit_close`) |
+| Engine closes | held **≥ 1h** AND profitable **at the exit-side price** by > 1.5 × round trip AND the signal is no longer green (`profit_close`) |
 | Engine **keeps** a winner | past the hour and above the bar, but the scan still says **TAKE at ≥ `hold_take_score` (70)** on our side — logged as `riding_signal` |
 | Everything else | the exchange's own **stop** and **TP1**, attached to the position |
 | A losing position | never touched by the engine, at any hold |
@@ -722,10 +722,16 @@ left untouched.
 `profit_close_after_h: 1.0`, `profit_close_fee_multiple: 1.5`, `hold_take_score: 70`,
 `live_cycle_seconds: 3`, `allow_shorts: false`, `min_score: 75`.
 
-**The 1.5× cushion is not decoration.** The profit test reads the *mark*; the close
-is a **MARKET** order that crosses the spread. At 1.0× a close settled **negative**
-(PEPE: +0.01052 gross vs a 0.01091 round trip → −0.00039). A close that still
-settles ≤ 0 now logs an ERROR naming the setting to raise.
+**Value the exit side, never the mid.** A long exits into the best bid, so the mid
+overstates what a position is worth closing by half the spread — a large share of the
+whole round trip on these books. Three closes in a row settled **negative** while
+each cleared a 1.5× bar measured on the mid: NEAR 0.01543 vs 0.01508 → −0.00501,
+WIF 0.01625 vs 0.01509 → −0.00004, POL → −0.09155. WIF is the clearest: the mid
+implied a fill at 0.20115, it filled at 0.2009, a **0.125%** gap against a cushion
+sized for 0.1%. `tabdeal.exit_price(symbol, side)` returns the bid for a long and the
+ask for a short (websocket quote → REST depth → mid), and the fee is costed on that
+same price. A bigger multiple would only be a better guess. A close that still
+settles ≤ 0 logs an ERROR — that guard is what caught all three.
 
 **The hold bar (70) is deliberately above the abandon floor (65).** They answer
 different questions: the floor asks "is the thesis dead" and is right for *leaving*
@@ -803,6 +809,60 @@ because the venv python is a symlink, so that check *actively misleads*. Check
 
 The app otherwise stays **stdlib-only**; this is the one optional accelerator, and
 without it the feed reports itself unavailable and every mark falls back to REST.
+
+## `TAKE` is not "will trade" — the 70 / 75 gap
+
+**The skill grades `TAKE` at score ≥ 70 with all gates passed; the live engine opens
+only at `min_score` (75).** So 70–74.9 renders as a green TAKE that can never become
+a position. This is the answer to "the scanner signalled and nothing opened" — check
+the score against the entry bar before looking for a fault. Live example: scan 926
+showed SUI 79.9, TAO 75.9 (both already held) and **ZEC TAKE 74.1**, which was simply
+under the bar. Three green cards, an idle engine, all of it correct.
+
+`/api/state` now serves `min_score` and `allow_shorts`, and the board marks such a
+card **"below entry bar"**. Before lowering `min_score` to 70: 40 of the 100 score
+points come from net-expectancy and cost-drag, both capped by the 0.1%/side fee, so
+that band is exactly where the edge is thinnest against costs.
+
+## Shorts are back on, and provably symmetric
+
+`allow_shorts: true` again. Test 32 asserts the symmetry rather than assuming it —
+a long scenario reflected around its entry must produce identical magnitudes for
+geometry validation, TP reach, entry-drift signing (a better-than-plan fill stays
+negative on both sides), gross/net/pct, and the hold gate. Asserted because this
+project already shipped one long-bias bug (`side_from_direction` defaulting to long
+on a tie → 213 consecutive longs).
+
+**What that flag overrides, so it is not forgotten:** across 9,741 replayed short
+signals the side was net negative at *every* horizon and worsened with time (−0.209%
+at 30m → −0.706% at 24h) while longs ran −0.172% → +1.392%. That is ~25 days of one
+rising regime — evidence about here and now, not a law, which is why it is a setting.
+
+## Trimming history without destroying it
+
+`tools/purge_history.py` archives to `var/archive/*.json` **before** deleting, refuses
+to touch an open position, and defaults to a dry run. Used 2026-08-23 to drop 19
+closed positions from 08-22 (realised −0.4386), keeping 31 from that day plus 4 open.
+Every finding in `docs/RESEARCH_LOG.md` was reconstructed from these rows, so
+"clean up the list" must never mean "destroy the evidence".
+
+## UI
+
+- **All absolute times render at UTC+3:30**, with the offset in the column header. A
+  fixed offset, not the viewer's locale: these are read against the exchange and the
+  server log and must be the same number on any machine. Bare server timestamps are
+  parsed as UTC rather than browser-local.
+- **Live tab restyled** as a trading terminal (ui-ux-pro-max "Modern Dark", density 9,
+  subtle motion). Two deliberate deviations from the generated system: **no Google
+  Fonts link** — this app self-hosts faces on purpose and Google Fonts is routinely
+  unreachable from Iran, so a linked face falls back silently and differently per
+  viewer; and **light mode stays**, since the app already ships three theme states.
+  Semantic up/down live in their own tokens, separate from `--accent`, so a green
+  number never reads as a link. All new tokens defined in a bare `:root` and
+  redefined in both dark blocks.
+- **P/L shows gross beside net.** Gross is `(mark − entry) × qty`, the same figure
+  Tabdeal's app shows, so the two tie out; net subtracts the round trip and is what
+  the exit rule tests. The gap between the columns is the fee.
 
 ## Real-money migration — the dossier that preceded going live
 
