@@ -133,11 +133,20 @@ function num(value, opts = {}) {
 function timeAgo(iso) {
   if (!iso) return t('card.noData');
   const then = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`);
-  const mins = Math.round((Date.now() - then.getTime()) / 60000);
-  if (!Number.isFinite(mins)) return t('card.noData');
+  const secs = Math.round((Date.now() - then.getTime()) / 1000);
+  if (!Number.isFinite(secs)) return t('card.noData');
   const rtf = new Intl.RelativeTimeFormat(state.lang === 'fa' ? 'fa' : 'en', { numeric: 'auto' });
+  /* Seconds below a minute, and FLOOR rather than round for minutes.
+   *
+   * Rounding made a 31-second-old card read "1 minute ago" and a 90-second-old one
+   * "2 minutes ago", so a single scan's cards — which span about a minute, because
+   * that is how long a 33-coin pass takes — reported ages that disagreed with each
+   * other and with the header. Floor never claims data is older than it is, and
+   * seconds keep a fresh scan legible instead of collapsing to "this minute". */
+  if (Math.abs(secs) < 60) return rtf.format(-secs, 'second');
+  const mins = Math.floor(secs / 60);
   if (Math.abs(mins) < 60) return rtf.format(-mins, 'minute');
-  return rtf.format(-Math.round(mins / 60), 'hour');
+  return rtf.format(-Math.floor(mins / 60), 'hour');
 }
 
 /* ------------------------------------------------------------------- DOM */
@@ -767,7 +776,15 @@ function renderScan() {
     text.textContent = `${t('bar.scanning')} ${done}/${total}${scan.current_coin ? ` · ${scan.current_coin}` : ''}`;
     bar.style.inlineSize = total ? `${(done / total) * 100}%` : '0';
   } else {
-    text.textContent = `${t('bar.lastScan')} ${timeAgo(scan.finished_at || scan.started_at)}`;
+    /* started_at, not finished_at.
+     *
+     * A 33-coin pass takes about a minute, so the first coin's data is already that
+     * old by the time the scan finishes. Reporting the finish made the header look
+     * FRESHER than every card beneath it — "last scan 1 minute ago" above a board of
+     * "updated 2 minutes ago". The start is when the oldest card on screen was
+     * gathered, so the header is now the upper bound on the board's age rather than
+     * the lower one. */
+    text.textContent = `${t('bar.lastScan')} ${timeAgo(scan.started_at || scan.finished_at)}`;
   }
   document.getElementById('rescan').textContent = running ? t('bar.cancel') : t('bar.rescan');
 }
