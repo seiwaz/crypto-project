@@ -1142,7 +1142,7 @@ def history(include_closed: int = 5) -> dict:
 # hold is ~1900 points per position; the payload had reached 198KB, which is 65KB/s
 # down the wire for a picture that looks identical either way — and a slow response is
 # what makes the board's refresh rate a claim rather than a measurement.
-MAX_CHART_POINTS = 240
+MAX_CHART_POINTS = 120
 
 
 def _thin(points: list, limit: int) -> list:

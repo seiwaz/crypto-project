@@ -1077,3 +1077,6 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   vertical-align: middle;
   white-space: nowrap;
 }
+
+.btn--sm { padding: 0.25rem 0.7rem; font-size: 0.78rem; }
+.more { display: flex; justify-content: center; padding-block-start: 0.6rem; }

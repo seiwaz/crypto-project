@@ -38,6 +38,10 @@ async function fetchJSON(url, body) {
 
 /* ------------------------------------------------------------------ i18n */
 
+/* The closed list is the long one, and the question people bring to it - what just
+ * happened - is answered by the newest few. The rest is there on request. */
+const HISTORY_PAGE = 10;
+
 const state = {
   lang: localStorage.getItem('lang') || 'en',
   strings: {},
@@ -55,6 +59,10 @@ const state = {
   liveTimer: null,
   liveInFlight: false,
   liveHistoryAt: 0,
+  /* How many closed trades the history list is showing. Lives in state, not in the
+   * DOM, because the board re-renders every 3 seconds and would otherwise collapse
+   * the list back to ten under the reader every time. */
+  histShown: HISTORY_PAGE,
   liveTickAt: 0,
   liveGapMs: 0,
   liveLatencyMs: 0,
@@ -1206,8 +1214,10 @@ function historySummary(closed) {
   ]);
 }
 
-function historyTable(closed) {
-  if (!closed.length) return el('div', { class: 'empty', text: t('live.hist.none') });
+function historyTable(all) {
+  if (!all.length) return el('div', { class: 'empty', text: t('live.hist.none') });
+  const shown = Math.min(state.histShown, all.length);
+  const closed = all.slice(0, shown);
   const cols = ['coin', 'side', 'entry', 'exit', 'pct', 'pnl', 'held', 'reason', 'closed'];
   const head = el('tr', {}, cols.map((k) => el('th', {
     /* Label the clock column with its offset — an unlabelled time invites the reader
@@ -1242,7 +1252,31 @@ function historyTable(closed) {
       el('td', { class: 'num', dir: 'ltr', text: atLocal(r.closed_at) }),
     ]);
   });
-  return el('table', { class: 'ltable' }, [el('thead', {}, [head]), el('tbody', {}, rows)]);
+  const table = el('table', { class: 'ltable' },
+    [el('thead', {}, [head]), el('tbody', {}, rows)]);
+
+  const remaining = all.length - shown;
+  if (!remaining) {
+    /* Only offer to collapse once the list has actually been expanded — a "show
+     * fewer" under ten rows is a control with nothing to do. */
+    if (shown <= HISTORY_PAGE) return table;
+    const less = el('button', {
+      class: 'btn btn--ghost btn--sm', text: t('live.hist.less'),
+      attrs: { type: 'button' },
+    });
+    less.addEventListener('click', () => { state.histShown = HISTORY_PAGE; renderLive(); });
+    return el('div', {}, [table, el('div', { class: 'more' }, [less])]);
+  }
+
+  const more = el('button', {
+    class: 'btn btn--sm', attrs: { type: 'button' },
+    text: t('live.hist.more', { n: Math.min(HISTORY_PAGE, remaining), left: remaining }),
+  });
+  more.addEventListener('click', () => {
+    state.histShown += HISTORY_PAGE;
+    renderLive();
+  });
+  return el('div', {}, [table, el('div', { class: 'more' }, [more])]);
 }
 
 function renderLive() {

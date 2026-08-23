@@ -274,5 +274,7 @@
   "verdict.WATCH": "WATCH",
   "verdict.WATCH.meaning": "Marginal — score 50–69. Wait for one specific upgrade.",
   "live.refresh": "Refresh",
-  "live.refresh.hint": "Marks are live from the websocket; the account snapshot behind them is {age}s old."
+  "live.refresh.hint": "Marks are live from the websocket; the account snapshot behind them is {age}s old.",
+  "live.hist.more": "Show {n} more ({left} left)",
+  "live.hist.less": "Show fewer"
 }
