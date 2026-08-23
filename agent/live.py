@@ -86,6 +86,12 @@ def settings() -> dict:
         # A position held this long that is NET profitable - after the round trip, not
         # merely above entry - is banked, whatever the setup says.
         "profit_close_after_h": float(d.get("profit_close_after_h") or 1.0),
+        # How far past the round trip the gross must be before closing counts as
+        # profitable. Not 1.0: the test uses the MARK and the close is a MARKET order,
+        # so the fill crosses the spread and lands below what was measured. PEPE
+        # cleared the fee by 0.0004 at the mark on 2026-08-23 and settled at -0.00039.
+        # 1.5 leaves half a round trip of headroom for that slippage.
+        "profit_close_fee_multiple": float(d.get("profit_close_fee_multiple") or 1.5),
         # How often the monitoring loop writes a position sample. The loop itself runs
         # every `cycle_seconds`; recording at that rate would be ~1.2M rows a day for
         # four positions, so the series is thinned to something a chart still reads
@@ -762,12 +768,23 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     # Everything below the hour, and everything in loss at any hour, is left to the
     # exchange's own stop and take-profit. That is deliberate: the venue holds both
     # levels on the position itself, so they are honoured even if this process dies.
-    if held_h >= cfg["profit_close_after_h"] and upnl > round_trip_cost:
+    close_bar = round_trip_cost * cfg["profit_close_fee_multiple"]
+    if held_h >= cfg["profit_close_after_h"] and upnl > close_bar:
         still, reason = demo._profit_signal_check(row)
         out = settle(broker, row, "profit_close", mark)
-        log.warning("live: %s profit_close after %.2fh at %.3fR (net %s, setup %s)",
-                    symbol, held_h, r_now, out["realised_pnl"],
-                    "intact" if still else (reason or "lapsed"))
+        log.warning("live: %s profit_close after %.2fh at %.3fR (gross %.5f vs bar "
+                    "%.5f, net %s, setup %s)", symbol, held_h, r_now, upnl, close_bar,
+                    out["realised_pnl"], "intact" if still else (reason or "lapsed"))
+        # An engine-initiated close must never reduce the balance. The bar above is
+        # measured at the mark and the close is a MARKET order, so slippage can still
+        # in principle land it under water - if it ever does, say so loudly instead of
+        # letting it disappear into the ledger the way PEPE's -0.00039 did.
+        settled = out.get("realised_pnl")
+        if settled is not None and float(settled) <= 0:
+            log.error("live: %s profit_close SETTLED NEGATIVE (%.6f) - the %.2fx fee "
+                      "cushion did not cover slippage; raise "
+                      "demo.profit_close_fee_multiple",
+                      symbol, float(settled), cfg["profit_close_fee_multiple"])
         return {"symbol": symbol, "action": "CLOSE", "reason": "profit_close",
                 "held_h": round(held_h, 2), "r": round(r_now, 3),
                 "detail": ("setup intact" if still else (reason or "setup lapsed")),

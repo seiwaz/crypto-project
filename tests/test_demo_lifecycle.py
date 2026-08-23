@@ -545,7 +545,8 @@ results.append(check("a round-trip cost is computed",
 # The exit this gates is now profit_close (signal_exit was removed 2026-08-23 when
 # the engine was restricted to closing only a net-profitable position past its hour).
 results.append(check("the exit is gated on the round trip, not on upnl > 0",
-                     "upnl > round_trip_cost" in _m1, True))
+                     "round_trip_cost * cfg[" in _m1 and "upnl > close_bar" in _m1,
+                     True))
 # `elif upnl > 0:` is the correct below-the-line branch; what must be gone is the
 # bare `if upnl > 0:` that used to trigger the exit itself.
 results.append(check("the bare `if upnl > 0:` trigger is gone",
@@ -609,7 +610,7 @@ print("26. The live engine closes only a net-profitable position past its hour")
 _mo2 = _insp.getsource(_live._manage_one)
 _mo2c = "\n".join(l for l in _mo2.splitlines() if not l.lstrip().startswith("#"))
 results.append(check("profit_close needs BOTH the hour and net profit",
-                     'held_h >= cfg["profit_close_after_h"] and upnl > round_trip_cost'
+                     'held_h >= cfg["profit_close_after_h"] and upnl > close_bar'
                      in _mo2c, True))
 results.append(check("net means past the round trip, not above entry",
                      "round_trip_cost = qty * mark" in _mo2c, True))
@@ -623,6 +624,25 @@ results.append(check("adverse_exit is still gated on the flag if re-enabled",
                      'cfg["adverse_exit_enabled"] and upnl < 0' in _mo2c, True))
 results.append(check("default profit hour is 1.0",
                      _live.settings()["profit_close_after_h"], 1.0))
+# PEPE closed at -0.00039 under a bar of exactly 1x the round trip: the test reads
+# the MARK, the close is a MARKET order, and the fill crossed the spread.
+results.append(check("the bar sits above the round trip, not on it",
+                     _live.settings()["profit_close_fee_multiple"] > 1.0, True))
+results.append(check("default cushion is half a round trip",
+                     _live.settings()["profit_close_fee_multiple"], 1.5))
+results.append(check("the cushion is applied to the test",
+                     "upnl > close_bar" in _mo2c, True))
+results.append(check("a close that still settles negative is reported loudly",
+                     "profit_close SETTLED NEGATIVE" in _insp.getsource(_live._manage_one),
+                     True))
+# the arithmetic: the bar must exceed the round trip by the cushion
+_q, _mk = 1323300.0, 4.122e-06
+_rt = _q * _mk * (_tab.TAKER_FEE_PCT / 100.0) * 2
+results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
+                     0.01052 > _rt * _live.settings()["profit_close_fee_multiple"],
+                     False))
+results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
+                     0.01052 > _rt * 1.0, False))
 
 print("28. An unprotected position is repaired, not just logged about")
 # SUI opened 2026-08-23 17:07 and sat with no exchange stop for 40 minutes: the venue

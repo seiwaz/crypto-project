@@ -23,7 +23,8 @@
     "profit_close_after_h": 1.0,
     "adverse_exit_enabled": false,
     "history_interval_seconds": 15.0,
-    "history_keep_days": 14.0
+    "history_keep_days": 14.0,
+    "profit_close_fee_multiple": 1.5
   },
   "min_score": 75.0,
   "allow_shorts": false
