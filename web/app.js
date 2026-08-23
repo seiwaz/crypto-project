@@ -898,6 +898,16 @@ function inUsdt(rMultiple, riskAmount) {
  * history rather than a simulated ledger.
  */
 
+function renderBtc(price) {
+  const node = document.getElementById('btcPriceValue');
+  if (!node) return;
+  /* Keep the last good price rather than blanking on a dropped poll: a header
+   * number that flickers to "—" every few seconds is worse than one a few seconds
+   * stale, and this is a reference reading, not a trading input. */
+  if (price === null || price === undefined || !Number.isFinite(Number(price))) return;
+  node.textContent = fmtNum(price);
+}
+
 function pnlClass(v) {
   if (!Number.isFinite(v) || v === 0) return 'num';
   return v > 0 ? 'num num--up' : 'num num--down';
@@ -1017,8 +1027,21 @@ function positionChart(positions) {
   return el('div', { class: 'poschart__wrap' }, [svg, legend]);
 }
 
+/* Net of the round trip, not gross.
+ *
+ * At 0.1% a side a position up 0.15% of notional is still a loss when closed, and
+ * nine of the account's first 23 trades moved in our favour and lost money exactly
+ * that way. A P/L column showing gross would report those as winners. */
+function netPnl(p, mark) {
+  const e = Number(p.entry), q = Number(p.quantity);
+  if (!Number.isFinite(e) || !Number.isFinite(q) || !Number.isFinite(mark)) return null;
+  const sgn = p.side === 'short' ? -1 : 1;
+  return (mark - e) * q * sgn - q * mark * 0.002;
+}
+
 function livePositionRow(p, mark) {
   const pct = pctFromEntry(p, mark);
+  const net = netPnl(p, mark);
   const cells = [
     el('td', {}, [el('strong', { text: p.coin, dir: 'ltr' })]),
     el('td', { class: `side side--${p.side}`, text: t(`side.${p.side}`) }),
@@ -1027,6 +1050,11 @@ function livePositionRow(p, mark) {
     el('td', {
       class: pnlClass(pct),
       text: Number.isFinite(pct) ? `${pct > 0 ? '+' : ''}${pct.toFixed(3)}%` : '—',
+      dir: 'ltr',
+    }),
+    el('td', {
+      class: pnlClass(net),
+      text: net === null ? '—' : `${net > 0 ? '+' : ''}${net.toFixed(5)}`,
       dir: 'ltr',
     }),
     el('td', { class: 'num', text: heldLabel(Number(p.opened_ts)), dir: 'ltr' }),
@@ -1040,12 +1068,75 @@ function livePositionRow(p, mark) {
 function liveTable(positions, marks) {
   const open = positions.filter((p) => p.status === 'open');
   if (!open.length) return el('div', { class: 'empty', text: t('live.none') });
-  const head = el('tr', {}, ['coin', 'side', 'entry', 'mark', 'pnl', 'held', 'stop', 'tp1', 'score']
-    .map((k) => el('th', { text: t(`live.col.${k}`) })));
+  const head = el('tr', {},
+    ['coin', 'side', 'entry', 'mark', 'pct', 'pnl', 'held', 'stop', 'tp1', 'score']
+      .map((k) => el('th', { text: t(`live.col.${k}`) })));
   return el('table', { class: 'ltable' }, [
     el('thead', {}, [head]),
     el('tbody', {}, open.map((p) => livePositionRow(p, marks.get(p.symbol)))),
   ]);
+}
+
+/* Totals above the list, because the list is long and the question people actually
+ * bring to it - am I up or down, and on what - should not need scrolling. Net is the
+ * venue's own realised figure, so it is already after commission. */
+function historySummary(closed) {
+  let net = 0, wins = 0, losses = 0;
+  for (const r of closed) {
+    const v = Number(r.realised_pnl);
+    if (!Number.isFinite(v)) continue;
+    net += v;
+    if (v > 0) wins += 1; else if (v < 0) losses += 1;
+  }
+  const n = wins + losses;
+  return el('div', { class: 'stats stats--hist' }, [
+    stat(t('live.hist.trades'), el('span', { class: 'num', text: String(closed.length), dir: 'ltr' })),
+    stat(t('live.hist.net'), el('span', {
+      class: pnlClass(net), dir: 'ltr',
+      text: `${net > 0 ? '+' : ''}${net.toFixed(5)}`,
+    })),
+    stat(t('live.hist.wins'), el('span', {
+      class: 'num', dir: 'ltr', text: `${wins} / ${losses}`,
+    })),
+    stat(t('live.hist.winrate'), el('span', {
+      class: 'num', dir: 'ltr', text: n ? `${Math.round((wins / n) * 100)}%` : '—',
+    })),
+  ]);
+}
+
+function historyTable(closed) {
+  if (!closed.length) return el('div', { class: 'empty', text: t('live.hist.none') });
+  const cols = ['coin', 'side', 'entry', 'exit', 'pct', 'pnl', 'held', 'reason', 'closed'];
+  const head = el('tr', {}, cols.map((k) => el('th', { text: t(`live.col.${k}`) })));
+  const rows = closed.map((r) => {
+    const e = Number(r.entry_price), x = Number(r.exit_price);
+    const sgn = r.side === 'short' ? -1 : 1;
+    const pct = (Number.isFinite(e) && Number.isFinite(x) && e)
+      ? ((x - e) / e) * 100 * sgn : null;
+    const net = Number(r.realised_pnl);
+    return el('tr', {}, [
+      el('td', {}, [el('strong', { text: r.coin, dir: 'ltr' })]),
+      el('td', { class: `side side--${r.side}`, text: t(`side.${r.side}`) }),
+      el('td', { class: 'num', text: fmtNum(r.entry_price), dir: 'ltr' }),
+      el('td', { class: 'num', text: fmtNum(r.exit_price), dir: 'ltr' }),
+      el('td', {
+        class: pnlClass(pct), dir: 'ltr',
+        text: pct === null ? '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(3)}%`,
+      }),
+      el('td', {
+        class: pnlClass(net), dir: 'ltr',
+        text: Number.isFinite(net) ? `${net > 0 ? '+' : ''}${net.toFixed(5)}` : '—',
+      }),
+      el('td', {
+        class: 'num', dir: 'ltr',
+        text: heldLabel(Number(r.opened_ts),
+                        r.closed_at ? Date.parse(r.closed_at) / 1000 : undefined),
+      }),
+      el('td', { text: t(`demo.exit.${r.exit_reason}`) || r.exit_reason || '—' }),
+      el('td', { class: 'num', dir: 'ltr', text: (r.closed_at || '').replace('T', ' ').slice(5, 16) }),
+    ]);
+  });
+  return el('table', { class: 'ltable' }, [el('thead', {}, [head]), el('tbody', {}, rows)]);
 }
 
 function renderLive() {
@@ -1098,12 +1189,16 @@ function renderLive() {
     })),
   ]);
 
+  const positions = (hist && hist.positions) || [];
   host.replaceChildren(
     summary,
-    el('h3', { class: 'sect', text: t('live.chart.title') }),
-    positionChart((hist && hist.positions) || []),
     el('h3', { class: 'sect', text: t('live.open') }),
-    liveTable((hist && hist.positions) || [], marks),
+    liveTable(positions, marks),
+    el('h3', { class: 'sect', text: t('live.history') }),
+    historySummary(st.closed || []),
+    historyTable(st.closed || []),
+    el('h3', { class: 'sect', text: t('live.chart.title') }),
+    positionChart(positions),
   );
 }
 
@@ -1116,6 +1211,7 @@ async function refreshLive() {
     const [s, h] = await Promise.all([API.live(), API.liveHistory()]);
     state.live = s;
     state.liveHistory = h;
+    renderBtc(s.btc);
   } catch (err) {
     /* Keep the last good board rather than blanking it on a dropped poll. */
     if (!state.live) {
@@ -1129,7 +1225,7 @@ async function refreshLive() {
   renderLive();
 }
 
-const LIVE_POLL_MS = 5000;
+const LIVE_POLL_MS = 3000;
 
 function startLivePolling() {
   clearInterval(state.liveTimer);

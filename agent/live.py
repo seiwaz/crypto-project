@@ -903,7 +903,8 @@ def history(include_closed: int = 5) -> dict:
         out.append({
             "id": r["id"], "coin": r["coin"], "symbol": r["symbol"],
             "side": r["side"], "status": r["status"],
-            "entry": r.get("entry_price"), "stop": r.get("stop"),
+            "entry": r.get("entry_price"), "quantity": r.get("quantity"),
+            "stop": r.get("stop"),
             "tp1": r.get("tp1"), "leverage": r.get("leverage"),
             "score": r.get("score"), "opened_at": r.get("opened_at"),
             "opened_ts": r.get("opened_ts"),
@@ -983,6 +984,27 @@ def _latest_scan_id() -> int | None:
         return None
 
 
+_btc_cache: dict = {"ts": 0.0, "price": None}
+
+
+def btc_price() -> float | None:
+    """BTC mark, cached briefly.
+
+    Shown in the header on every page, so it is read by both the 3s live poll and
+    the main board poll. Without the cache that is a venue round trip per request
+    per tab, for a number that does not need to be fresher than a few seconds.
+    """
+    now = time.time()
+    if now - _btc_cache["ts"] < 5.0:
+        return _btc_cache["price"]
+    try:
+        _btc_cache["price"] = tabdeal.mark_price("BTC_USDT")
+    except Exception:                                          # noqa: BLE001
+        pass                                    # keep the last good price
+    _btc_cache["ts"] = now
+    return _btc_cache["price"]
+
+
 def state() -> dict:
     """What the dashboard needs to show the live account."""
     broker = _broker()
@@ -995,6 +1017,7 @@ def state() -> dict:
     return {
         "enabled": cfg["enabled"],
         "dry_run": cfg["dry_run"],
+        "btc": btc_price(),
         "balance": bal,
         "venue_positions": positions,
         "tracked": store.live_positions("pending", "open"),

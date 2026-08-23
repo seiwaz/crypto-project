@@ -157,6 +157,11 @@ def state_payload(lang: str | None = None) -> dict:
     """
     settings = config.load_settings()
     watchlist = config.load_watchlist()
+    try:
+        from . import live as _live                            # noqa: PLC0415
+        btc = _live.btc_price()
+    except Exception:                                          # noqa: BLE001
+        btc = None                              # the header degrades, the board does not
     by_coin = {c["coin"]: c for c in watchlist.get("coins", [])}
     manual_all = store.all_manual_checks()
 
@@ -203,6 +208,7 @@ def state_payload(lang: str | None = None) -> dict:
 
     return {
         "settings": public_settings(settings),
+        "btc": btc,
         "scan": {
             "id": scan.get("id"),
             "status": scan.get("status"),

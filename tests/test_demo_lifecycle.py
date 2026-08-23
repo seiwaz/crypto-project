@@ -644,6 +644,19 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
 
+print("29. The dashboard payload carries what the live tab renders")
+_h = _insp.getsource(_live.history)
+results.append(check("history exposes quantity (the P/L column needs it)",
+                     '"quantity": r.get("quantity")' in _h, True))
+results.append(check("history exposes the exit reason", '"exit_reason"' in _h, True))
+results.append(check("history exposes realised pnl", '"realised_pnl"' in _h, True))
+results.append(check("live state carries a BTC reference price",
+                     '"btc": btc_price()' in _insp.getsource(_live.state), True))
+results.append(check("btc_price is cached, not fetched per request",
+                     "_btc_cache" in _insp.getsource(_live.btc_price), True))
+results.append(check("a failed BTC read keeps the last price",
+                     "except Exception" in _insp.getsource(_live.btc_price), True))
+
 print("28. An unprotected position is repaired, not just logged about")
 # SUI opened 2026-08-23 17:07 and sat with no exchange stop for 40 minutes: the venue
 # had not registered the position yet when _attach_stop read it back, so there was no

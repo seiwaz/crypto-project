@@ -780,3 +780,25 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 .num--down { color: var(--bad, #b91c1c); }
 
 .pill--on { background: var(--ok, #15803d); color: #fff; }
+
+/* BTCUSDT reference price in the header. Fixed-width digits so a changing price
+   does not shuffle the controls beside it on every poll. */
+.btcprice {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.btcprice__k {
+  font-size: .62rem;
+  letter-spacing: .04em;
+  color: var(--ink-muted);
+}
+.btcprice__v {
+  font-size: .95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-inline-size: 5.5rem;
+}
+
+.stats--hist { margin-block-end: .5rem; }
+.ltable td.num, .ltable td { font-variant-numeric: tabular-nums; }
