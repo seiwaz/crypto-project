@@ -4,10 +4,21 @@
   "atr_mult": 1.5,
   "scan_interval_minutes": 5,
   "demo": {
+    "enabled": false,
     "cycle_seconds": 30,
     "entry_interval_seconds": 300,
-    "time_stop_hours": 0.5,
     "maker_timeout_minutes": 2,
-    "maker_entry": true
-  }
+    "maker_entry": true,
+    "time_stop_hours": 0.3333,
+    "max_entry_drift_r": 0.3,
+    "live_trading": true,
+    "live_dry_run": false,
+    "live_cycle_seconds": 3,
+    "live_max_slots": 4,
+    "live_notional_multiple": 4.7,
+    "live_max_total_notional": 25.0,
+    "live_leverage": 5,
+    "live_max_leverage": 20
+  },
+  "min_score": 75.0
 }

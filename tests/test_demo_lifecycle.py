@@ -575,6 +575,21 @@ results.append(check("an unreadable balance falls back to the configured cap",
                      cap4, 25.0))
 results.append(check("and says why", "unreadable" in why4, True))
 
+# 85 was asked for but is unreachable here: max ever scored on Tabdeal is 79.0 and
+# nothing has passed 80, so an 85 floor would mean never trading. 75 is the venue
+# equivalent of "only the best" - the top 0.83% of all results.
+results.append(check("floor defaults to 75 (85 is unreachable on this venue)",
+                     demo.min_score(), 75.0))
+_below = {"coin": "LOWSCORE", "symbol": SYM, "exchange": "toobit", "side": "long",
+          "verdict": "TAKE", "score": 74.0, "side_tied": 0,
+          "fetched_at": "2099-01-01T00:00:00+00:00", "plan_json": None, "scan_id": 1}
+demo.store.latest_results = lambda ex: [_below]
+results.append(check("a TAKE scoring 74 is rejected",
+                     [r["coin"] for r in demo.qualifying_signals()], []))
+_below["score"] = 76.0
+results.append(check("and 76 is accepted",
+                     [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
+
 print("10. Correlated same-direction positions are capped")
 from agent import correlation
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)

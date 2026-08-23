@@ -31,15 +31,27 @@ from datetime import datetime, timezone
 
 PROFILES = {
     "scalp": {
-        "label": "Scalp (5-15m)",
-        "bias_tf": "1H", "decision_tf": "15m", "entry_tf": "5m", "atr_tf": "15m",
+        # Retimed 2026-08-22 for a 5-20 MINUTE hold.
+        #
+        # The decision timeframe was 15m, so a trade held 20 minutes acted on barely
+        # one fresh bar — the signal could not update inside the life of the position.
+        # Decision moves to 5m (four updates per hold) and entry to 1m.
+        #
+        # ATR deliberately STAYS on 15m. It sets the stop, and a 5m ATR would shrink
+        # the stop by roughly 40%, which raises cost_in_R by the same proportion
+        # (cost = 2 x fee / stop_pct). At 0.1% a side that is the difference between
+        # ~0.13R and ~0.23R of fees per trade. A faster signal is worth having; a
+        # tighter stop is not, on this venue.
+        "label": "Scalp (5-20m hold)",
+        "bias_tf": "1H", "decision_tf": "5m", "entry_tf": "1m", "atr_tf": "15m",
         "atr_mult": 1.5,
         "stop_pct_min": 0.0, "stop_pct_max": 1.5,
         "tp1_r": 1.0, "tp2_r": 2.0,
         "liq_buffer": 3.0,
         "cost_filter": 4.0,
         "default_win_rate": 0.50,
-        "time_stop_candles": 6,
+        # 4 x 5m decision candles = the 20-minute ceiling of the intended hold.
+        "time_stop_candles": 4,
         # tradability gates
         "atr_pct_min": 0.3, "atr_pct_max": 1.5,
         "max_spread_pct": 0.10, "liquidity_multiple": 3.0,

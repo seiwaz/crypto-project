@@ -555,6 +555,21 @@ def build_snapshot(entry: dict, profile: str, count: int = 300) -> tuple[dict, d
     atr_ind = tfs.get("atr", {}).get("indicators", {})
     dec_ind = tfs.get("decision", {}).get("indicators", {})
 
+    # قیمت لحظه‌ای — the live futures book, not the last candle close.
+    #
+    # The candle series is Tabdeal's general chart feed (spot), and its most recent
+    # close can be a whole bar old. Anchoring a plan's entry to it means the levels
+    # are computed against a price that no longer exists, which on a 5-20 minute hold
+    # is a meaningful part of the trade — and it is what the stale-signal drift guard
+    # kept having to reject. The order book mid from /r/fapi/v1/depth is the real,
+    # current price of the instrument actually being traded.
+    #
+    # Indicators still come from the candles: EMA/ATR/RSI need a series, and the two
+    # track within 0.02-0.17%. Only the ENTRY anchor moves to the live book.
+    live_px = mark_price(symbol)
+    candle_px = entry_ind.get("last_close") or atr_ind.get("last_close")
+    last_price = live_px or candle_px
+
     snap = {
         "symbol": symbol,
         "coin": entry["coin"],
@@ -563,7 +578,10 @@ def build_snapshot(entry: dict, profile: str, count: int = 300) -> tuple[dict, d
         "source": "tabdeal اهرم حرفه‌ای",
         "exchange": NAME,
         "timeframes": tfs,
-        "last_price": entry_ind.get("last_close") or atr_ind.get("last_close"),
+        "last_price": last_price,
+        "price_source": ("fapi orderbook mid (live)" if live_px
+                         else "last candle close (book unavailable)"),
+        "candle_close": candle_px,
         "atr_for_stop": atr_ind.get("atr14"),
         "atr_timeframe": roles["atr"],
         "swing_low": dec_ind.get("last_swing_low"),

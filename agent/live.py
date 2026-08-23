@@ -49,7 +49,10 @@ from . import config, demo, store, tabdeal, tabdeal_broker
 
 log = logging.getLogger("live")
 
-DEFAULT_CYCLE_SECONDS = 20
+# 3 seconds. The exit that matters most here is signal_exit, and on a 5-20 minute
+# hold a 20-second cadence could miss a fifth of the trade. The stop and TP live on
+# the exchange, so this cadence governs judgement, not safety.
+DEFAULT_CYCLE_SECONDS = 3
 DEFAULT_MAX_SLOTS = 4
 DEFAULT_ENTRY_INTERVAL = 300
 
@@ -72,6 +75,8 @@ def settings() -> dict:
         # ceiling is a blast-radius limit that does not grow with a winning streak.
         "max_total_notional": float(d.get("live_max_total_notional") or 25.0),
         "notional_multiple": float(d.get("live_notional_multiple") or 4.7),
+        # Ceiling on the leverage a signal may ask for.
+        "max_leverage": float(d.get("live_max_leverage") or 20.0),
         "dry_run": bool(d.get("live_dry_run", False)),
     }
 
@@ -430,10 +435,26 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
                 "target_notional": round(target_notional, 4)}
     risk_amount = qty * stop_distance          # 1R, a consequence of the real stop
 
-    # Leverage must exist for the symbol before it can be traded — an unconfigured
-    # market answers "TraderMarketConfig matching query does not exist".
+    # Leverage comes from the SIGNAL, not from a fixed setting.
+    #
+    # The planner derives it per coin from that coin's own stop distance and the
+    # profile's liquidation buffer — roughly 100 / (stop_pct x buffer) — so a wide
+    # stop gets low leverage and a tight one gets more, and liquidation stays the
+    # same multiple of the stop either way. Sending a blind 5x ignored all of that:
+    # `plan["sizing"]["leverage"]` was never read anywhere in this file.
+    #
+    # Clamped to the venue ceiling and to `live_max_leverage` so a bad plan cannot
+    # ask for something extreme.
+    plan_lev = ((plan.get("sizing") or {}).get("leverage"))
+    if isinstance(plan_lev, (int, float)) and plan_lev >= 1:
+        leverage = min(float(plan_lev), cfg["max_leverage"], 100.0)
+        lev_source = f"signal ({plan_lev:g}x)"
+    else:
+        leverage = cfg["leverage"]
+        lev_source = f"fallback ({leverage:g}x — plan carried no leverage)"
+    leverage = max(1.0, round(leverage))
     try:
-        broker.set_leverage(symbol, cfg["leverage"])
+        broker.set_leverage(symbol, leverage)
     except Exception as exc:                                   # noqa: BLE001
         log.warning("live: set_leverage %s failed: %s", symbol, exc)
 
@@ -448,13 +469,13 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
                 "qty": qty, "entry": mark, "would_send": order.get("params")}
     pid = store.live_open(
         coin=row["coin"], symbol=symbol, side=side, status="open", quantity=qty,
-        entry_price=mark, plan_entry=plan_entry, leverage=cfg["leverage"],
+        entry_price=mark, plan_entry=plan_entry, leverage=leverage,
         risk_amount=risk_amount, stop=stop, tp1=tp1, tp2=tp2,
         order_id=str(order.get("orderId") or ""), opened_at=_now_iso(),
         opened_ts=time.time(), scan_id=row.get("scan_id"), score=row.get("score"),
         plan_json=row.get("plan_json"))
-    store.live_event(pid, "open", f"MARKET {side} {qty:g} @~{mark:.8g}, order "
-                                  f"{order.get('orderId')}")
+    store.live_event(pid, "open", f"MARKET {side} {qty:g} @~{mark:.8g} at {leverage:g}x "
+                                  f"[{lev_source}], order {order.get('orderId')}")
     log.warning("live: OPENED %s %s qty=%g @~%.8g", symbol, side, qty, mark)
 
     # Both levels go to the exchange: the stop for the downside, and TP1 as the
@@ -463,7 +484,8 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
     # the mechanism.
     _attach_stop(broker, pid, symbol, stop, tp1)
     return {"action": "opened", "coin": row["coin"], "symbol": symbol,
-            "qty": qty, "entry": mark, "order": order.get("orderId")}
+            "qty": qty, "entry": mark, "leverage": leverage,
+            "leverage_source": lev_source, "order": order.get("orderId")}
 
 
 def _attach_stop(broker, pid: int, symbol: str, stop, tp=None) -> None:
