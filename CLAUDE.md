@@ -679,6 +679,33 @@ breaks signal generation outright) and Risk % (ignored while `demo.auto_slots` i
 on) are gone. The footer claimed "Read-only. This tool never places orders",
 which stopped being true when real money went live.
 
+## Why the balance fell — the decomposition, and the fix (2026-08-23)
+
+**Reconciled 41 closed trades against the venue: realised −0.662, of which
+−0.467 is round-trip FEES and only −0.195 is price.** Fees were **71% of the
+entire loss** — ~9% of a 5 USDT account paid in commission, because the engine
+took 41 trades in two days at 0.2% each. Trade *frequency* was the problem, not
+direction. By reason: `exchange_exit` −0.412 (n=7), `adverse_exit` −0.261 (n=7),
+`time_stop` −0.040 (n=4), `signal_exit` **+0.050 across 21 trades**.
+
+**An engine close must never reduce the balance.** PEPE closed as `profit_close`
+for **−0.00039**: the rule required gross > the round trip but measured gross at
+the **mark**, while the close is a **MARKET** order — the fill crossed the spread
+and landed under the bar it had just cleared (+0.01052 gross vs a 0.01091 round
+trip). The bar is now `round_trip × profit_close_fee_multiple` (**1.5**), leaving
+~0.1% of notional as slippage headroom against measured spreads of 0.05–0.13%.
+A cushion is not a proof, so a close that still settles ≤ 0 logs an **ERROR**
+naming the setting to raise — PEPE's −0.00039 vanished into the ledger and was
+only found by reconciling 41 trades by hand.
+
+**First result under the new rules (verified live):** 3 closes, net **+0.08487**,
+wallet 4.61662 → 4.70182. FLOKI **+1.288%** and SUI **+0.703%** were both closed
+by the *exchange take-profit*, not by the engine — the same FLOKI the old
+`adverse_exit` had closed at −0.013R earlier the same day, and roughly 10× what
+the old `signal_exit` banked (~+0.11R). Letting the venue's TP run the winner is
+where the profit came from. SHIB, held exactly 1.00h and in loss, was correctly
+left untouched.
+
 ## Real-money migration — the dossier that preceded going live
 
 The user has asked for everything to be prepared so a "migrate to real trading"
