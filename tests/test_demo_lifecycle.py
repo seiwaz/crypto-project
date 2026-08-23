@@ -630,6 +630,33 @@ results.append(check("sampling is thinned, not every cycle",
                      'cfg["history_interval_seconds"]' in _rs, True))
 results.append(check("a failed write cannot break management",
                      "except Exception" in _rs, True))
+# It read live.settings()["exchange"], which does not exist - a KeyError on every
+# call, swallowed at debug level, so the table stayed empty and nothing said why.
+results.append(check("the venue comes from demo.settings, which has one",
+                     'demo.settings()["exchange"]' in _rs, True))
+results.append(check("a swallowed failure still warns once",
+                     "_sample_warned" in _rs, True))
+# behavioural: an actual write must land, in this suite's own database
+_pid = store.live_open(coin="ZZZ", symbol="ZZZ_USDT", side="long", status="open",
+                       quantity=1.0, entry_price=100.0, opened_ts=1.0, opened_at="x")
+_live._last_sample.pop(_pid, None)
+_live._record_sample(dict([r for r in store.live_positions("open")
+                           if r["id"] == _pid][0]),
+                     _live.settings(), mark=101.0, upnl=1.0, qty=1.0,
+                     r_now=0.5, held_h=0.5)
+_got = store.live_samples(_pid)
+results.append(check("a sample actually lands in the table", len(_got), 1))
+results.append(check("net is gross minus the round trip",
+                     round(_got[0]["upnl_net"], 3), 0.798))
+results.append(check("thinning suppresses an immediate second write",
+                     (_live._record_sample(
+                         dict([r for r in store.live_positions("open")
+                               if r["id"] == _pid][0]), _live.settings(),
+                         mark=102.0, upnl=2.0, qty=1.0, r_now=1.0, held_h=0.6),
+                      len(store.live_samples(_pid)))[1], 1))
+store.live_close(_pid, exit_price=101.0, exit_reason="profit_close", realised_pnl=0.8)
+results.append(check("a closed position's samples prune",
+                     store.live_samples_prune(9e9), 1))
 results.append(check("it records the verdict it was judged against",
                      "verdict=scan.get" in _rs, True))
 results.append(check("history() exists for the dashboard", callable(_live.history), True))

@@ -602,6 +602,7 @@ def manage(broker=None) -> list[dict]:
 
 
 _last_sample: dict[int, float] = {}
+_sample_warned = False
 
 
 def _record_sample(row: dict, cfg: dict, *, mark, upnl, qty, r_now, held_h) -> None:
@@ -625,7 +626,11 @@ def _record_sample(row: dict, cfg: dict, *, mark, upnl, qty, r_now, held_h) -> N
         return
     _last_sample[pid] = now
     try:
-        scan = store.result_for(row["coin"], settings()["exchange"]) or {}
+        # demo.settings(), not settings(): the venue key lives on the demo config,
+        # and live.settings() has no "exchange". Reading it here raised KeyError on
+        # every single sample - the identical mistake that once aborted
+        # _profit_signal_check and left profitable live positions unmanaged.
+        scan = store.result_for(row["coin"], demo.settings()["exchange"]) or {}
         round_trip = qty * mark * (tabdeal.TAKER_FEE_PCT / 100.0) * 2
         store.live_sample_add(
             pid, ts=now,
@@ -635,7 +640,16 @@ def _record_sample(row: dict, cfg: dict, *, mark, upnl, qty, r_now, held_h) -> N
             held_h=round(float(held_h), 4),
             verdict=scan.get("verdict"), score=scan.get("score"))
     except Exception as exc:                                   # noqa: BLE001
-        log.debug("live: sample write failed for %s: %s", row.get("symbol"), exc)
+        # Warn, and only once per process. This was debug-level and a KeyError on
+        # every call was therefore invisible: the table stayed empty and nothing
+        # said why. A swallowed exception still has to announce itself.
+        global _sample_warned
+        if not _sample_warned:
+            _sample_warned = True
+            log.warning("live: position sampling is failing (%s: %s) - history will "
+                        "be empty until this is fixed", type(exc).__name__, exc)
+        else:
+            log.debug("live: sample write failed for %s: %s", row.get("symbol"), exc)
 
 
 def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
