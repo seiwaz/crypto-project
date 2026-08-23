@@ -201,17 +201,36 @@ class TabdealBroker:
         query = urllib.parse.urlencode(d)
         sig = hmac.new(self._secret.encode(), query.encode(),
                        hashlib.sha256).hexdigest()
-        req = urllib.request.Request(
-            f"{tabdeal.base_url()}{path}?{query}&signature={sig}",
-            headers={"X-MBX-APIKEY": self._key, "Accept": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-                return json.loads(resp.read().decode("utf-8") or "null")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:200]
-            raise BrokerError(f"HTTP {exc.code} on GET {path}: {detail}") from None
-        except Exception as exc:                                   # noqa: BLE001
-            raise BrokerError(f"GET {path} failed: {exc}") from None
+        # Retry 5xx/429, exactly as the market-data client does. Both Tabdeal hosts
+        # sit behind a CDN that returns intermittent 502 HTML pages, and these READS
+        # back positions(), reconcile() and settlement — a blip must not be allowed
+        # to look like "no positions" or "no fill". Writes still never retry.
+        last = None
+        for attempt in range(4):
+            d["timestamp"] = int(time.time() * 1000)      # fresh, or recvWindow trips
+            query = urllib.parse.urlencode(d)
+            sig = hmac.new(self._secret.encode(), query.encode(),
+                           hashlib.sha256).hexdigest()
+            req = urllib.request.Request(
+                f"{tabdeal.base_url()}{path}?{query}&signature={sig}",
+                headers={"X-MBX-APIKEY": self._key, "Accept": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                    return json.loads(resp.read().decode("utf-8") or "null")
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:200]
+                if (exc.code >= 500 or exc.code == 429) and attempt < 3:
+                    last = f"HTTP {exc.code}"
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise BrokerError(f"HTTP {exc.code} on GET {path}: "
+                                  f"{_brief(detail)}") from None
+            except Exception as exc:                               # noqa: BLE001
+                last = exc
+                if attempt < 3:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+        raise BrokerError(f"GET {path} failed after 4 attempts: {last}")
 
     # ---------------------------------------------------------------- writes
 
@@ -362,6 +381,14 @@ class TabdealBroker:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _brief(body: str) -> str:
+    """Never dump a CDN error page into a log line."""
+    t = (body or "").strip()
+    if t.startswith("<") or "<html" in t[:200].lower():
+        return "upstream returned an HTML error page (gateway/CDN), not JSON"
+    return t[:200]
 
 
 def _num(value) -> str | None:
