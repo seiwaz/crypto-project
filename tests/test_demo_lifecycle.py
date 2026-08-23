@@ -595,6 +595,17 @@ _below["score"] = 76.0
 results.append(check("and 76 is accepted",
                      [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
 
+print("25. Shorts can be switched off without deleting the short path")
+# 21,315 replayed signals: shorts net negative at every horizon and worsening with
+# time (-0.209% at 30m to -0.706% at 24h, n=9,741) while longs improve.
+_qs = _insp.getsource(demo.qualifying_signals)
+results.append(check("qualifying_signals consults the setting",
+                     "allow_shorts()" in _qs, True))
+results.append(check("only shorts are gated by it",
+                     'row.get("side") == "short"' in _qs, True))
+results.append(check("shorts are allowed by default",
+                     demo.allow_shorts(), True))
+
 print("24. Redundant direction checks cannot vote twice")
 # Measured over 1,331 historical evaluations: price-vs-EMA200 and EMA50-vs-EMA200 on
 # the bias TF agree 90.7% of the time, and price-vs-EMA50 and price-vs-VWAP on the

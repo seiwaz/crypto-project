@@ -71,6 +71,11 @@ MIN_SCORE = DEFAULT_MIN_SCORE
 DEFAULT_EXIT_SCORE_MARGIN = 10.0
 
 
+def allow_shorts() -> bool:
+    v = config.load_settings().get("allow_shorts")
+    return True if v is None else bool(v)
+
+
 def hold_score_floor() -> float:
     m = config.load_settings().get("exit_score_margin")
     return min_score() - float(m if m is not None else DEFAULT_EXIT_SCORE_MARGIN)
@@ -765,6 +770,16 @@ def qualifying_signals(held_coins: set[str] | None = None,
         # was enforced (2026-08-20). The flag already existed for the UI; it just
         # wasn't stopping anything from actually trading.
         if row.get("side_tied"):
+            continue
+        # Shorts, measured over 21,315 replayed signals across 33 coins and ~25 days
+        # (2026-08-23), were net negative at EVERY horizon and got monotonically
+        # worse with time: -0.209% at 30m to -0.706% at 24h, against longs going
+        # -0.172% to +1.392% over the same holds. n=9,741, so this is not thin.
+        #
+        # A setting rather than a deletion: that window is one regime and the market
+        # rose through it, so this is evidence that shorts do not work here and now,
+        # not a timeless result. Flip `allow_shorts` back to re-enable them.
+        if row.get("side") == "short" and not allow_shorts():
             continue
         # Reject a plan whose levels are geometrically impossible.
         #

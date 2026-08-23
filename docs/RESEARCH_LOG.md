@@ -842,3 +842,50 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 **Not the bug, recorded so it is not retried:** the ATR timeframe. See Round 15.
 
 Tests 24; 147/147.
+
+## Round 17 (2026-08-23) — the big replay corrects Round 16, and kills shorts
+
+**What was run.** `/tmp/replay2.py`: the real `skill.score_direction` over ~25 days
+of 15m history for all 33 Tabdeal coins, **21,315 signals**, measuring forward
+return at six horizons. Round 16's conclusions came from `/tmp/votes.py` — 8 coins,
+1,331 evaluations — and two of them do not survive the larger sample.
+
+**Results, net of the 0.200% round trip (win rate):**
+
+| | 30m | 60m | 2h | 4h | 8h | 24h |
+|---|---|---|---|---|---|---|
+| ALL (21,315) | −0.189% | −0.177% | −0.150% | −0.079% | +0.022% | +0.433% |
+| **long** (11,574) | −0.172% | −0.137% | −0.068% | **+0.086%** | **+0.348%** | **+1.392%** |
+| **short** (9,741) | −0.209% | −0.225% | −0.247% | −0.275% | −0.366% | **−0.706%** |
+| score ≥6 (14,549) | −0.182% | −0.169% | −0.134% | −0.047% | +0.088% | +0.598% |
+| score ≥7 (7,029) | −0.179% | −0.161% | −0.116% | −0.005% | +0.212% | +0.850% |
+| score ≥8 (1,461) | −0.160% | −0.134% | −0.069% | +0.122% | +0.438% | +1.292% |
+
+**Correction 1 — the ≥8-vote collapse does not replicate.** Round 16 reported
+signals with ≥8 of 9 votes winning 41% over 4h against 52% at 7 votes, from n=134,
+and used it to argue that near-unanimity means an extended move. At n=1,461, score
+≥8 is the **best** bucket at every horizon. The earlier figure was noise and should
+not have been cited as evidence.
+
+Round 16's redundancy fix itself still stands — the 90.7% and 87.7% pairwise
+agreements are direct measurements of the checks, independent of any outcome — but
+its outcome-based justification was wrong. Grouping duplicated checks is right
+because a vote count of correlated votes is not evidence, not because unanimity
+predicts badly.
+
+**Correction 2 — 4 hours is too short.** Round 16 set `time_stop_hours` to 4.0 on
+the small sample's +0.280%. The large sample puts 4h at −0.079% overall and +0.086%
+long-only: roughly breakeven. The edge clears the fee at **8h** and grows to 24h.
+
+**New finding — shorts are negative at every horizon and get worse with time**
+(−0.209% at 30m to −0.706% at 24h, n=9,741) while longs improve monotonically.
+This is a clean asymmetry on a large sample. Caveat worth keeping: the window is
+~25 days of one regime and the market rose through it, so this is evidence that
+shorts do not work *here and now*, not a timeless result. Implemented as a
+reversible `allow_shorts` setting rather than deleting the short path.
+
+**Changes.** `time_stop_hours` 4.0 → 8.0; `allow_shorts: false`.
+
+**Method note.** Round 16's sample was 6% the size of this one and drawn from 8
+coins. Both were "measured, not assumed", and the smaller one still misled on two
+of three conclusions. Sample size is part of the evidence, not a footnote.
