@@ -371,6 +371,38 @@ def mark_price(symbol: str) -> float | None:
         return None
 
 
+def exit_price(symbol: str, side: str) -> float | None:
+    """The price this side could actually CLOSE at — the touch, not the mid.
+
+    A long exits by selling into the best bid; a short by buying the best ask. Using
+    the mid to decide whether a position is worth banking overstates it by half the
+    spread, and on these books that is a large share of the whole round trip: WIF was
+    closed on 2026-08-23 with the mid implying 0.20115 and the fill landing at 0.2009,
+    a 0.125% gap against a cushion meant to absorb 0.1%. Three closes in a row
+    settled negative that way.
+
+    Falls back to the mid, then to None, so a caller can always tell "no idea" from a
+    number.
+    """
+    want_bid = (side or "long").lower() == "long"
+    try:
+        from . import tabdeal_ws                            # noqa: PLC0415
+        q = tabdeal_ws.FEED.quote(symbol)
+        if q:
+            return q[0] if want_bid else q[1]
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        ob = orderbook(symbol, 5)
+        if want_bid and ob["bids"]:
+            return ob["bids"][0][0]
+        if not want_bid and ob["asks"]:
+            return ob["asks"][0][0]
+    except TabdealError:
+        pass
+    return mark_price(symbol)
+
+
 def _ws_mark(symbol: str) -> float | None:
     """Pushed mid, if the feed has a fresh one. Never raises."""
     try:

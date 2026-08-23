@@ -546,7 +546,7 @@ results.append(check("a round-trip cost is computed",
 # The exit this gates is now profit_close (signal_exit was removed 2026-08-23 when
 # the engine was restricted to closing only a net-profitable position past its hour).
 results.append(check("the exit is gated on the round trip, not on upnl > 0",
-                     "round_trip_cost * cfg[" in _m1 and "upnl > close_bar" in _m1,
+                     "exit_cost * cfg[" in _m1 and "exit_upnl > close_bar" in _m1,
                      True))
 # `elif upnl > 0:` is the correct below-the-line branch; what must be gone is the
 # bare `if upnl > 0:` that used to trigger the exit itself.
@@ -611,7 +611,7 @@ print("26. The live engine closes only a net-profitable position past its hour")
 _mo2 = _insp.getsource(_live._manage_one)
 _mo2c = "\n".join(l for l in _mo2.splitlines() if not l.lstrip().startswith("#"))
 results.append(check("profit_close needs BOTH the hour and net profit",
-                     'held_h >= cfg["profit_close_after_h"] and upnl > close_bar'
+                     'held_h >= cfg["profit_close_after_h"] and exit_upnl > close_bar'
                      in _mo2c, True))
 results.append(check("net means past the round trip, not above entry",
                      "round_trip_cost = qty * mark" in _mo2c, True))
@@ -645,8 +645,52 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
 
-print("33. The websocket price feed accelerates marks and never gates them")
+print("34. Banking is decided on the exit-side price, not the mid")
 from agent import tabdeal_ws as _tws
+# Three closes in a row settled negative on 2026-08-23 while each cleared a 1.5x fee
+# bar, because the bar was tested against the MID while a long exits into the BID:
+#   NEAR gross 0.01543 vs bar 0.01508 -> -0.00501
+#   WIF  gross 0.01625 vs bar 0.01509 -> -0.00004   (mid implied 0.20115, filled 0.2009)
+_f34 = _tws.DepthFeed()
+_f34.track(["AAA_USDT"])
+_f34._absorb("aaausdt@depth@2000ms",
+             {"s": "AAAUSDT", "b": [["99.0", "5"]], "a": [["101.0", "5"]]})
+results.append(check("mid sits between the touches", _f34.mark("AAA_USDT"), 100.0))
+results.append(check("quote exposes both touches", _f34.quote("AAA_USDT"), (99.0, 101.0)))
+_saved34 = _tws.FEED
+try:
+    _tws.FEED = _f34
+    results.append(check("a long is valued at the bid it must sell into",
+                         _tab.exit_price("AAA_USDT", "long"), 99.0))
+    results.append(check("a short is valued at the ask it must buy",
+                         _tab.exit_price("AAA_USDT", "short"), 101.0))
+    results.append(check("the exit price is worse than the mid for a long",
+                         _tab.exit_price("AAA_USDT", "long") < _f34.mark("AAA_USDT"),
+                         True))
+    results.append(check("and worse than the mid for a short too",
+                         _tab.exit_price("AAA_USDT", "short") > _f34.mark("AAA_USDT"),
+                         True))
+    _f34._prices["AAA_USDT"] = (100.0, 99.0, 101.0, _time.time() - (_tws.MAX_AGE_S + 1))
+    results.append(check("a stale quote is withheld", _f34.quote("AAA_USDT"), None))
+finally:
+    _tws.FEED = _saved34
+_mo34 = _insp.getsource(_live._manage_one)
+_mo34c = "\n".join(l for l in _mo34.splitlines() if not l.lstrip().startswith("#"))
+results.append(check("the close test uses the exitable value",
+                     "exit_upnl > close_bar" in _mo34c, True))
+results.append(check("the bar is costed on the exit price too",
+                     "exit_cost = qty * exit_px" in _mo34c, True))
+# NB the leading space: "exit_upnl > close_bar" contains "upnl > close_bar" as a
+# substring, so a naive match passes against the very code it is meant to reject.
+results.append(check("the mid no longer decides the close",
+                     " upnl > close_bar" in _mo34c, False))
+# a crossed or absent book must not fabricate a price
+_f35 = _tws.DepthFeed(); _f35.track(["BBB_USDT"])
+_f35._absorb("bbbusdt@depth@2000ms",
+             {"s": "BBBUSDT", "b": [["101.0", "1"]], "a": [["99.0", "1"]]})
+results.append(check("a crossed book is rejected", _f35.quote("BBB_USDT"), None))
+
+print("33. The websocket price feed accelerates marks and never gates them")
 # The socket is strict and its convention is the OPPOSITE of REST's: REST needs the
 # underscore, the socket rejects it. BTC_USDT@depth came back INVALID_FORMAT while
 # btcusdt@depth@2000ms streamed a full 100-level snapshot.

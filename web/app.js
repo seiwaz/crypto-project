@@ -130,6 +130,28 @@ function num(value, opts = {}) {
   return el;
 }
 
+/* Every absolute time in this UI is shown at UTC+03:30.
+ *
+ * A fixed offset rather than the viewer's own locale or the Asia/Tehran zone: the
+ * operator reads these against the exchange and the server logs, so the clock has to
+ * be the same number wherever the page is opened, including from a machine set to
+ * another timezone. Iran has not observed DST since 2022, so +03:30 is the whole
+ * rule; if that ever changes this is the one place to fix. */
+const TZ_OFFSET_MIN = 3 * 60 + 30;
+const TZ_LABEL = 'UTC+3:30';
+
+function atLocal(iso, { withDate = true } = {}) {
+  if (!iso) return '—';
+  /* Server timestamps are UTC. Some carry an explicit offset, some are bare — treat
+   * a bare one as UTC rather than letting the browser read it as local time. */
+  const ms = Date.parse(iso.endsWith('Z') || /[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+  if (!Number.isFinite(ms)) return '—';
+  const d = new Date(ms + TZ_OFFSET_MIN * 60_000);
+  const p = (n) => String(n).padStart(2, '0');
+  const clock = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  return withDate ? `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${clock}` : clock;
+}
+
 function timeAgo(iso) {
   if (!iso) return t('card.noData');
   const then = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`);
@@ -1108,7 +1130,11 @@ function historySummary(closed) {
 function historyTable(closed) {
   if (!closed.length) return el('div', { class: 'empty', text: t('live.hist.none') });
   const cols = ['coin', 'side', 'entry', 'exit', 'pct', 'pnl', 'held', 'reason', 'closed'];
-  const head = el('tr', {}, cols.map((k) => el('th', { text: t(`live.col.${k}`) })));
+  const head = el('tr', {}, cols.map((k) => el('th', {
+    /* Label the clock column with its offset — an unlabelled time invites the reader
+     * to assume their own zone and misread every row by three and a half hours. */
+    text: k === 'closed' ? `${t('live.col.closed')} (${TZ_LABEL})` : t(`live.col.${k}`),
+  })));
   const rows = closed.map((r) => {
     const e = Number(r.entry_price), x = Number(r.exit_price);
     const sgn = r.side === 'short' ? -1 : 1;
@@ -1134,7 +1160,7 @@ function historyTable(closed) {
                         r.closed_at ? Date.parse(r.closed_at) / 1000 : undefined),
       }),
       el('td', { text: t(`demo.exit.${r.exit_reason}`) || r.exit_reason || '—' }),
-      el('td', { class: 'num', dir: 'ltr', text: (r.closed_at || '').replace('T', ' ').slice(5, 16) }),
+      el('td', { class: 'num', dir: 'ltr', text: atLocal(r.closed_at) }),
     ]);
   });
   return el('table', { class: 'ltable' }, [el('thead', {}, [head]), el('tbody', {}, rows)]);

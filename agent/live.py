@@ -807,30 +807,50 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     # Everything below the hour, and everything in loss at any hour, is left to the
     # exchange's own stop and take-profit. That is deliberate: the venue holds both
     # levels on the position itself, so they are honoured even if this process dies.
-    close_bar = round_trip_cost * cfg["profit_close_fee_multiple"]
-    if held_h >= cfg["profit_close_after_h"] and upnl > close_bar:
-        # Past the hour and genuinely in profit. Now the only question left is
+    # Value the position at what it would actually FETCH, not at the mid.
+    #
+    # A long exits by selling into the best bid, so testing the mid overstates the
+    # result by half the spread. On these books that is a large share of the entire
+    # round trip, and it produced three consecutive closes that settled negative on
+    # 2026-08-23 despite each clearing a 1.5x fee bar:
+    #
+    #     NEAR  gross 0.01543 vs bar 0.01508  -> settled -0.00501
+    #     WIF   gross 0.01625 vs bar 0.01509  -> settled -0.00004
+    #     POL                                 -> settled -0.09155
+    #
+    # WIF is the clearest: the mid implied a fill at 0.20115 and it filled at 0.2009,
+    # a 0.125% gap against a cushion sized for 0.1%. A bigger multiple would only be
+    # a better guess; pricing the exit side is the actual measurement, so the cushion
+    # no longer has to absorb the spread at all.
+    exit_px = tabdeal.exit_price(symbol, row["side"]) or mark
+    exit_upnl = ((exit_px - entry) * qty if row["side"] == "long"
+                 else (entry - exit_px) * qty)
+    exit_cost = qty * exit_px * (tabdeal.TAKER_FEE_PCT / 100.0) * 2
+    close_bar = exit_cost * cfg["profit_close_fee_multiple"]
+    if held_h >= cfg["profit_close_after_h"] and exit_upnl > close_bar:
+        # Past the hour and genuinely bankable. Now the only question left is
         # whether the signal still earns the risk of staying in.
         keep, why = _signal_supports_holding(row, cfg)
         if keep:
             return {"symbol": symbol, "action": "HOLD", "reason": "riding_signal",
                     "detail": why, "r": round(r_now, 3),
-                    "held_h": round(held_h, 2), "net": round(upnl - round_trip_cost, 8)}
+                    "held_h": round(held_h, 2),
+                    "net": round(exit_upnl - exit_cost, 8)}
 
         out = settle(broker, row, "profit_close", mark)
-        log.warning("live: %s profit_close after %.2fh at %.3fR (gross %.5f vs bar "
-                    "%.5f, net %s) - %s", symbol, held_h, r_now, upnl, close_bar,
-                    out["realised_pnl"], why)
+        log.warning("live: %s profit_close after %.2fh at %.3fR (exitable %.5f vs "
+                    "bar %.5f, mid-gross %.5f, net %s) - %s", symbol, held_h, r_now,
+                    exit_upnl, close_bar, upnl, out["realised_pnl"], why)
         # An engine-initiated close must never reduce the balance. The bar above is
         # measured at the mark and the close is a MARKET order, so slippage can still
         # in principle land it under water - if it ever does, say so loudly instead of
         # letting it disappear into the ledger the way PEPE's -0.00039 did.
         settled = out.get("realised_pnl")
         if settled is not None and float(settled) <= 0:
-            log.error("live: %s profit_close SETTLED NEGATIVE (%.6f) - the %.2fx fee "
-                      "cushion did not cover slippage; raise "
-                      "demo.profit_close_fee_multiple",
-                      symbol, float(settled), cfg["profit_close_fee_multiple"])
+            log.error("live: %s profit_close SETTLED NEGATIVE (%.6f) despite an "
+                      "exitable %.5f against a %.5f bar - the fill was worse than "
+                      "the touch it was priced at",
+                      symbol, float(settled), exit_upnl, close_bar)
         return {"symbol": symbol, "action": "CLOSE", "reason": "profit_close",
                 "held_h": round(held_h, 2), "r": round(r_now, 3),
                 "detail": why, **out}

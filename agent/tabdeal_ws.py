@@ -71,7 +71,8 @@ class DepthFeed:
     """Keeps the latest book mid per symbol, fed by a background websocket."""
 
     def __init__(self) -> None:
-        self._prices: dict[str, tuple[float, float]] = {}   # symbol -> (mid, ts)
+        # symbol -> (mid, bid, ask, ts)
+        self._prices: dict[str, tuple[float, float, float, float]] = {}
         self._wanted: set[str] = set()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -130,18 +131,31 @@ class DepthFeed:
 
     def mark(self, symbol: str) -> float | None:
         """Latest mid for `symbol`, or None if absent or stale."""
+        hit = self._fresh(symbol)
+        return hit[0] if hit else None
+
+    def quote(self, symbol: str) -> tuple[float, float] | None:
+        """Latest (best bid, best ask), or None if absent or stale.
+
+        The mid is what a position is *worth*; the touch is what it can be *closed*
+        at. Deciding to bank a profit on the mid overstates it by half the spread,
+        which on these books is a large fraction of the whole round trip.
+        """
+        hit = self._fresh(symbol)
+        return (hit[1], hit[2]) if hit else None
+
+    def _fresh(self, symbol: str):
         with self._lock:
             hit = self._prices.get(symbol)
         if not hit:
             return None
-        price, ts = hit
-        if time.time() - ts > MAX_AGE_S:
+        if time.time() - hit[-1] > MAX_AGE_S:
             return None
-        return price
+        return hit
 
     def status(self) -> dict:
         with self._lock:
-            ages = {s: round(time.time() - ts, 1) for s, (_, ts) in self._prices.items()}
+            ages = {s: round(time.time() - v[-1], 1) for s, v in self._prices.items()}
         return {
             "connected": self._connected,
             "tracking": sorted(self._wanted),
@@ -236,16 +250,16 @@ class DepthFeed:
         if not bids or not asks:
             return
         try:
-            mid = (float(bids[0][0]) + float(asks[0][0])) / 2.0
+            bid, ask = float(bids[0][0]), float(asks[0][0])
         except (TypeError, ValueError, IndexError):
             return
-        if mid <= 0:
+        if bid <= 0 or ask <= 0 or ask < bid:
             return
         symbol = self._symbol_for(stream, data)
         if not symbol:
             return
         with self._lock:
-            self._prices[symbol] = (mid, time.time())
+            self._prices[symbol] = ((bid + ask) / 2.0, bid, ask, time.time())
             self._msgs += 1
 
     def _symbol_for(self, stream: str | None, data: dict) -> str | None:
