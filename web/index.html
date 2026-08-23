@@ -88,7 +88,29 @@
   <div id="drawerBody"></div>
 </aside>
 
+<div id="bootFail" hidden>
+  <strong>The dashboard script did not finish loading.</strong>
+  <p>This is almost always a truncated download on the network path, not a server
+     fault — the page itself arrived fine. Reload; if it keeps happening on a Mac
+     behind a VPN, add a static route to the host.</p>
+  <button onclick="location.reload(true)">Reload</button>
+</div>
+
 <script src="./vendor/lightweight-charts.standalone.production.js"></script>
 <script src="./app.js"></script>
+<script>
+/* app.js is ~54 KB and some client paths truncate it (seen 2026-08-23: repeated
+ * fetches returning 0 / 22080 / 48954 of 54323 bytes from a Mac behind a VPN, while
+ * the same fetch on the server is byte-perfect every time). A truncated script is a
+ * parse error, and the page then renders blank behind a correct-looking HTTP 200 —
+ * which looks exactly like "the server is down" and is not. app.js sets this flag on
+ * its last line, so its absence means the file did not arrive whole. */
+setTimeout(function () {
+  if (!window.__screenerLoaded) {
+    var n = document.getElementById('bootFail');
+    if (n) n.hidden = false;
+  }
+}, 6000);
+</script>
 </body>
 </html>

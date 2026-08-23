@@ -808,3 +808,17 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
 .sltp__sl { color: var(--bad, #b91c1c); }
 .sltp__tp { color: var(--ok, #15803d); }
 .sltp__sep { color: var(--ink-muted); opacity: .6; }
+
+/* Shown only when app.js failed to arrive whole — see the boot check in index.html. */
+#bootFail {
+  margin: 2rem auto;
+  max-inline-size: 34rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--line, #d4d4d8);
+  border-radius: .5rem;
+  background: var(--surface, #fff);
+  color: var(--ink, #18181b);
+  font: 500 .9rem/1.5 system-ui, sans-serif;
+}
+#bootFail p { color: var(--ink-muted, #71717a); font-weight: 400; margin: .5rem 0 .8rem; }
+#bootFail button { padding: .4rem .9rem; cursor: pointer; }

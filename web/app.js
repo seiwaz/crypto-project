@@ -1342,3 +1342,7 @@ function wireControls() {
   if (state.data && state.data.scan && state.data.scan.running) startPolling();
   else state.pollTimer = setInterval(refresh, SCREENER_POLL_MS);
 })();
+
+/* Last line on purpose: index.html watches for this to tell a truncated download
+ * apart from a server outage. Anything added below it weakens that signal. */
+window.__screenerLoaded = true;
