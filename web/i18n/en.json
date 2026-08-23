@@ -226,5 +226,6 @@
   "demo.exit.gave_back": "Gave back",
   "demo.slot.counter_trend": "Against the BTC trend",
   "demo.exit.signal_exit": "Signal exit",
-  "demo.exit.unfilled": "Unfilled"
+  "demo.exit.unfilled": "Unfilled",
+  "demo.exit.adverse_exit": "Setup lapsed while down"
 }

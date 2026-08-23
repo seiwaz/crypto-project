@@ -69,6 +69,11 @@ def settings() -> dict:
                                       or DEFAULT_ENTRY_INTERVAL),
         "leverage": float(d.get("live_leverage") or 10.0),
         "time_stop_hours": float(d.get("time_stop_hours") or 0.5),
+        # How long a losing trade is given before a lapsed setup closes it. Not zero:
+        # a position needs a little room to breathe past entry noise before "the
+        # signal changed" means anything. Defaults to the time stop's own window.
+        "adverse_exit_after_h": float(d.get("adverse_exit_after_h")
+                                      or d.get("time_stop_hours") or 0.5),
         "max_entry_drift_r": float(d.get("max_entry_drift_r") or 0.3),
         # An absolute ceiling, and the multiple of live equity that normally binds.
         # The multiple is what keeps risk proportional as the account moves; the
@@ -643,8 +648,37 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
                               f"{round_trip_cost:.6f}; holding to the stop",
                     "r": round(r_now, 3)}
 
-    # Time stop: only for a trade that is going nowhere. A loser is left to its
-    # exchange stop, exactly as in the demo.
+    # Adverse exit: the setup has lapsed and the trade is DOWN.
+    #
+    # This branch did not exist, and its absence was the single largest source of
+    # loss in the account's first 23 live trades. A winner was checked against the
+    # latest verdict every cycle and closed the moment the setup lapsed; a loser was
+    # checked against nothing at all. Its only exit was the exchange stop.
+    #
+    # The asymmetry that produced: winners banked +0.11R (signal_exit fires as soon
+    # as profit clears the fee), losers realised the full -1.0R. Six stop-outs were
+    # 89% of all losses, at a MEDIAN hold of 548 minutes - nine hours, on a strategy
+    # whose intended hold is 5-20 minutes. Those positions were not being managed;
+    # they were being waited out.
+    #
+    # "The setup is no longer valid" is a reason to leave whether the trade is up or
+    # down. Holding a dead setup for nine hours to reach a stop that was sized for a
+    # signal that no longer exists is not risk management, it is hope. The exchange
+    # stop stays exactly where it is as the backstop - this only stops us waiting for
+    # it when we already know the reason for the trade is gone.
+    if upnl < 0 and held_h >= cfg["adverse_exit_after_h"]:
+        still, reason = demo._profit_signal_check(row)
+        if reason is not None and not still:
+            out = settle(broker, row, "adverse_exit", mark)
+            log.warning("live: %s adverse_exit at %.3fR after %.2fh (%s)",
+                        symbol, r_now, held_h, reason)
+            return {"symbol": symbol, "action": "CLOSE", "reason": "adverse_exit",
+                    "detail": reason, "r": round(r_now, 3),
+                    "held_h": round(held_h, 2), **out}
+
+    # Time stop: only for a trade that is going nowhere. A loser that still has a
+    # live setup is left to its exchange stop; one whose setup has lapsed was taken
+    # by the adverse exit above.
     floor = 0.5 * risk
     if held_h >= cfg["time_stop_hours"] and 0 <= upnl < floor:
         out = settle(broker, row, "time_stop", mark)

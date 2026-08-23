@@ -595,6 +595,22 @@ _below["score"] = 76.0
 results.append(check("and 76 is accepted",
                      [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
 
+print("22. A losing trade with a lapsed setup is closed, not waited out")
+# 23 live trades: winners banked +0.11R (signal_exit fires once profit clears the
+# fee), losers rode to the full -1.0R exchange stop because nothing ever checked
+# them. Six stop-outs were 89% of all loss, median hold 548 minutes.
+_mo = _insp.getsource(_live._manage_one)
+results.append(check("a losing position is signal-checked at all",
+                     "upnl < 0 and held_h >=" in _mo, True))
+results.append(check("it closes as adverse_exit",
+                     '"adverse_exit", mark' in _mo, True))
+results.append(check("only when the setup has actually lapsed",
+                     "reason is not None and not still" in _mo, True))
+results.append(check("adverse window is configurable",
+                     "adverse_exit_after_h" in _insp.getsource(_live.settings), True))
+results.append(check("the exchange stop is still the backstop",
+                     "time_stop_hours" in _mo, True))
+
 print("21. Entry fills every free slot in one pass")
 _lk = _insp.getsource(_live._try_open_locked)
 results.append(check("does not return on the first fill",

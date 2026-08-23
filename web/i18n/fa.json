@@ -246,5 +246,6 @@
   "demo.exit.gave_back": "بازپس‌دهی سود",
   "demo.slot.counter_trend": "خلاف روند بیت‌کوین",
   "demo.exit.signal_exit": "خروج با تغییر سیگنال",
-  "demo.exit.unfilled": "پر نشد"
+  "demo.exit.unfilled": "پر نشد",
+  "demo.exit.adverse_exit": "ابطال سیگنال در ضرر"
 }
