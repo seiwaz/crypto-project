@@ -92,6 +92,10 @@ def settings() -> dict:
         # cleared the fee by 0.0004 at the mark on 2026-08-23 and settled at -0.00039.
         # 1.5 leaves half a round trip of headroom for that slippage.
         "profit_close_fee_multiple": float(d.get("profit_close_fee_multiple") or 1.5),
+        # A winner past its hour is KEPT while the scan still says TAKE at or above
+        # this score, and banked otherwise. Higher than the abandon floor on purpose:
+        # "still worth riding" is a stronger claim than "not yet dead".
+        "hold_take_score": float(d.get("hold_take_score") or 70.0),
         # How often the monitoring loop writes a position sample. The loop itself runs
         # every `cycle_seconds`; recording at that rate would be ~1.2M rows a day for
         # four positions, so the series is thinned to something a chart still reads
@@ -237,6 +241,41 @@ def reconcile(broker=None) -> dict:
                                "amount": pos.get("positionAmt"),
                                "entry": pos.get("entryPrice")})
     return out
+
+
+def _signal_supports_holding(row: dict, cfg: dict) -> tuple[bool, str]:
+    """Is the signal still actively strong enough to keep riding a WINNER?
+
+    Deliberately a different question from `_profit_signal_check`, which asks "is the
+    thesis dead" and answers with a floor 10 points UNDER the entry bar. That floor is
+    the right test for whether to abandon a trade. It is the wrong test for whether to
+    bank one: a position can be well above the abandon floor and still be a signal
+    that is fading, and holding a fading winner past its hour just re-exposes a profit
+    that has already paid for its own fees.
+
+    Holding requires a positive, current reason: the verdict is TAKE, the score is at
+    or above `hold_take_score`, and the scan still favours the side we are on. Missing
+    or stale scan data is NOT a reason to hold - with the profit already clear of the
+    round trip, banking it is the safe side of that uncertainty.
+    """
+    try:
+        scan = store.result_for(row["coin"], demo.settings()["exchange"])
+    except Exception as exc:                                   # noqa: BLE001
+        return False, f"scan unreadable ({exc})"
+    if not scan:
+        return False, "no current scan"
+    verdict, score = scan.get("verdict"), scan.get("score")
+    side = (scan.get("side") or "").lower()
+    if verdict != "TAKE":
+        return False, f"verdict {verdict}, not TAKE"
+    if score is None or float(score) < cfg["hold_take_score"]:
+        return False, (f"score {score} below the {cfg['hold_take_score']:g} "
+                       f"hold-take bar")
+    if side and side != (row.get("side") or "").lower():
+        return False, f"scan now favours {side}"
+    if scan.get("side_tied"):
+        return False, "direction tied"
+    return True, f"TAKE {score}"
 
 
 def _venue_has_stop(pos: dict) -> bool:
@@ -770,11 +809,18 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
     # levels on the position itself, so they are honoured even if this process dies.
     close_bar = round_trip_cost * cfg["profit_close_fee_multiple"]
     if held_h >= cfg["profit_close_after_h"] and upnl > close_bar:
-        still, reason = demo._profit_signal_check(row)
+        # Past the hour and genuinely in profit. Now the only question left is
+        # whether the signal still earns the risk of staying in.
+        keep, why = _signal_supports_holding(row, cfg)
+        if keep:
+            return {"symbol": symbol, "action": "HOLD", "reason": "riding_signal",
+                    "detail": why, "r": round(r_now, 3),
+                    "held_h": round(held_h, 2), "net": round(upnl - round_trip_cost, 8)}
+
         out = settle(broker, row, "profit_close", mark)
         log.warning("live: %s profit_close after %.2fh at %.3fR (gross %.5f vs bar "
-                    "%.5f, net %s, setup %s)", symbol, held_h, r_now, upnl, close_bar,
-                    out["realised_pnl"], "intact" if still else (reason or "lapsed"))
+                    "%.5f, net %s) - %s", symbol, held_h, r_now, upnl, close_bar,
+                    out["realised_pnl"], why)
         # An engine-initiated close must never reduce the balance. The bar above is
         # measured at the mark and the close is a MARKET order, so slippage can still
         # in principle land it under water - if it ever does, say so loudly instead of
@@ -787,8 +833,7 @@ def _manage_one(broker, row: dict, pos: dict, cfg: dict) -> dict:
                       symbol, float(settled), cfg["profit_close_fee_multiple"])
         return {"symbol": symbol, "action": "CLOSE", "reason": "profit_close",
                 "held_h": round(held_h, 2), "r": round(r_now, 3),
-                "detail": ("setup intact" if still else (reason or "setup lapsed")),
-                **out}
+                "detail": why, **out}
 
     # Adverse exit: the setup has lapsed and the trade is DOWN.
     #

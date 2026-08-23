@@ -644,6 +644,56 @@ results.append(check("PEPE's +0.01052 gross would NOT clear the new bar",
 results.append(check("but it did clear the old 1.0x bar (which is why it lost)",
                      0.01052 > _rt * 1.0, False))
 
+print("31. A profitable position past its hour is KEPT while the signal is green")
+# Rule: >=1h AND net profitable -> hold if the scan still says TAKE at >= 70 on our
+# side, close otherwise. Letting a live signal run is what produced the only
+# profitable closes so far: FLOKI +1.288% and SUI +0.703% both reached the exchange
+# TP because nothing cut them at the hour.
+_cfgh = _live.settings()
+results.append(check("hold-take bar defaults to 70", _cfgh["hold_take_score"], 70.0))
+results.append(check("it is stricter than the abandon floor",
+                     _cfgh["hold_take_score"] > demo.hold_score_floor(), True))
+
+_saved = _live.store.result_for
+def _stub(verdict, score, side="long", tied=0):
+    return lambda coin, exch: {"verdict": verdict, "score": score,
+                               "side": side, "side_tied": tied}
+_row = {"coin": "ZZZ", "side": "long"}
+try:
+    _live.store.result_for = _stub("TAKE", 82.0)
+    results.append(check("green and strong -> keep",
+                         _live._signal_supports_holding(_row, _cfgh)[0], True))
+    _live.store.result_for = _stub("TAKE", 70.0)
+    results.append(check("exactly at the bar -> keep",
+                         _live._signal_supports_holding(_row, _cfgh)[0], True))
+    _live.store.result_for = _stub("TAKE", 69.9)
+    results.append(check("green but below 70 -> close",
+                         _live._signal_supports_holding(_row, _cfgh)[0], False))
+    _live.store.result_for = _stub("WATCH", 88.0)
+    results.append(check("not green, however high the score -> close",
+                         _live._signal_supports_holding(_row, _cfgh)[0], False))
+    _live.store.result_for = _stub("SKIP", 81.0)
+    results.append(check("SKIP at 81 -> close (the real ICP case)",
+                         _live._signal_supports_holding(_row, _cfgh)[0], False))
+    _live.store.result_for = _stub("TAKE", 90.0, side="short")
+    results.append(check("green but the scan flipped side -> close",
+                         _live._signal_supports_holding(_row, _cfgh)[0], False))
+    _live.store.result_for = _stub("TAKE", 90.0, tied=1)
+    results.append(check("green but direction tied -> close",
+                         _live._signal_supports_holding(_row, _cfgh)[0], False))
+    _live.store.result_for = lambda coin, exch: None
+    results.append(check("no scan data -> close, do not hold on uncertainty",
+                         _live._signal_supports_holding(_row, _cfgh)[0], False))
+finally:
+    _live.store.result_for = _saved
+
+_mo3 = _insp.getsource(_live._manage_one)
+results.append(check("the gate runs only inside the profitable-past-the-hour branch",
+                     _mo3.index("_signal_supports_holding")
+                     > _mo3.index("upnl > close_bar"), True))
+results.append(check("holding reports itself, not silence",
+                     '"reason": "riding_signal"' in _mo3, True))
+
 print("30. P&L is computed server-side, gross and net, against a live mark")
 # The browser derived P&L from the sampled history, thinned to 15s while the tab
 # refreshes every 3s, and showed only net - so it lagged the venue and could never
