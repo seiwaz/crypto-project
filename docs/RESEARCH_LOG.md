@@ -771,3 +771,74 @@ fee: the one-day replay of 2,885 signals gave fwd30 **+0.105%** and fwd60
 **+0.221%** against a round trip of **0.200%**. At a 30-minute hold the strategy
 does not clear its own costs even when the signal is right. This fix removes an
 unforced 1:9 asymmetry; it does not manufacture edge. See the Tabdeal fee blocker.
+
+## Round 16 (2026-08-23) — the direction score counted the same fact twice
+
+**Issue.** User: "check signaling it may work bad, do not use only skill, research
+about signalling, so skill may be incorrect." The direction score is a vote count
+over 9 checks, and a vote count is only evidence if the votes differ.
+
+**Research.** Multicollinearity in technical analysis — "the unknowing use of the
+same type of information more than once" — is a documented failure mode, and
+overlapping indicators "create a false sense of confirmation"
+([StockCharts](https://chartschool.stockcharts.com/table-of-contents/overview/multicollinearity),
+[Earn2Trade](https://www.earn2trade.com/blog/avoiding-indicator-overlap/),
+[LuxAlgo](https://www.luxalgo.com/blog/common-mistakes-traders-using-indicators/)).
+The prescription is one indicator each for trend, momentum and volatility, not
+several of the same type.
+
+**Measurement** (`/tmp/votes.py`, 1,331 evaluations, 8 coins, real
+`skill.score_direction`, votes recorded per check):
+
+Mean pairwise agreement 60.5% (50% = independent). Two pairs are near-duplicates:
+
+| pair | agreement |
+|---|---|
+| price vs EMA200 (bias) ↔ EMA50 vs EMA200 (bias) | **90.7%** |
+| price vs EMA50 (decision) ↔ price vs session VWAP | **87.7%** |
+
+Both pairs ask "is price above its recent average", twice.
+
+**Hypothesis rejected along the way:** I expected near-unanimity to be the norm,
+from a live scan showing 33/33 coins long. It is not — unanimous votes are 11.1%
+of cases and ≥80% one-sided 38.5%. That snapshot was a strongly trending moment,
+not the general case.
+
+**Conviction is not monotonic** — this is the actionable part:
+
+| votes | n | mean 4h | net of 0.2% | win |
+|---|---|---|---|---|
+| ≥5 | 1153 | +0.480% | +0.280% | 51% |
+| ≥6 | 883 | +0.517% | +0.317% | 53% |
+| ≥7 | 486 | +0.568% | +0.368% | 52% |
+| **≥8** | **134** | **+0.219%** | **+0.019%** | **41%** |
+
+A near-unanimous signal is *worse* than a 7-of-9. Round 10 found the same shape
+independently (the 80-89 score band underperformed 70-79). Double-counting trend
+inflates the score hardest in a trending market — i.e. when the move is already
+extended.
+
+**Change.** Checks now carry a `family`; a family shares one vote's weight,
+split among its members. No check is dropped — all stay visible with their own
+reasoning. `direction_ratio` (35 of the 100 score points) is now honest.
+
+**Two calibration traps, both caught by testing against live data before deploy:**
+- Collapsing a family to its *majority* makes it abstain when members disagree.
+  That deflated typical counts to 3-2 of 6 against a threshold of 4 and would have
+  stopped signal generation outright. Fractional weighting keeps the granularity.
+- `DIRECTION_MARGIN` was calibrated for integer votes out of 9. A typical
+  4.00-3.00 weighted split is a margin of exactly 1.00, which the unscaled `> 1`
+  test reads as TIED — almost every trade blocked. Both the vote threshold and the
+  tie margin now rescale with the denominator.
+
+**Verified on the full 33-coin watchlist:** 29 tradable, 4 tied, **22 long / 7
+short** — against 33/33 long before. Part of the long bias was this double count.
+
+**Also this round.** Hold extended from 20 minutes to 4 hours
+(`time_stop_hours` 0.3333 → 4.0, `adverse_exit_after_h` 1.0), on the same
+measurement: the filter nets +0.28% to +0.37% at 4h and is *negative* at 30
+minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
+
+**Not the bug, recorded so it is not retried:** the ATR timeframe. See Round 15.
+
+Tests 24; 147/147.
