@@ -624,6 +624,61 @@ At 0.1% a side the round trip is 0.2% of notional, and the filter only clears it
 at an 8h+ hold. Nothing here manufactures edge; it removes unforced losses. Judge
 the 8h long-only configuration on its own sample before adding size.
 
+## 2026-08-23 (later) — exits restricted, history recorded, UI rebuilt
+
+**The live engine now takes exactly ONE exit, at the operator's instruction:**
+held **>= 1 hour** AND **net profitable after the round trip**
+(`profit_close_after_h: 1.0`). Everything else belongs to the exchange's own stop
+and take-profit, which sit on the position at the venue and survive this process
+dying. Three exits were removed to make that true:
+- `signal_exit` banked a winner as soon as profit cleared the fee — median hold
+  **11 minutes** for +0.230% gross (~+0.11R) while losers ran the full −1.0R.
+- `time_stop` fired on `0 <= upnl < floor`, a range that includes a position in
+  profit but *below* the round trip, so it booked a certain loss.
+- `adverse_exit` is **off** (`adverse_exit_enabled: false`) — "do not touch
+  positions in loss". Kept behind a flag, not deleted, because the measurement
+  behind it stands (six stop-outs = 89% of all loss, median hold 548 min) and
+  turning it off restores that exposure. **The case for switching it off is
+  FLOKI:** entry 0.00002693 → exit 0.00002692, a one-tick −0.0353% move that
+  realised −0.01297 because the 0.01094 round trip was **85% of the loss**.
+
+**Position history is now recorded** — `live_samples` table, written by the 3s
+monitoring loop, thinned to one point per 15s, pruned after 14 days. Each row:
+mark, gross and net unrealised, R, hold, and *the verdict and score the engine
+was judging it against at that instant*. Closed trades store only endpoints,
+which is why every post-mortem so far had to reconstruct the middle from exchange
+candles — that shows what the market did, not what the engine saw.
+Read it at `GET /api/live/history`.
+
+**Two bugs in that work, both found on the server, not locally:**
+1. `_record_sample` read `live.settings()["exchange"]` — that key is on
+   `demo.settings()`. KeyError on *every* call, and the `except` was `log.debug`,
+   so the table stayed empty and nothing said why. Identical to the earlier
+   `_profit_signal_check` KeyError. It now warns once per process.
+2. `/api/live` and `/api/live/history` were under `_api_post`, so the dashboard's
+   GET got "unknown endpoint". Both are read-only and now sit in `_api_get`.
+
+**A real position ran unprotected for 40 minutes.** SUI opened 17:07 local with
+no exchange stop: `_attach_stop` reads the position back for its `positionId`,
+the venue had not registered it yet, and the failure was logged once and
+**abandoned** — even though reconcile learned the id seconds later. FLOKI, opened
+one second earlier in the same batch, was fine. Filling several slots per scan
+makes that race *more* likely. `reconcile()` now checks every open position for a
+venue stop each cycle and re-attaches a missing one, reading it back before
+believing it. `_venue_has_stop()` handles `None`, `""` and the string `"0"` —
+Tabdeal reports an absent level all three ways depending on endpoint.
+
+**Web UI:** the demo tab is replaced by a live Tabdeal positions tab (5s refresh)
+with one line per position on a shared chart. The chart plots **percent from each
+position's own entry**, not raw price — FLOKI trades near 0.000027 and BTC near
+77,000, so on a shared price axis every line but the largest collapses onto the
+baseline — and shades the 0.2% round-trip band. Header stripped to controls that
+do something here: the exchange selector (venue is fixed to Tabdeal and it only
+listed Toobit/Nobitex), Capital (planner-only; setting it to the real balance
+breaks signal generation outright) and Risk % (ignored while `demo.auto_slots` is
+on) are gone. The footer claimed "Read-only. This tool never places orders",
+which stopped being true when real money went live.
+
 ## Real-money migration — the dossier that preceded going live
 
 The user has asked for everything to be prepared so a "migrate to real trading"
