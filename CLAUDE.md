@@ -763,6 +763,50 @@ locked at TP1, time stop at 6 candles) are **not** what runs. Tabdeal supports
 neither `reduceOnly` nor a partial close, so TP1 is a full close and there is no
 TP2. Keep that table in step with `agent/live.py`.
 
+## Manual close, and a refresh rate that is a measurement (2026-08-23)
+
+**"Close position is not working" was two gaps, neither of them the close path.**
+The engine's exits were fine — SUI closed `profit_close` **+0.01255** minutes before
+the report, settled against the venue's own fill. What was missing:
+
+1. **No manual close existed.** The only control was `POST /api/live/flatten`, the
+   kill switch, which closes the entire book. Added `POST /api/live/close` (body
+   `{"symbol": …}`) and a per-row **Close** button. It goes through `settle()`, so
+   price and net come back from the venue, and it asks none of `_manage_one`'s
+   questions — the operator has decided.
+2. **A held position gave no reason for being open.** TAO at 1h10m and **+0.03349
+   net** was being kept as `riding_signal` (scan still TAKE 73.9, above the 70 hold
+   score) and the board said nothing, which reads exactly like a broken close. The
+   row now carries a `riding signal` badge, from `live.last_decisions()` reading the
+   last cycle's own record.
+
+**`settle()` is now serialized and idempotent.** Two callers can reach a close for
+one row — the 3s manage loop and the button. A second close is not a harmless retry:
+the venue DELETE fails while `live_close` records the realised PnL again, which is
+how the DB stops matching the account. The row is re-read for `status='open'` inside
+the lock.
+
+**Watch what the hold rule costs.** TAO was +0.03349 net while `riding_signal` held
+it; forty minutes later the same position was **−0.00142**. Holding a green signal
+past the bar is the user's own rule and it is what let FLOKI reach +1.288%, but it
+gives back real banked profit when the signal fades slower than the price. That
+trade-off is the reason the Close button exists.
+
+**The 3-second refresh was really 4-5 seconds.** `/api/live` made SIX signed venue
+calls per request — balance, positions, `account_equity` (balance again),
+`total_notional` (positions again) and `notional_cap` **twice** (a balance each) —
+and answered in 3.8-4.1s, while the poll skips a request already in flight. The
+engine already reads both every cycle, so `reconcile()`/`cycle()` now populate a
+shared snapshot (`venue_snapshot`, `VENUE_CACHE_MAX_AGE_S = 12`) and `state()`
+derives equity, cap and notional from that one read. **Measured on the server:
+3.8s → 14ms.** Marks are deliberately *not* cached — they come from the websocket per
+request, so P/L stays as live as the socket. `/api/live/history` was **198KB every
+3s**; thinned to 120 points per position and polled every 15s (its samples are only
+written every 15s), now 93KB. The board displays the achieved interval and latency,
+so the rate is readable rather than inferred. Closed history shows 10 rows with a
+**Show more** button; the page size lives in `state`, not the DOM, or the 3s
+re-render collapses it under the reader.
+
 ## Websocket price feed, and what Tabdeal actually publishes (2026-08-23)
 
 **Marks now come from Tabdeal's pushed order book.** `agent/tabdeal_ws.py` keeps one
