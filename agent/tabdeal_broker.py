@@ -64,7 +64,21 @@ log = logging.getLogger(__name__)
 # nonsense quantity, this is what stops it reaching the exchange.
 DEFAULT_MAX_ORDER_NOTIONAL = 200.0
 
-RECV_WINDOW_MS = 5000
+# How late a signed request may arrive and still be honoured.
+#
+# 5000 was failing about 1.4 times an hour with `401 {"code":1101,"msg":"Invalid
+# timestamp."}`, and it is NOT our clock: chrony has this box 0.6ms off NTP, and
+# /r/fapi/v1/time puts Tabdeal's own clock within 80ms of ours. The request is simply
+# sitting in transit for over five seconds now and then — the same CDN in front of
+# both hosts that already returns intermittent 502 HTML pages. Each failure aborted a
+# whole engine cycle.
+#
+# 20000 absorbs a multi-second stall with room to spare. Probed live: the venue takes
+# up to 60000 and rejects 120000 with a distinct `1102 Invalid receive window`, so
+# this is well inside what it allows. Deliberately not the maximum — the window is
+# also the replay window for a captured signed request, and there is no reason to
+# widen it past the stall being fixed.
+RECV_WINDOW_MS = 20000
 _TIMEOUT = 20
 
 
@@ -219,7 +233,14 @@ class TabdealBroker:
                     return json.loads(resp.read().decode("utf-8") or "null")
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")[:200]
-                if (exc.code >= 500 or exc.code == 429) and attempt < 3:
+                # `1101 Invalid timestamp` is retryable HERE and only here: each
+                # attempt re-stamps `timestamp` above, so a retry is a genuinely new
+                # request rather than a replay of a stale one. Left unhandled it
+                # aborted the cycle that was reading positions — which is the read
+                # every close and every stop repair depends on. Writes still never
+                # retry: a timeout there may mean the order landed.
+                stale = exc.code == 401 and "1101" in detail
+                if (exc.code >= 500 or exc.code == 429 or stale) and attempt < 3:
                     last = f"HTTP {exc.code}"
                     time.sleep(1.5 * (attempt + 1))
                     continue

@@ -1278,6 +1278,26 @@ results.append(check("stays in order",
 results.append(check("a short series is untouched", _lv._thin(_pts[:10], 240), _pts[:10]))
 _lv._venue_cache.update(ts=0.0, bal=None, positions=None)
 
+print("35. A late signed request does not abort the engine's cycle")
+# 401 {"code":1101,"msg":"Invalid timestamp."} was firing ~1.4x/hour and killing the
+# whole cycle - including the position read that every close and stop repair needs.
+# Not our clock: chrony is 0.6ms off NTP and the venue's own /time is within 80ms.
+from agent import tabdeal_broker as _tbk
+results.append(check("recvWindow is wide enough for a CDN stall",
+                     _tbk.RECV_WINDOW_MS, 20000))
+# Probed live: the venue accepts up to 60000 and answers 120000 with 1102.
+results.append(check("and inside what the venue accepts",
+                     _tbk.RECV_WINDOW_MS <= 60000, True))
+_get_src = _insp.getsource(_tbk.TabdealBroker._get_signed)
+results.append(check("a stale-timestamp READ retries", '"1101" in detail' in _get_src, True))
+results.append(check("each retry re-stamps the timestamp",
+                     _get_src.count('d["timestamp"] = int(time.time() * 1000)') >= 1, True))
+# Writes must NOT inherit this. A timeout on an order may mean it landed, and a blind
+# retry turns one position into two.
+_send_src = _insp.getsource(_tbk.TabdealBroker._send)
+results.append(check("writes still never retry",
+                     "1101" not in _send_src and "for attempt" not in _send_src, True))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
