@@ -493,8 +493,13 @@ print("17. Entry is triggered by a new completed scan, not a blind timer")
 _sl = _insp.getsource(_live.scheduler_loop)
 results.append(check("loop tracks the last scan it acted on",
                      "last_scan_seen" in _sl, True))
-results.append(check("entry requires a fresh scan", "fresh_scan" in _sl, True))
-results.append(check("interval is kept only as a floor", "spaced" in _sl, True))
+results.append(check("entry requires a fresh scan",
+                     "scan_id != last_scan_seen" in _sl, True))
+# The interval floor on TOP of the scan trigger was removed 2026-08-23: it made the
+# engine skip a whole scan whenever an entry landed mid-cycle, leaving XRP at 80.8
+# unacted on with three slots free. The scan cadence is the rate limiter.
+results.append(check("no redundant interval floor gates the scan trigger",
+                     "spaced" not in _sl, True))
 results.append(check("every attempt is logged, not just fills",
                      "live entry attempt" in _sl, True))
 results.append(check("only COMPLETED scans count",
@@ -589,6 +594,19 @@ results.append(check("a TAKE scoring 74 is rejected",
 _below["score"] = 76.0
 results.append(check("and 76 is accepted",
                      [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
+
+print("21. Entry fills every free slot in one pass")
+_lk = _insp.getsource(_live._try_open_locked)
+results.append(check("does not return on the first fill",
+                     "opened.append(res)" in _lk, True))
+results.append(check("stops at the slot limit", "if slots_free <= 0:" in _lk, True))
+results.append(check("stops at the notional cap", "if notional_now >= cap:" in _lk, True))
+results.append(check("tracks notional as it fills",
+                     "notional_now += res.get" in _lk, True))
+results.append(check("reports how many it opened", '"count": len(opened)' in _lk, True))
+_sl2 = _insp.getsource(_live.scheduler_loop)
+results.append(check("a fresh scan alone triggers entry",
+                     "spaced" not in _sl2, True))
 
 print("10. Correlated same-direction positions are capped")
 from agent import correlation

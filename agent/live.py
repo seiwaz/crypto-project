@@ -354,9 +354,13 @@ def _try_open_locked(broker, cfg: dict) -> dict:
 
     # Pass our own book: the paper account's positions must not gate the live one.
     held_coins = {r["coin"] for r in store.live_positions("pending", "open")}
-    errors = []
+    errors, opened = [], []
     for row in demo.qualifying_signals(held_coins=held_coins,
                                        closed_times=store.live_last_close_times()):
+        if slots_free <= 0:
+            break
+        if notional_now >= cap:
+            break
         if row["symbol"] in held:
             continue
         # Re-read our book right before committing: the venue is authoritative and a
@@ -364,15 +368,31 @@ def _try_open_locked(broker, cfg: dict) -> dict:
         if row["coin"] in {r["coin"] for r in store.live_positions("pending", "open")}:
             continue
         try:
-            return _enter(broker, row, cfg, notional_now)
+            res = _enter(broker, row, cfg, notional_now)
         except Exception as exc:                               # noqa: BLE001
             log.warning("live: %s entry failed: %s", row["coin"], exc)
             errors.append({"coin": row["coin"], "error": str(exc)[:200]})
             continue
-    # "no_signal" must mean there was nothing to take, never "everything I tried
-    # threw". An UnboundLocalError in _enter was reported as no_signal for hours
-    # while the engine was in fact incapable of opening anything — the distinction
-    # is the difference between a quiet market and a broken engine.
+        if res.get("action") != "opened":
+            # declined for a per-signal reason (stale, inverted, rounds to zero) —
+            # keep going, the next candidate may be fine
+            errors.append(res)
+            continue
+        # Fill every free slot this pass, not just one.
+        #
+        # It used to `return` on the first fill, so one slot opened per completed
+        # scan. Scans are ~5-6 minutes apart, so a four-slot board took twenty
+        # minutes to fill — longer than the entire 5-20 minute hold it was filling
+        # for, and by then the other signals had gone stale. Seen live with XRP 80.8,
+        # AAVE 76.9 and SHIB 75.2 all qualifying and three slots free.
+        opened.append(res)
+        held.add(row["symbol"])
+        slots_free -= 1
+        notional_now += res.get("qty", 0) * res.get("entry", 0)
+
+    if opened:
+        return {"action": "opened", "count": len(opened), "positions": opened,
+                "declined": errors or None}
     if errors:
         return {"action": "none", "reason": "all_entries_failed", "errors": errors}
     return {"action": "none", "reason": "no_signal"}
@@ -705,9 +725,12 @@ def scheduler_loop(stop_event) -> None:
 
                 scan_id = _latest_scan_id()
                 now = time.time()
-                fresh_scan = scan_id is not None and scan_id != last_scan_seen
-                spaced = now - last_entry >= cfg["entry_interval_seconds"]
-                if fresh_scan and (spaced or last_entry == 0.0):
+                # A new completed scan IS the rate limiter — scans are minutes apart
+                # and each one is a fresh candidate set. The extra `entry_interval`
+                # floor on top of that just made the engine skip whole scans whenever
+                # an entry happened to land mid-cycle, which is how an 80.8-scoring
+                # XRP sat unacted on with three slots free.
+                if scan_id is not None and scan_id != last_scan_seen:
                     last_scan_seen, last_entry = scan_id, now
                     opened = try_open()
                     # Log every outcome, not just a fill. A silent non-entry is what
