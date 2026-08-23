@@ -698,3 +698,76 @@ mark-to-market PnL would be misleading) that wasn't part of what broke here.
 **Tested:** added test 9c to `tests/test_demo_lifecycle.py` — a coin with a pending
 (not yet open) order is correctly excluded from `qualifying_signals()`. 42/42 checks
 passing (40 prior + 2 new, since 9c has two assertions).
+
+## Round 15 (2026-08-23) — why the live account loses: the exits are asymmetric
+
+**Issue.** 23 closed live Tabdeal trades, net **−0.544 USDT** on a ~5.3 USDT account
+(−10%). User asked why the loss rate is so high, and whether the skill is at fault.
+
+**Evidence.** Grouped by exit reason:
+
+| exit_reason | n | median hold | mean move | sum net | stop dist |
+|---|---|---|---|---|---|
+| exchange_exit (stop fired) | 6 | **548 min** | −1.136% | **−0.482** | 1.99% |
+| signal_exit | 13 | 11 min | +0.230% | −0.029 | 2.06% |
+| time_stop | 3 | 33 min | +0.050% | −0.032 | 2.42% |
+
+Six stop-outs are **89% of all loss**, at a median hold of nine hours on a strategy
+whose intended hold is 5–20 minutes. **TP1 never fired once in 23 trades.**
+
+Two hypotheses tested and **rejected**:
+- *Chasing extended moves* (the Round 10 suspicion). Pre-entry run-up is
+  indistinguishable between winners and losers: 30m −0.118% vs +0.008%, 60m −0.015%
+  vs −0.092%. Not chasing.
+- *Wrong-way direction.* The market was rising throughout — 0 of 7 majors falling
+  over 60m while all three open longs were red. Direction was right.
+
+**Root cause.** `_manage_one` checks a *winner* against the latest verdict every
+cycle and closes it the moment the setup lapses. A *loser* is checked against
+nothing — `_profit_signal_check` runs only inside the in-profit branch, and the
+time stop is guarded by `0 <= upnl`. So a losing trade has exactly one exit, the
+exchange stop, however many hours that takes.
+
+Realised: winners banked **+0.11R** (signal_exit fires as soon as profit clears the
+0.2% round trip, ≈0.25R), losers realised **−1.0R**. About **1:9 against us** —
+breakeven would need a ~90% win rate.
+
+**Research.** Confirmed the reward:risk reading against published guidance: the
+honest ceiling for scalping is 1:1 to 1:1.5, compensated by a 60–75% win rate, and
+round-trip cost on a small target is 20–40% of intended profit
+([For Traders](https://fortraders.com/blog/scalping-strategies-maximizing-profits-in-short-term-trades),
+[SM Developers](https://smdevs.in/resources/blogs/best-risk-reward-ratio-scalping)).
+Also checked the ATR-timeframe rule — stops should use the ATR of the timeframe that
+triggered the entry, not a higher one
+([Traders Second Brain](https://traderssecondbrain.com/guides/stop-loss-placement-methods),
+[QuantStock](https://quantstock.org/blog/atr-stop-loss-strategy-guide)).
+
+**The ATR timeframe is NOT the bug**, and this is worth recording because it is the
+intuitive fix and it is wrong. Measured across 14 coins:
+
+| stop basis | stop dist | cost_in_R | breakeven win rate @1:1 |
+|---|---|---|---|
+| 1.5×ATR15m (current) | 0.788% | 0.254R | 63% |
+| 1.5×ATR5m | 0.403% | 0.496R | 75% |
+| 1.0×ATR5m | 0.269% | 0.744R | 87% |
+
+Moving ATR to the entry timeframe *tightens* the stop, which makes the fee a larger
+share of R and pushes the required win rate to 75–87%. The line-40 comment in
+`trade_plan.py`'s scalp profile was right to keep ATR on 15m.
+
+**Change.** Added `adverse_exit` to `_manage_one`: a losing trade past
+`adverse_exit_after_h` (default = the time-stop window) whose setup has lapsed is
+closed. The exchange stop stays where it is as the backstop — this only stops us
+waiting for a stop that was sized for a signal which no longer exists. Also fixed
+entry filling one slot per scan (`_try_open_locked` returned on its first fill), so
+a four-slot board took 20+ minutes to fill. Tests 21/22; 132/132.
+
+**Status: shipped, live at head `62eed35`.** Verified against the live book at the
+moment of the fix: ICP −1.054% with a current verdict of **SKIP** — dead setup,
+1.2% above its stop, and under the old code entitled to no check at all.
+
+**Open, and larger than this fix.** The measured edge is roughly the size of the
+fee: the one-day replay of 2,885 signals gave fwd30 **+0.105%** and fwd60
+**+0.221%** against a round trip of **0.200%**. At a 30-minute hold the strategy
+does not clear its own costs even when the signal is right. This fix removes an
+unforced 1:9 asymmetry; it does not manufacture edge. See the Tabdeal fee blocker.
