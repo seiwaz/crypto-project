@@ -416,6 +416,36 @@ def compute_indicators(rows):
     }
 
 
+def weigh_votes(auto_checks):
+    """Collapse duplicated checks so one fact cannot cast two votes.
+
+    Each family carries a total weight of 1, split evenly among its members, and
+    returns `(long_weight, short_weight, family_count, family_sizes)`.
+
+    Deliberately fractional rather than one-vote-per-family-majority: collapsing to a
+    majority makes a family ABSTAIN whenever its members disagree, and tested against
+    live data that deflated typical counts to 3-2 of 6 against a threshold of 4 -
+    which would have stopped signal generation outright. Weighting keeps the
+    granularity (an internally split family contributes 0.5/0.5) while still capping
+    a duplicated pair's combined influence at one check's worth.
+
+    Shared, not duplicated, because the venue adapters resolve the manual checks and
+    then RE-COUNT the votes. tabdeal.build_snapshot did exactly that with plain
+    integer sums and silently discarded the weighting - the families were computed
+    and then thrown away, so production scored unchanged while the unit tests passed.
+    """
+    fams: dict[str, list] = {}
+    for c in auto_checks:
+        fams.setdefault(c.get("family") or c["check"], []).append(c)
+    long_w = short_w = 0.0
+    for members in fams.values():
+        w = 1.0 / len(members)
+        long_w += w * sum(1 for c in members if c["long"])
+        short_w += w * sum(1 for c in members if c["short"])
+    return (round(long_w, 2), round(short_w, 2), len(fams),
+            {k: len(v) for k, v in fams.items()})
+
+
 def score_direction(profile, tfs):
     """Auto-evaluate the checks that OHLCV can settle. The rest stay manual.
 
@@ -507,26 +537,7 @@ def score_direction(profile, tfs):
     auto = [c for c in checks if c["long"] is not None]
     manual = [c for c in checks if c["long"] is None]
 
-    # Each family carries a total weight of 1, split evenly among its members, so a
-    # duplicated fact cannot vote twice.
-    #
-    # Deliberately fractional rather than one-vote-per-family-majority: collapsing to
-    # a majority makes a family ABSTAIN whenever its two members disagree, and tested
-    # against live data that deflated typical counts to 3-2 of 6 against a threshold
-    # of 4 - which would have stopped signal generation outright. Weighting keeps the
-    # granularity (an internally split family contributes 0.5/0.5) while still
-    # capping the pair's combined influence at one check's worth.
-    fams: dict[str, list] = {}
-    for c in auto:
-        fams.setdefault(c["family"], []).append(c)
-    long_w = short_w = 0.0
-    for members in fams.values():
-        w = 1.0 / len(members)
-        long_w += w * sum(1 for c in members if c["long"])
-        short_w += w * sum(1 for c in members if c["short"])
-    auto_votes = len(fams)
-    long_score = round(long_w, 2)
-    short_score = round(short_w, 2)
+    long_score, short_score, auto_votes, fam_sizes = weigh_votes(auto)
 
     # The bar is rescaled with the denominator so grouping does not silently tighten
     # it: 5-of-9 and 6-of-9 keep the same meaning against a smaller total.
@@ -538,7 +549,7 @@ def score_direction(profile, tfs):
         "checks": checks,
         "auto_checks": auto_votes,
         "auto_raw_checks": len(auto),
-        "families": {k: len(v) for k, v in fams.items()},
+        "families": fam_sizes,
         "manual_checks": len(manual),
         "total_checks": total,
         "long_score": long_score,

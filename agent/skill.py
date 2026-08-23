@@ -302,6 +302,11 @@ def compute_indicators(rows: list[dict]) -> dict:
     return _load_api_module().compute_indicators(rows)
 
 
+def weigh_votes(auto_checks):
+    """See nobitex_api.weigh_votes - duplicated checks share one vote's weight."""
+    return _load_api_module().weigh_votes(auto_checks)
+
+
 def score_direction(profile: str, tfs: dict) -> dict:
     """The skill's direction scoring, including its MANUAL markers."""
     return _load_api_module().score_direction(profile, tfs)

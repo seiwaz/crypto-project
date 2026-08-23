@@ -627,11 +627,19 @@ def build_snapshot(entry: dict, profile: str, count: int = 300) -> tuple[dict, d
         funding=snap["funding"], btc=btc)
     auto = [c for c in ds["checks"] if c["long"] is not None]
     manual = [c for c in ds["checks"] if c["long"] is None]
-    ds["auto_checks"], ds["manual_checks"] = len(auto), len(manual)
-    ds["long_score"] = sum(1 for c in auto if c["long"])
-    ds["short_score"] = sum(1 for c in auto if c["short"])
-    ds["note"] = (f"{ds['long_score']}/{len(auto)} automated checks favour long, "
-                  f"{ds['short_score']}/{len(auto)} favour short. "
+    # Re-weigh, do not re-count. Resolving the manual checks adds votes, so the
+    # totals must be rebuilt - but rebuilding them with plain integer sums threw the
+    # family weighting away, and production scored exactly as before while the unit
+    # tests on score_direction still passed. The families were being computed and
+    # then discarded one function later.
+    ds["long_score"], ds["short_score"], votes, fams = skill.weigh_votes(auto)
+    ds["auto_checks"], ds["manual_checks"] = votes, len(manual)
+    ds["auto_raw_checks"] = len(auto)
+    ds["families"] = fams
+    ds["threshold"] = round((5 if profile == "scalp" else 6) / 9.0 * votes, 2) or 1
+    ds["note"] = (f"{ds['long_score']}/{votes} independent direction checks favour "
+                  f"long, {ds['short_score']}/{votes} favour short "
+                  f"({len(auto)} raw checks in {votes} families). "
                   + (f"{len(manual)} still need manual input."
                      if manual else "All checks resolved from live data."))
     snap["direction_score"] = ds

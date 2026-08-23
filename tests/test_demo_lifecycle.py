@@ -608,7 +608,8 @@ results.append(check("the two bias-TF trend checks share one family",
 results.append(check("the two decision-TF mean checks share one family",
                      _api.count('family="decision-tf mean"'), 2))
 results.append(check("a family's weight is split, not abstained",
-                     "1.0 / len(members)" in _api, True))
+                     "1.0 / len(members)"
+                     in _insp.getsource(_sk._load_api_module().weigh_votes), True))
 results.append(check("the vote threshold rescales with the denominator",
                      "base / 9.0 * auto_votes" in _api, True))
 _sfd = _insp.getsource(_sk.side_from_direction)
@@ -616,6 +617,32 @@ results.append(check("the tie margin rescales too",
                      "span / 9.0" in _sfd, True))
 results.append(check("margin is compared against the scaled need",
                      "margin > need" in _sfd, True))
+# The venue adapter resolves the manual checks and then rebuilds the totals. The
+# first version of this change rebuilt them with plain integer sums, silently
+# discarding the weighting: production scored unchanged while these tests passed.
+_bs = _insp.getsource(_tab.build_snapshot)
+results.append(check("the venue adapter re-weighs rather than re-counts",
+                     "skill.weigh_votes(auto)" in _bs, True))
+results.append(check("it no longer integer-sums the votes",
+                     'sum(1 for c in auto if c["long"])' in _bs, False))
+results.append(check("weighing lives in one shared place",
+                     callable(_sk.weigh_votes), True))
+_wv = _sk.weigh_votes([
+    {"check": "a", "family": "dup", "long": True,  "short": False},
+    {"check": "b", "family": "dup", "long": True,  "short": False},
+    {"check": "c", "family": "c",   "long": False, "short": True},
+])
+results.append(check("a duplicated pair casts one vote, not two", _wv[0], 1.0)),
+results.append(check("families are counted, not raw checks", _wv[2], 2))
+_wv2 = _sk.weigh_votes([
+    {"check": "a", "family": "dup", "long": True,  "short": False},
+    {"check": "b", "family": "dup", "long": False, "short": True},
+])
+results.append(check("an internally split family splits its weight, not abstains",
+                     (_wv2[0], _wv2[1]), (0.5, 0.5)))
+results.append(check("a check with no family stands alone",
+                     _sk.weigh_votes([{"check": "solo", "long": True,
+                                       "short": False}])[2], 1))
 
 print("23. Holding is judged on the thesis, not on the entry gates")
 # AAVE closed at score 74.0 with the verdict still TAKE, because the exit test WAS
