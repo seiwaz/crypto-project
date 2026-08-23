@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>سامانه معاملات تبدیل</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+:root {
+  --ground:      #f6f7f9;
+  --surface:     #ffffff;
+  --surface-2:   #eef1f4;
+  --ink:         #141a22;
+  --ink-soft:    #3a4550;
+  --muted:       #5a6672;
+  --line:        #dde2e8;
+  --line-strong: #c3ccd5;
+  --accent:      #1f6f6b;
+  --accent-soft: #e3efee;
+  --gain:        #1b7f4b;
+  --loss:        #b03a34;
+  --warn:        #a8710f;
+  --warn-soft:   #fbf2e0;
+
+  --step--1: 0.82rem;
+  --step-0:  1rem;
+  --step-1:  1.2rem;
+  --step-2:  1.5rem;
+  --step-3:  2rem;
+  --step-4:  2.7rem;
+
+  --measure: 68ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #10151b;
+    --surface:     #171e26;
+    --surface-2:   #1e2731;
+    --ink:         #e6eaef;
+    --ink-soft:    #c3ccd5;
+    --muted:       #93a0ad;
+    --line:        #2a343f;
+    --line-strong: #3b4855;
+    --accent:      #4fb3ac;
+    --accent-soft: #17302f;
+    --gain:        #4cc487;
+    --loss:        #e0776f;
+    --warn:        #d9a441;
+    --warn-soft:   #2b2412;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #10151b;
+  --surface:     #171e26;
+  --surface-2:   #1e2731;
+  --ink:         #e6eaef;
+  --ink-soft:    #c3ccd5;
+  --muted:       #93a0ad;
+  --line:        #2a343f;
+  --line-strong: #3b4855;
+  --accent:      #4fb3ac;
+  --accent-soft: #17302f;
+  --gain:        #4cc487;
+  --loss:        #e0776f;
+  --warn:        #d9a441;
+  --warn-soft:   #2b2412;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: Vazirmatn, "Segoe UI", Tahoma, sans-serif;
+  font-size: var(--step-0);
+  font-weight: 400;
+  line-height: 1.85;
+}
+
+.num, code, kbd, .mono, td.n, th.n {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.wrap {
+  max-inline-size: 1080px;
+  margin-inline: auto;
+  padding: 0 1.5rem 6rem;
+}
+
+/* ---------------------------------------------------------------- masthead */
+
+.masthead {
+  border-block-end: 2px solid var(--ink);
+  padding-block: 3.5rem 1.5rem;
+  margin-block-end: 3rem;
+}
+
+.masthead__eyebrow {
+  font-size: var(--step--1);
+  letter-spacing: .12em;
+  color: var(--accent);
+  font-weight: 600;
+  margin: 0 0 .9rem;
+}
+
+.masthead h1 {
+  font-size: var(--step-4);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -.01em;
+  margin: 0 0 .8rem;
+  text-wrap: balance;
+}
+
+.masthead p {
+  max-inline-size: var(--measure);
+  color: var(--ink-soft);
+  margin: 0;
+  font-size: var(--step-1);
+  font-weight: 300;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin-block-start: 2.5rem;
+}
+
+.fact { background: var(--surface); padding: .9rem 1.1rem; }
+.fact__k {
+  display: block;
+  font-size: var(--step--1);
+  color: var(--muted);
+  line-height: 1.6;
+}
+.fact__v {
+  display: block;
+  font-size: var(--step-1);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* ----------------------------------------------------------------- prose */
+
+section { margin-block-end: 4rem; }
+
+h2 {
+  font-size: var(--step-3);
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0 0 .4rem;
+  letter-spacing: -.005em;
+  text-wrap: balance;
+}
+
+h2 + .lede {
+  color: var(--muted);
+  max-inline-size: var(--measure);
+  margin: 0 0 2rem;
+}
+
+h3 {
+  font-size: var(--step-1);
+  font-weight: 600;
+  margin: 2.4rem 0 .7rem;
+  line-height: 1.5;
+}
+
+h4 {
+  font-size: var(--step-0);
+  font-weight: 600;
+  margin: 1.6rem 0 .5rem;
+  color: var(--ink-soft);
+}
+
+p, ul, ol { max-inline-size: var(--measure); }
+p { margin: 0 0 1.1rem; }
+
+ul, ol { padding-inline-start: 1.3rem; margin: 0 0 1.2rem; }
+li { margin-block-end: .5rem; }
+li::marker { color: var(--accent); }
+
+strong { font-weight: 600; }
+
+code {
+  font-size: .88em;
+  background: var(--surface-2);
+  padding: .12em .4em;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+}
+
+.rule {
+  border: 0;
+  border-block-start: 1px solid var(--line);
+  margin-block: 3rem;
+}
+
+/* ----------------------------------------------------------------- panels */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 1.4rem 1.5rem;
+  margin-block: 1.6rem;
+}
+
+.panel > :last-child { margin-block-end: 0; }
+
+.panel--accent {
+  border-inline-start: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+.panel--warn {
+  border-inline-start: 3px solid var(--warn);
+  background: var(--warn-soft);
+}
+
+.panel__title {
+  font-weight: 600;
+  margin: 0 0 .6rem;
+  font-size: var(--step-0);
+}
+
+/* --------------------------------------------------------------- pipeline */
+
+.pipe {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin-block: 2rem;
+}
+
+.stage {
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: 3.2rem 1fr;
+  gap: 1.2rem;
+  padding: 1.3rem 1.4rem;
+  align-items: start;
+}
+
+.stage__n {
+  font-family: "JetBrains Mono", monospace;
+  font-size: var(--step-1);
+  font-weight: 600;
+  color: var(--accent);
+  border-inline-end: 1px solid var(--line);
+  padding-inline-end: 1rem;
+  line-height: 1.6;
+}
+
+.stage__b h4 { margin: 0 0 .35rem; color: var(--ink); font-size: var(--step-0); }
+.stage__b p { margin: 0; color: var(--ink-soft); max-inline-size: 62ch; }
+.stage__b .meta {
+  display: block;
+  margin-block-start: .5rem;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.tablewrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  margin-block: 1.6rem;
+}
+
+table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--step--1);
+  min-inline-size: 480px;
+}
+
+thead th {
+  text-align: start;
+  font-weight: 600;
+  color: var(--muted);
+  padding: .7rem .9rem;
+  border-block-end: 1px solid var(--line-strong);
+  white-space: nowrap;
+  font-size: var(--step--1);
+}
+
+td {
+  padding: .65rem .9rem;
+  border-block-end: 1px solid var(--line);
+  vertical-align: top;
+}
+
+tbody tr:last-child td { border-block-end: 0; }
+
+td.n, th.n { text-align: end; white-space: nowrap; }
+
+.gain { color: var(--gain); font-weight: 600; }
+.loss { color: var(--loss); font-weight: 600; }
+
+.tag {
+  display: inline-block;
+  font-size: .72rem;
+  font-weight: 600;
+  padding: .12rem .5rem;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.tag--on  { color: var(--gain); }
+.tag--off { color: var(--muted); }
+
+/* --------------------------------------------------------------- listing */
+
+.pre {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--line-strong);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: .8rem;
+  line-height: 1.75;
+  direction: ltr;
+  text-align: left;
+  margin-block: 1.4rem;
+  white-space: pre;
+  color: var(--ink-soft);
+}
+
+footer {
+  border-block-start: 1px solid var(--line);
+  padding-block-start: 1.5rem;
+  color: var(--muted);
+  font-size: var(--step--1);
+}
+
+@media (max-width: 640px) {
+  :root { --step-4: 2rem; --step-3: 1.5rem; }
+  .stage { grid-template-columns: 1fr; gap: .5rem; }
+  .stage__n { border-inline-end: 0; padding-inline-end: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <p class="masthead__eyebrow">سند فنی · سرور <span class="num">94.74.166.123</span></p>
+  <h1>سامانه معاملات اهرمی تبدیل</h1>
+  <p>
+    این سند توضیح می‌دهد که سیستم چگونه سیگنال می‌سازد، چگونه پوزیشن باز می‌کند، و
+    چگونه آن را تا لحظهٔ بسته‌شدن مدیریت می‌کند. همهٔ اعدادِ آورده‌شده از رکورد
+    واقعی همین حساب گرفته شده‌اند، نه از فرض یا شبیه‌سازی.
+  </p>
+
+  <div class="facts">
+    <div class="fact"><span class="fact__k">صرافی</span><span class="fact__v">تبدیل · اهرم حرفه‌ای</span></div>
+    <div class="fact"><span class="fact__k">نوع مارجین</span><span class="fact__v">کراس</span></div>
+    <div class="fact"><span class="fact__k">کارمزد هر سمت</span><span class="fact__v num">0.1%</span></div>
+    <div class="fact"><span class="fact__k">ارزهای تحت پایش</span><span class="fact__v num">33</span></div>
+    <div class="fact"><span class="fact__k">حداکثر پوزیشن هم‌زمان</span><span class="fact__v num">4</span></div>
+    <div class="fact"><span class="fact__k">دورهٔ پایش</span><span class="fact__v num">3s</span></div>
+  </div>
+</header>
+
+<!-- ============================================================ STRATEGY -->
+<section>
+  <h2>۱. استراتژی، و مسئله‌ای که کل استراتژی حول آن می‌چرخد</h2>
+  <p class="lede">
+    پیش از هر توضیح فنی، باید یک عدد را دید؛ چون آن عدد شکل تمام تصمیم‌های
+    بعدی را تعیین کرده است.
+  </p>
+
+  <p>
+    تبدیل در محصول «اهرم حرفه‌ای» <strong>۰٫۱٪ کارمزد در هر سمت</strong> می‌گیرد —
+    هم برای میکر و هم برای تیکر. یعنی هر معامله، صرف‌نظر از نتیجه‌اش،
+    <strong>۰٫۲٪ از ارزش پوزیشن</strong> هزینه دارد. این یک جزئیات حسابداری نیست؛
+    این خودِ مسئله است.
+  </p>
+
+  <div class="panel panel--warn">
+    <p class="panel__title">آنچه در عمل اتفاق افتاد</p>
+    <p>
+      در ۴۱ معاملهٔ بستهٔ نخست، حساب <span class="num loss">−0.662</span> دلار
+      زیان کرد. تفکیک این زیان:
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>منشأ</th><th class="n">مبلغ</th><th class="n">سهم</th></tr></thead>
+        <tbody>
+          <tr><td>کارمزد رفت‌وبرگشت</td><td class="n loss num">−0.467</td><td class="n num">71%</td></tr>
+          <tr><td>حرکت واقعی قیمت</td><td class="n loss num">−0.195</td><td class="n num">29%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      یعنی <strong>۷۱٪ زیان، کارمزد بود، نه اشتباه در تشخیص جهت بازار</strong>.
+      ۴۱ معامله در دو روز روی حسابی حدود ۵ دلاری، تقریباً ۹٪ از کل سرمایه را
+      فقط بابت کارمزد سوزاند. مشکل، <em>تعداد معاملات</em> بود.
+    </p>
+  </div>
+
+  <h3>نتیجه‌گیری استراتژیک</h3>
+  <p>
+    اگر هر رفت‌وبرگشت ۰٫۲٪ هزینه دارد، هر معامله باید بیش از ۰٫۲٪ حرکت مفید
+    بسازد تا صرفاً سربه‌سر شود. برای سنجش اینکه چنین چیزی اصلاً ممکن است یا نه،
+    <strong>۲۱٬۳۱۵ سیگنال</strong> روی ۳۳ ارز و حدود ۲۵ روز تاریخچه، با
+    <em>همان کد امتیازدهی واقعی</em> بازپخش شد. بازدهٔ خالص پس از کسر ۰٫۲٪:
+  </p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>جهت</th><th class="n">تعداد</th>
+          <th class="n">۳۰ دقیقه</th><th class="n">۲ ساعت</th>
+          <th class="n">۴ ساعت</th><th class="n">۸ ساعت</th><th class="n">۲۴ ساعت</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>خرید (Long)</strong></td><td class="n num">11,574</td>
+          <td class="n loss num">−0.172%</td><td class="n loss num">−0.068%</td>
+          <td class="n gain num">+0.086%</td><td class="n gain num">+0.348%</td>
+          <td class="n gain num">+1.392%</td>
+        </tr>
+        <tr>
+          <td><strong>فروش (Short)</strong></td><td class="n num">9,741</td>
+          <td class="n loss num">−0.209%</td><td class="n loss num">−0.247%</td>
+          <td class="n loss num">−0.275%</td><td class="n loss num">−0.366%</td>
+          <td class="n loss num">−0.706%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>سه نتیجهٔ روشن از این جدول بیرون می‌آید، و هر سه در سیستم پیاده شده‌اند:</p>
+  <ul>
+    <li>
+      <strong>نگه‌داری کوتاه سودده نیست.</strong> در ۳۰ دقیقه، حتی وقتی سیگنال
+      درست است، حرکت قیمت کارمزد خودش را نمی‌پوشاند. لبهٔ واقعی از حدود
+      <strong>۸ ساعت</strong> به بعد ظاهر می‌شود.
+    </li>
+    <li>
+      <strong>فروش (Short) در این بازار زیان‌ده است</strong> — در همهٔ بازه‌ها منفی،
+      و هرچه بیشتر نگه داشته شود بدتر. با <span class="num">۹٬۷۴۱</span> نمونه.
+      بنابراین شورت خاموش شد (<code>allow_shorts: false</code>).
+    </li>
+    <li>
+      <strong>کمتر معامله کن، بلندتر نگه دار.</strong> این تنها مسیری است که
+      کارمزد را از معادله بیرون می‌کشد.
+    </li>
+  </ul>
+
+  <div class="panel">
+    <p class="panel__title">یک هشدار صادقانه دربارهٔ همین جدول</p>
+    <p>
+      این پنجرهٔ ۲۵ روزه، یک رژیم بازار است و بازار در طول آن صعودی بوده. پس این
+      داده می‌گوید «شورت <em>اینجا و اکنون</em> کار نمی‌کند»، نه اینکه شورت ذاتاً
+      بد است. به همین دلیل شورت به‌صورت یک تنظیم خاموش شده، نه اینکه از کد حذف
+      شود. یک بازپخش کوچک‌تر (۱٬۳۳۱ سیگنال) قبلاً دو نتیجهٔ نادرست داده بود که
+      نمونهٔ بزرگ آن‌ها را رد کرد — <strong>حجم نمونه بخشی از شواهد است</strong>.
+    </p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============================================================ PIPELINE -->
+<section>
+  <h2>۲. چرخهٔ کامل، از کندل تا بسته‌شدن پوزیشن</h2>
+  <p class="lede">
+    شماره‌ها اینجا ترتیب واقعی اجرا هستند، نه تزئین. هر مرحله می‌تواند مسیر را
+    متوقف کند.
+  </p>
+
+  <div class="pipe">
+    <div class="stage">
+      <div class="stage__n">۰۱</div>
+      <div class="stage__b">
+        <h4>دریافت داده</h4>
+        <p>
+          کندل‌ها از <code>api-web.tabdeal.org/plots/history</code> و دفتر سفارش،
+          دقت قیمت و همهٔ اجرا از <code>api1.tabdeal.org/fapi</code>.
+        </p>
+        <span class="meta">
+          نکتهٔ مهم: کندل‌ها سری <strong>اسپات</strong> هستند. اختلاف قیمت اسپات و
+          فیوچرز اندازه‌گیری شده و بین <span class="num">۰٫۰۲٪ تا ۰٫۱۷٪</span> است،
+          پس اندیکاتورهای قیمتی عملاً یکسان‌اند؛ اما <strong>حجم</strong> مربوط به
+          بازار اسپات است و این یکی از ۹ بررسی جهت را کمی نادقیق می‌کند.
+        </span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۲</div>
+      <div class="stage__b">
+        <h4>محاسبهٔ اندیکاتورها</h4>
+        <p>
+          روی سه تایم‌فریم: بایاس <span class="num">1H</span>، تصمیم
+          <span class="num">5m</span>، ورود <span class="num">1m</span>؛ و
+          <span class="num">ATR</span> روی <span class="num">15m</span>.
+        </p>
+        <span class="meta">EMA۲۰/۵۰/۲۰۰ · RSI۱۴ · VWAP · ابر ایچیموکو · ساختار بازار · ATR · حجم</span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۳</div>
+      <div class="stage__b">
+        <h4>امتیازدهی جهت</h4>
+        <p>
+          ۹ بررسی مستقل رأی می‌دهند؛ رأی‌های هم‌خانواده وزنشان تقسیم می‌شود
+          (بخش ۳). خروجی: جهت، و اینکه آیا اختلاف به‌اندازهٔ کافی هست یا «مساوی».
+        </p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۴</div>
+      <div class="stage__b">
+        <h4>ساخت نقشهٔ معامله</h4>
+        <p>
+          ورود، حد ضرر بر پایهٔ <span class="num">1.5 × ATR(15m)</span>، هدف
+          <span class="num">TP1</span>، اندازهٔ پوزیشن و اهرم.
+        </p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۵</div>
+      <div class="stage__b">
+        <h4>عبور از دروازه‌ها</h4>
+        <p>
+          نوسان، اسپرد، عمق دفتر سفارش، فاصله تا لیکویید، و
+          <strong>کارایی هزینه</strong>. اگر هرکدام رد شود، نتیجه
+          <code>SKIP</code> است.
+        </p>
+        <span class="meta">امتیاز نهایی ۰ تا ۱۰۰ · آستانهٔ ورود <span class="num">۷۵</span></span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۶</div>
+      <div class="stage__b">
+        <h4>باز کردن پوزیشن</h4>
+        <p>
+          سفارش <span class="num">MARKET</span>، سپس بلافاصله الصاق حد ضرر و حد سود
+          به خودِ پوزیشن روی صرافی، و <strong>خواندن مجدد برای اطمینان</strong>.
+        </p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۷</div>
+      <div class="stage__b">
+        <h4>پایش هر ۳ ثانیه</h4>
+        <p>
+          تطبیق با صرافی، ثبت تاریخچه، و بررسی تنها قاعدهٔ خروجِ موتور.
+        </p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__n">۰۸</div>
+      <div class="stage__b">
+        <h4>بسته‌شدن</h4>
+        <p>
+          یا با حد ضرر / حد سودِ صرافی، یا با تنها قاعدهٔ موتور: بیش از یک ساعت
+          نگه‌داشته شده <em>و</em> سود خالص از آستانه گذشته باشد.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============================================================ SIGNALS -->
+<section>
+  <h2>۳. سیگنال‌دهی چگونه کار می‌کند</h2>
+  <p class="lede">
+    امتیاز جهت، شمارش رأی است. اما شمارش رأی فقط وقتی معنا دارد که رأی‌ها
+    اطلاعات متفاوتی حمل کنند — و مدتی این‌طور نبود.
+  </p>
+
+  <h3>۹ بررسی جهت</h3>
+  <p>هر بررسی مستقلاً می‌گوید شرایط به نفع خرید است یا فروش:</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>بررسی</th><th>تایم‌فریم</th><th>خانواده</th></tr></thead>
+      <tbody>
+        <tr><td>قیمت نسبت به EMA۲۰۰</td><td class="num">1H</td><td>روند تایم‌فریم بایاس</td></tr>
+        <tr><td>EMA۵۰ نسبت به EMA۲۰۰</td><td class="num">1H</td><td>روند تایم‌فریم بایاس</td></tr>
+        <tr><td>قیمت نسبت به EMA۵۰</td><td class="num">5m</td><td>میانگین تایم‌فریم تصمیم</td></tr>
+        <tr><td>قیمت نسبت به VWAP</td><td class="num">5m</td><td>میانگین تایم‌فریم تصمیم</td></tr>
+        <tr><td>ساختار بازار (سقف/کف)</td><td class="num">5m</td><td>مستقل</td></tr>
+        <tr><td>باند RSI</td><td class="num">5m</td><td>مستقل</td></tr>
+        <tr><td>سوگیری حجم (۱۰ کندل اخیر)</td><td class="num">5m</td><td>مستقل</td></tr>
+        <tr><td>ابر ایچیموکو</td><td class="num">5m</td><td>مستقل</td></tr>
+        <tr><td>هم‌راستایی با بیت‌کوین</td><td class="num">1H</td><td>مستقل</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel panel--accent">
+    <p class="panel__title">چرا رأی‌ها وزن‌دار شدند</p>
+    <p>
+      توافق دوبه‌دوی این ۹ بررسی روی <span class="num">۱٬۳۳۱</span> ارزیابی
+      تاریخی اندازه‌گیری شد. میانگین توافق <span class="num">۶۰٫۵٪</span> بود
+      (۵۰٪ یعنی کاملاً مستقل) — اما دو جفت، عملاً یک چیز را دو بار می‌پرسیدند:
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>جفت</th><th class="n">توافق</th></tr></thead>
+        <tbody>
+          <tr><td>قیمت↔EMA۲۰۰ با EMA۵۰↔EMA۲۰۰ (بایاس)</td><td class="n num">90.7%</td></tr>
+          <tr><td>قیمت↔EMA۵۰ با قیمت↔VWAP (تصمیم)</td><td class="n num">87.7%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      هر دو جفت می‌پرسند «آیا قیمت بالای میانگین اخیرش است؟». شمردن چهار رأی
+      برای دو واقعیت، امتیاز را متورم می‌کرد — و دقیقاً در بازار روندی بیشترین
+      تورم را می‌ساخت، یعنی همان‌جا که حرکت احتمالاً از قبل انجام شده.
+    </p>
+    <p>
+      حالا هر خانواده مجموعاً <strong>وزن یک رأی</strong> دارد که میان اعضایش
+      تقسیم می‌شود. هیچ بررسی‌ای حذف نشده؛ همه با استدلال خودشان قابل مشاهده‌اند.
+    </p>
+  </div>
+
+  <h4>سه تلهٔ کالیبراسیون که پیش از آسیب گرفته شدند</h4>
+  <ol>
+    <li>
+      اگر خانواده به «رأی اکثریت» تبدیل شود، هنگام اختلاف داخلی
+      <strong>رأی ممتنع</strong> می‌دهد. در تست با دادهٔ واقعی، شمارش‌ها به
+      <span class="num">۳-۲ از ۶</span> در برابر آستانهٔ <span class="num">۴</span>
+      سقوط کرد — یعنی تولید سیگنال کاملاً متوقف می‌شد. راه‌حل: وزن کسری.
+    </li>
+    <li>
+      <code>DIRECTION_MARGIN</code> برای اعداد صحیح از ۹ کالیبره شده بود. یک
+      تفکیک وزنی معمولِ <span class="num">4.00-3.00</span> اختلافش دقیقاً
+      <span class="num">1.00</span> است که با شرط «بیشتر از ۱» مساوی خوانده
+      می‌شد و <strong>تقریباً هر معامله‌ای را مسدود می‌کرد</strong>. هم آستانهٔ
+      رأی و هم حاشیهٔ تساوی حالا با مخرج مقیاس می‌گیرند.
+    </li>
+    <li>
+      وزن‌دهی محاسبه می‌شد و بعد <strong>دور ریخته می‌شد</strong>: تابع
+      <code>build_snapshot</code> پس از حل بررسی‌های دستی، رأی‌ها را دوباره با
+      جمع صحیح می‌شمرد. تست‌های واحد سبز بودند چون تابع قبلی را تست می‌کردند.
+      فقط با خواندن یک اسنپ‌شات واقعی از سرور پیدا شد.
+    </li>
+  </ol>
+
+  <div class="panel panel--warn">
+    <p class="panel__title">درسی که باید بماند</p>
+    <p>
+      هر تغییری در امتیازدهی باید در یک <strong>اسنپ‌شات واقعیِ سرور</strong>
+      راستی‌آزمایی شود، نه در محیط تست. یک عدد دیگر («۲۲ خرید / ۷ فروش») هم
+      از محیط تستی آمده بود که کندل ۱۵ دقیقه‌ای می‌داد، در حالی که پروفایل
+      واقعی از ۵ دقیقه استفاده می‌کند.
+    </p>
+  </div>
+
+  <h3>از رأی تا امتیاز ۰ تا ۱۰۰</h3>
+  <p>
+    نسبت رأی‌های موافق، <strong>۳۵ امتیاز از ۱۰۰</strong> را می‌سازد. باقی امتیاز
+    از این‌ها می‌آید:
+  </p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>عامل</th><th class="n">وزن</th><th>معنا</th></tr></thead>
+      <tbody>
+        <tr><td>کیفیت ستاپ (نسبت رأی جهت)</td><td class="n num">35</td><td>چقدر بررسی‌ها هم‌نظرند</td></tr>
+        <tr><td>امید ریاضی خالص</td><td class="n num">25</td><td>سود انتظاری هر معامله پس از هزینه</td></tr>
+        <tr><td>فشار هزینه</td><td class="n num">15</td><td>کارمزد چند درصد از واحد ریسک است</td></tr>
+        <tr><td>عمق نقدینگی</td><td class="n num">15</td><td>دفتر سفارش چند برابر پوزیشن است</td></tr>
+        <tr><td>تمرکز نوسان</td><td class="n num">10</td><td>ATR نسبت به مرکز باند مجاز</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <strong>۴۰ امتیاز از ۱۰۰ مستقیماً به کارمزد گره خورده است</strong> (امید ریاضی
+    و فشار هزینه). به همین دلیل روی تبدیل امتیاز عملاً هرگز از
+    <span class="num">۷۹</span> بالاتر نمی‌رود — آستانه‌ای مثل ۸۵ دست‌نیافتنی
+    است و آستانهٔ واقعی روی <span class="num">۷۵</span> تنظیم شده.
+  </p>
+
+  <h4>حکم نهایی</h4>
+  <ul>
+    <li><code>TAKE</code> — همهٔ دروازه‌ها باز، امتیاز بالای آستانه</li>
+    <li><code>WATCH</code> — ستاپ سالم است اما امتیاز کافی نیست</li>
+    <li><code>SKIP</code> — دست‌کم یک دروازه بسته است</li>
+  </ul>
+</section>
+
+<hr class="rule">
+
+<!-- ============================================================== ENTRY -->
+<section>
+  <h2>۴. باز کردن پوزیشن</h2>
+  <p class="lede">
+    سه چیز باید هم‌زمان درست باشد تا حتی یک سفارش به تبدیل برسد: پرچم فعال‌سازی،
+    تطابق دقیق مسیر با فهرست مجاز، و خاموش‌بودن حالت آزمایشی. در حالت غیرفعال،
+    هر تلاش برای نوشتن <strong>خطا می‌دهد</strong> — هرگز بی‌صدا رد نمی‌شود، چون
+    یک فراخوان نباید بتواند باور کند معامله کرده در حالی که نکرده.
+  </p>
+
+  <h3>زمان‌بندی ورود</h3>
+  <p>
+    ورود با <strong>تکمیل یک اسکن جدید</strong> فعال می‌شود، نه با یک تایمر مستقل.
+    قبلاً هر دو شرط لازم بود و نتیجه این بود که اگر ورودی وسط چرخه رخ می‌داد،
+    کل اسکن بعدی نادیده گرفته می‌شد. همچنین در هر اسکن <strong>همهٔ اسلات‌های
+    خالی</strong> پر می‌شوند، نه فقط یکی — پیش از این پر کردن چهار اسلات بیش از
+    بیست دقیقه طول می‌کشید، یعنی بیشتر از کل عمر معامله.
+  </p>
+
+  <h3>اندازه و اهرم</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>پارامتر</th><th class="n">مقدار</th><th>توضیح</th></tr></thead>
+      <tbody>
+        <tr><td>حداکثر اسلات</td><td class="n num">4</td><td>حداکثر پوزیشن هم‌زمان</td></tr>
+        <tr><td>ضریب ارزش کل</td><td class="n num">4.7×</td><td>نسبت به موجودی حساب</td></tr>
+        <tr><td>سقف ارزش کل</td><td class="n num">25 USDT</td><td>سقف مطلق</td></tr>
+        <tr><td>حداکثر اهرم</td><td class="n num">20×</td><td>اهرم واقعی از خودِ سیگنال می‌آید</td></tr>
+        <tr><td>حداکثر انحراف ورود</td><td class="n num">0.3R</td><td>سیگنال کهنه رد می‌شود</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <p class="panel__title">چرا اندازه به «ارزش کل» گره خورده، نه به سرمایه × درصد ریسک</p>
+    <p>
+      مارجین <strong>کراس</strong> است. یعنی لیکویید بر اساس مجموع کل پوزیشن‌ها
+      سنجیده می‌شود، پس همان چیزی که باید کنترل شود مجموع است، نه تک‌تک.
+      <span class="num">۲۵</span> دلار روی ۴ اسلات یعنی حدود
+      <span class="num">۶٫۲۵</span> دلار برای هر کدام.
+    </p>
+    <p>
+      یک نکتهٔ مهم: مقدار <code>capital</code> در تنظیمات باید روی
+      <span class="num">1000</span> بماند. این عددِ <em>طراح نقشه</em> است، نه
+      موجودی واقعی. یک‌بار روی موجودی واقعی (۵٫۲۷) تنظیم شد و
+      <strong>تولید سیگنال کاملاً متوقف شد</strong> — طراح نمی‌توانست هیچ نقشه‌ای
+      را تأمین مالی کند و هر ۳۳ ارز <code>SKIP</code> شدند.
+    </p>
+  </div>
+
+  <h3>سیگنال کهنه: خطایی که هندسهٔ معامله را بی‌صدا بازنویسی می‌کرد</h3>
+  <p>
+    حد ضرر و حد سود به قیمتِ <em>لحظهٔ اسکن</em> لنگر می‌خورند، اما پر شدن سفارش
+    با قیمت <em>لحظهٔ اجرا</em> است. اگر بازار در این فاصله حرکت کند، نسبت
+    ریسک به بازده بدون هیچ خطایی بازنویسی می‌شود. در یک مورد واقعی، فلوکی
+    <span class="num">۳٫۳۲٪</span> بالاتر از ورودِ نقشه پر شد، در حالی که حد ضرر
+    فقط <span class="num">۱٫۷۵٪</span> فاصله داشت: <strong>۱٫۸۳R انحراف پیش از
+    باز شدن پوزیشن</strong>. حد سود اول عملاً زیر قیمت ورود قرار گرفت.
+  </p>
+  <p>
+    حالا انحراف بیش از <span class="num">0.3R</span> باعث رد شدن سیگنال می‌شود.
+    رد کردن بهتر از لنگر کردن دوباره است: حد ضرر از ساختار و ATR در قیمت قبلی
+    آمده، پس جابه‌جا کردنش سطحی می‌سازد که طراح هرگز اعتبارسنجی‌اش نکرده.
+  </p>
+
+  <h3>تقسیم مسئولیت — مهم‌ترین تصمیم معماری</h3>
+  <div class="pre">صرافی مالکِ هر دو سطح است  ──  حد ضرر و حد سود روی خودِ پوزیشن
+                              می‌نشینند، پس حتی اگر این برنامه بمیرد
+                              اجرا می‌شوند
+
+موتور مالکِ قضاوت است        ──  کدام سیگنال گرفته شود، و چه زمانی
+                              پوزیشنِ سودده بسته شود</div>
+  <p>
+    یک حلقهٔ پایش جای مناسبی است برای پرسیدن «آیا هنوز باید در این معامله بمانم؟»
+    و جای بسیار بدی برای «آیا دارم بیش از برنامه ضرر می‌کنم؟».
+    <strong>حد ضرر هرگز نباید به اجرا شدن این برنامه وابسته باشد.</strong>
+  </p>
+
+  <div class="panel panel--warn">
+    <p class="panel__title">همیشه حد ضرر را دوباره بخوان</p>
+    <p>
+      پاسخ <code>success</code> از صرافی دلیل نیست. دو پوزیشن اول این حساب
+      <strong>بدون حد ضرر</strong> باز ماندند چون الصاق بی‌صدا شکست خورد. بعدتر
+      پوزیشن <code>SUI</code> به‌مدت <span class="num">۴۰ دقیقه</span> بدون
+      محافظت ماند: درست پس از سفارش، صرافی هنوز پوزیشن را ثبت نکرده بود و
+      شناسه‌ای برای الصاق وجود نداشت — خطا یک‌بار ثبت شد و
+      <strong>هرگز دوباره تلاش نشد</strong>.
+    </p>
+    <p>
+      حالا در هر چرخه، تطبیق‌گر هر پوزیشن باز را بررسی می‌کند و حد ضررِ غایب را
+      دوباره الصاق می‌کند و نتیجه را می‌خواند. تبدیل نبودِ سطح را به سه شکل
+      گزارش می‌دهد (<code>null</code>، رشتهٔ خالی، و رشتهٔ <code>"0"</code>) و هر
+      سه «غایب» شمرده می‌شوند.
+    </p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ========================================================= MONITORING -->
+<section>
+  <h2>۵. پایش و بستن پوزیشن</h2>
+  <p class="lede">
+    حلقهٔ پایش هر <strong>۳ ثانیه</strong> اجرا می‌شود. در هر چرخه: تطبیق با
+    صرافی، ثبت تاریخچه، و ارزیابی تنها قاعدهٔ خروج.
+  </p>
+
+  <h3>تنها قاعدهٔ خروجِ موتور</h3>
+  <div class="panel panel--accent">
+    <p class="panel__title">پوزیشن وقتی بسته می‌شود که هر دو شرط برقرار باشد</p>
+    <ul style="margin-block-end:0">
+      <li>دست‌کم <strong>یک ساعت</strong> نگه داشته شده باشد، <em>و</em></li>
+      <li>سود ناخالص بیش از <strong>۱٫۵ برابر کارمزد رفت‌وبرگشت</strong> باشد</li>
+    </ul>
+  </div>
+
+  <p>
+    و مهم‌تر از آن، آنچه <strong>هرگز</strong> اتفاق نمی‌افتد:
+    <strong>موتور هیچ پوزیشن زیان‌دهی را نمی‌بندد</strong>. پوزیشن در ضرر فقط با
+    حد ضرر خودِ صرافی بسته می‌شود.
+  </p>
+
+  <h4>سه خروجی که حذف شدند، و چرا</h4>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>خروج حذف‌شده</th><th>مشکل اندازه‌گیری‌شده</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>signal_exit</code></td>
+          <td>
+            به‌محض عبور سود از کارمزد، پوزیشن را می‌بست — میانگین نگه‌داری
+            <span class="num">۱۱ دقیقه</span> برای حدود <span class="num">+0.11R</span>،
+            در حالی که زیان‌ها تا <span class="num">−1.0R</span> کامل می‌رفتند.
+            نسبتی حدود <strong>۱ به ۹ به ضرر ما</strong>، که برای سربه‌سری
+            نرخ برد ۹۰٪ لازم دارد.
+          </td>
+        </tr>
+        <tr>
+          <td><code>time_stop</code></td>
+          <td>
+            شرطش <code>0 ≤ upnl &lt; floor</code> بود که پوزیشنِ در سودِ
+            <em>کمتر از کارمزد</em> را هم شامل می‌شد؛ یعنی بستنش یک زیان قطعی
+            ثبت می‌کرد.
+          </td>
+        </tr>
+        <tr>
+          <td><code>adverse_exit</code></td>
+          <td>
+            بستن پوزیشنی که فقط کمی منفی است، کل کارمزد را بی‌دلیل می‌سوزاند.
+            نمونهٔ واقعی: فلوکی با حرکت <span class="num">−0.0353%</span> (یک تیک)
+            بسته شد و <span class="num loss">−0.01297</span> ثبت کرد که
+            <strong>۸۵٪ آن کارمزد بود</strong>.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>چرا ۱٫۵ برابر، نه ۱ برابر</h3>
+  <p>
+    شرط سود، قیمت <strong>مارک</strong> را می‌خواند، اما بستن با سفارش
+    <strong>MARKET</strong> انجام می‌شود که از اسپرد عبور می‌کند. با آستانهٔ
+    دقیقاً ۱ برابر، پوزیشن <code>PEPE</code> با سود ناخالص
+    <span class="num">+0.01052</span> در برابر کارمزد
+    <span class="num">0.01091</span> بسته شد و نتیجه
+    <span class="num loss">−0.00039</span> شد — یعنی
+    <strong>بستنِ خودِ موتور، موجودی را کم کرد</strong>.
+  </p>
+  <p>
+    حاشیهٔ ۱٫۵ برابر حدود <span class="num">۰٫۱٪</span> از ارزش پوزیشن فضا
+    می‌گذارد، در حالی که اسپرد اندازه‌گیری‌شده روی این بازارها
+    <span class="num">۰٫۰۵٪ تا ۰٫۱۳٪</span> است. و چون حاشیه اثبات نیست، اگر باز
+    هم بستنی با نتیجهٔ صفر یا منفی رخ دهد، خطای صریح در لاگ ثبت می‌شود.
+  </p>
+
+  <h3>تاریخچهٔ پوزیشن‌ها</h3>
+  <p>
+    هر <span class="num">۱۵ ثانیه</span> یک نمونه از هر پوزیشن باز ثبت می‌شود:
+    قیمت لحظه‌ای، سود ناخالص و خالص، مقدار R، مدت نگه‌داری، و
+    <strong>حکم و امتیازی که موتور در همان لحظه بر اساس آن قضاوت می‌کرد</strong>.
+  </p>
+  <p>
+    دلیل وجود این جدول: رکورد معاملهٔ بسته فقط دو سر ماجرا را نگه می‌دارد — ورود
+    و خروج. به همین دلیل هر بررسیِ پس از رخداد تا امروز مجبور بوده وسط ماجرا را
+    از روی کندل‌های صرافی بازسازی کند، که نشان می‌دهد بازار چه کرد، نه اینکه
+    موتور چه می‌دید. داده‌ها پس از ۱۴ روز پاک می‌شوند.
+  </p>
+</section>
+
+<hr class="rule">
+
+<!-- =============================================================== RISK -->
+<section>
+  <h2>۶. ریسک‌های واقعی و شناخته‌شده</h2>
+  <p class="lede">
+    این‌ها فرضیه نیستند؛ هر کدام روی همین حساب و با پول واقعی رخ داده‌اند.
+  </p>
+
+  <h3>حد ضرر، زیان را محدود نمی‌کند — فقط آن را هدف می‌گیرد</h3>
+  <p>
+    نمونهٔ <code>XRP</code>، همان‌طور که در تاریخچهٔ واقعی ثبت شده:
+  </p>
+  <div class="pre">ورود            1.541905
+حد ضرر          1.511263    (‎1.987%‎ پایین‌تر از ورود)
+خروج واقعی      1.466350    (‎4.900%‎ پایین‌تر از ورود)
+عبور از حد ضرر  2.913%
+
+14:42   کف کندل 1.51250  ←  اصلاً به حد ضرر نرسید
+14:43   باز 1.51250  →  کف 1.47388   یعنی ‎−2.55%‎ در یک دقیقه</div>
+  <p>
+    حد ضرر درست الصاق شده بود (در لاگ رویدادها، ساعت <span class="num">14:37:47</span>)
+    و درست هم عمل کرد. اما بازار در یک دقیقه از روی آن پرید. سفارش حد ضرر از نوع
+    مارکت است و در <em>اولین قیمت ممکن</em> پر می‌شود، نه در قیمت ماشه. نتیجه:
+    ریسک برنامه‌ریزی‌شدهٔ <span class="num">−0.107</span> تبدیل شد به زیان واقعی
+    <span class="num loss">−0.275</span>، یعنی <strong>۲٫۶ برابر</strong>.
+  </p>
+  <p>
+    قیمت خروج حتی از کف کندل هم پایین‌تر است، چون آن کندل‌ها سری
+    <strong>اسپات</strong> هستند و دفتر فیوچرز در آن لحظه بیشتر ریزش کرده بود.
+  </p>
+
+  <h3>ریسک هم‌بستگی زیر مارجین کراس</h3>
+  <p>
+    در همان دو دقیقه، <code>SHIB</code>
+    (<span class="num loss">−2.10%</span>)، <code>XRP</code>
+    (<span class="num loss">−4.90%</span>) و <code>POL</code>
+    (<span class="num loss">−2.05%</span>) هر سه حد ضرر خوردند. یک ریزش
+    بازارگستر، کل دفتر را هم‌زمان زد. زیر مارجین کراس همهٔ پوزیشن‌ها از یک
+    استخر تغذیه می‌کنند و تبدیل خودش صریح گفته است که
+    <strong>یک پوزیشن می‌تواند کل حساب را لیکویید کند</strong>.
+  </p>
+
+  <h3>لبه، هم‌اندازهٔ کارمزد است</h3>
+  <p>
+    این بزرگ‌ترین ریسک باقی‌مانده است و هیچ‌کدام از اصلاحات بالا آن را حل
+    نمی‌کند. اصلاحات، زیان‌های <em>غیرضروری</em> را حذف کردند؛ هیچ‌کدام لبهٔ
+    جدیدی نساختند. با ۰٫۲٪ هزینه در هر رفت‌وبرگشت، فیلتر جهت فقط در
+    نگه‌داری‌های ۸ ساعته و بیشتر از هزینهٔ خودش عبور می‌کند. پیکربندی فعلی باید
+    روی نمونهٔ مستقل خودش قضاوت شود، پیش از آنکه حجم افزایش یابد.
+  </p>
+
+  <div class="panel">
+    <p class="panel__title">تفاوت سود ناخالص و خالص در داشبورد</p>
+    <p>
+      ستون «سود و زیان ناخالص» دقیقاً همان چیزی است که اپلیکیشن تبدیل نشان
+      می‌دهد: <code>(قیمت لحظه‌ای − ورود) × مقدار</code>. ستون خالص، کارمزد
+      رفت‌وبرگشت را کم می‌کند و همان عددی است که قاعدهٔ خروج موتور آن را می‌سنجد.
+      <strong>فاصلهٔ میان این دو ستون، همان کارمزد است</strong> — یعنی همان چیزی
+      که ۷۱٪ زیان این حساب را ساخته، و برای همین هر دو با هم نمایش داده می‌شوند.
+    </p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============================================================ CONTROL -->
+<section>
+  <h2>۷. کنترل و ایمنی</h2>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>کار</th><th>روش</th></tr></thead>
+      <tbody>
+        <tr><td>فعال / غیرفعال کردن معاملهٔ واقعی</td><td><code>demo.live_trading</code> — هر چرخه خوانده می‌شود، نیازی به ری‌استارت نیست</td></tr>
+        <tr><td>اجرای آزمایشی بدون ارسال سفارش</td><td><code>demo.live_dry_run: true</code></td></tr>
+        <tr><td><strong>کلید توقف اضطراری</strong></td><td><code>POST /api/live/flatten</code> — همهٔ پوزیشن‌ها را می‌بندد، حتی اگر حلقهٔ موتور گیر کرده باشد</td></tr>
+        <tr><td>مشاهدهٔ وضعیت</td><td><code>GET /api/live</code> · <code>GET /api/live/history</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>تنظیمات فعلی</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>کلید</th><th class="n">مقدار</th><th>اثر</th></tr></thead>
+      <tbody>
+        <tr><td><code>profit_close_after_h</code></td><td class="n num">1.0</td><td>حداقل مدت نگه‌داری پیش از بستن سودده</td></tr>
+        <tr><td><code>profit_close_fee_multiple</code></td><td class="n num">1.5</td><td>حاشیه در برابر لغزش قیمت</td></tr>
+        <tr><td><code>adverse_exit_enabled</code></td><td class="n"><span class="tag tag--off">خاموش</span></td><td>پوزیشن زیان‌ده هرگز دست‌کاری نمی‌شود</td></tr>
+        <tr><td><code>allow_shorts</code></td><td class="n"><span class="tag tag--off">خاموش</span></td><td>فقط خرید</td></tr>
+        <tr><td><code>live_cycle_seconds</code></td><td class="n num">3</td><td>دورهٔ حلقهٔ پایش</td></tr>
+        <tr><td><code>history_interval_seconds</code></td><td class="n num">15</td><td>فاصلهٔ ثبت نمونه</td></tr>
+        <tr><td><code>min_score</code></td><td class="n num">75</td><td>آستانهٔ ورود</td></tr>
+        <tr><td><code>exit_score_margin</code></td><td class="n num">10</td><td>کف نگه‌داری = ۶۵</td></tr>
+        <tr><td><code>max_entry_drift_r</code></td><td class="n num">0.3</td><td>سقف انحراف سیگنال کهنه</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel panel--warn">
+    <p class="panel__title">قاعده‌ای که چند بار به‌سختی آموخته شد</p>
+    <p>
+      <strong>«سیگنالی نبود» هرگز نباید شکلِ بروز یک خطا باشد.</strong> چهار
+      باگ زندهٔ جداگانه پشت موتوری پنهان شدند که فقط هنگام موفقیت حرف می‌زد.
+      همین اواخر، ثبت تاریخچه روی <em>هر</em> فراخوان خطا می‌داد و چون خطا در
+      سطح <code>debug</code> بلعیده می‌شد، جدول خالی می‌ماند و هیچ‌چیز دلیلش را
+      نمی‌گفت. هر تلاش و نتیجه‌اش باید ثبت شود، و «چیزی برای گرفتن نبود» باید از
+      «هرچه امتحان کردم خطا داد» قابل تفکیک باشد.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p>
+    این سند وضعیت سیستم را در تاریخ <strong>۱ شهریور ۱۴۰۵</strong>
+    (<span class="num">2026-08-23</span>) توصیف می‌کند. منبع رسمی و به‌روز،
+    <code>CLAUDE.md</code> و <code>docs/RESEARCH_LOG.md</code> در همین مخزن است.
+    همهٔ اعداد از رکورد واقعی معاملات و بازپخش دادهٔ تاریخی به‌دست آمده‌اند.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
