@@ -463,6 +463,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"cycle": cycle, "fill": filled,
                                "state": demo.state()})
 
+        if path == "/api/live/close":
+            # One position, on the operator's instruction. Separate from
+            # /api/live/flatten on purpose: that is the kill switch and takes the
+            # whole book, which is the wrong tool for "get me out of this trade".
+            from . import live                                 # noqa: PLC0415
+            symbol = str(body.get("symbol") or "").strip()
+            if not symbol:
+                return self._error(400, "symbol is required")
+            try:
+                return self._json(live.close_manual(symbol))
+            except Exception as exc:                           # noqa: BLE001
+                return self._error(500, f"close failed: {exc}")
+
         if path == "/api/live/flatten":
             # The kill switch. Closes every open position on the venue, whatever the
             # local records think, and works even if the engine loop is wedged.

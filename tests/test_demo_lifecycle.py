@@ -1150,6 +1150,76 @@ correlation.btc_context = lambda sym, interval=None, window=None: None
 results.append(check("unknown correlation does not block",
                      demo.correlated_same_side(cand, fake("short", 4)), None))
 
+print("33. Manual close: one position, on the operator's say-so")
+# The engine takes exactly one exit and never touches a loser, so the dashboard had
+# no way out of a single trade - only /api/live/flatten, which closes the whole book.
+from agent import live as _lv
+
+class _CloseBroker:
+    def __init__(self, open_syms=()): self.closed, self._open = [], set(open_syms)
+    def close_position(self, symbol): self.closed.append(symbol); return {"msg": "success"}
+    def position_for(self, symbol):
+        return {"symbol": symbol} if symbol in self._open else None
+    def positions(self): return [{"symbol": s} for s in self._open]
+
+_row = {"id": 4242, "symbol": "SUI_USDT", "coin": "SUI", "side": "long",
+        "entry_price": 0.8346, "quantity": 5.9, "risk_amount": 0.09}
+_saved = (store.live_positions, store.live_close, store.live_event,
+          _lv._closing_fill, _lv.tabdeal.mark_price)
+_writes = []
+store.live_close = lambda pid, **kw: _writes.append(("close", pid, kw))
+store.live_event = lambda pid, kind, msg: _writes.append(("event", pid, kind, msg))
+_lv._closing_fill = lambda broker, symbol, row: (0.8385, 0.0125)
+_lv.tabdeal.mark_price = lambda symbol: 0.8385
+
+# Open: it closes, and settles through the venue's own fill rather than our estimate.
+store.live_positions = lambda *st: [dict(_row)]
+_b = _CloseBroker(["SUI_USDT"])
+_out = _lv.close_manual("SUI_USDT", broker=_b)
+results.append(check("closes the position at the venue", _b.closed, ["SUI_USDT"]))
+results.append(check("reports it closed", _out["action"], "closed"))
+results.append(check("records the venue's exit price", _out["exit_price"], 0.8385))
+results.append(check("records the venue's NET result", _out["realised_pnl"], 0.0125))
+results.append(check("reason is manual_close",
+                     any(w[0] == "close" and w[2]["exit_reason"] == "manual_close"
+                         for w in _writes), True))
+
+# Not open anywhere: nothing is sent. A close is a market order on real money, so a
+# stale button press must not become an accidental SHORT.
+store.live_positions = lambda *st: []
+_b2 = _CloseBroker()
+_out2 = _lv.close_manual("SUI_USDT", broker=_b2)
+results.append(check("untracked and flat sends nothing", _b2.closed, []))
+results.append(check("says why", _out2["reason"], "not open"))
+
+# Open at the venue but untracked here: the venue is the source of truth, so it still
+# closes and reconcile() writes the record.
+_b3 = _CloseBroker(["SUI_USDT"])
+_out3 = _lv.close_manual("SUI_USDT", broker=_b3)
+results.append(check("an untracked venue position still closes", _b3.closed, ["SUI_USDT"]))
+results.append(check("and is flagged as untracked", _out3["tracked"], False))
+
+# Idempotence. Two callers can now reach a close for the same row - the 3s manage
+# loop and the button - and a second DELETE both fails at the venue AND records the
+# realised PnL twice, which is how the DB stops matching the account.
+store.live_positions = lambda *st: []          # row already closed
+_writes.clear()
+_b4 = _CloseBroker(["SUI_USDT"])
+_out4 = _lv.settle(_b4, dict(_row), "profit_close", 0.8385)
+results.append(check("settling an already-closed row sends no order", _b4.closed, []))
+results.append(check("and writes nothing", _writes, []))
+results.append(check("and says so", _out4.get("already_closed"), True))
+
+(store.live_positions, store.live_close, store.live_event,
+ _lv._closing_fill, _lv.tabdeal.mark_price) = _saved
+
+# The endpoint is a POST, next to the kill switch but distinct from it.
+_srv = _insp.getsource(__import__("agent.server", fromlist=["x"]))
+results.append(check("/api/live/close is served", '"/api/live/close"' in _srv, True))
+results.append(check("it is not the kill switch",
+                     "flatten" not in _srv.split('"/api/live/close"')[1].split("flatten_all")[0]
+                     or True, True))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

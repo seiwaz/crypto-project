@@ -334,19 +334,80 @@ def settle(broker, row: dict, reason: str, fallback_price: float) -> dict:
     Falls back to the estimate only when the venue has not yet published the fill,
     and says so in the event log rather than silently passing an estimate off as
     settled.
+
+    Serialized, and idempotent against a row that is already closed. Two callers can
+    now reach a close for the same position — the 3-second manage loop and an
+    operator pressing Close — and closing twice is not a harmless retry: the second
+    DELETE fails with "position not found" while `live_close` happily records the
+    realised PnL a second time. The row is therefore re-read for `status='open'`
+    inside the lock, which is the only place that check is not already stale.
     """
     symbol = row["symbol"]
-    broker.close_position(symbol)
-    price, pnl = _closing_fill(broker, symbol, row)
-    estimated = price is None
-    store.live_close(row["id"], exit_price=price if price else fallback_price,
-                     exit_reason=reason, realised_pnl=pnl)
-    store.live_event(row["id"], "close",
-                     f"{reason} at {price if price else fallback_price} "
-                     f"(net {pnl if pnl is not None else 'unknown'})"
-                     + (" [ESTIMATED — venue fill not yet available]" if estimated else ""))
+    with _settle_lock:
+        still_open = any(int(r["id"]) == int(row["id"])
+                         for r in store.live_positions("open"))
+        if not still_open:
+            log.warning("live: %s settle(%s) skipped — row %s is already closed",
+                        symbol, reason, row["id"])
+            return {"exit_price": row.get("exit_price"),
+                    "realised_pnl": row.get("realised_pnl"),
+                    "estimated": False, "already_closed": True}
+
+        broker.close_position(symbol)
+        price, pnl = _closing_fill(broker, symbol, row)
+        estimated = price is None
+        store.live_close(row["id"], exit_price=price if price else fallback_price,
+                         exit_reason=reason, realised_pnl=pnl)
+        store.live_event(row["id"], "close",
+                         f"{reason} at {price if price else fallback_price} "
+                         f"(net {pnl if pnl is not None else 'unknown'})"
+                         + (" [ESTIMATED — venue fill not yet available]" if estimated else ""))
     return {"exit_price": price or fallback_price, "realised_pnl": pnl,
             "estimated": estimated}
+
+
+# Every close in this module goes through settle(), so one lock here covers the
+# engine's own exits and the operator's.
+_settle_lock = threading.Lock()
+
+
+def close_manual(symbol: str, broker=None) -> dict:
+    """Close ONE position now because the operator said so.
+
+    Asks none of _manage_one's questions — not the hour, not the fee bar, not the
+    signal. That judgement has been made by a person, and second-guessing it here
+    would just be a rule they cannot see.
+
+    It exists because the only manual control the dashboard had was
+    `/api/live/flatten`, which closes the entire book. That is a kill switch; using
+    it to drop one trade takes the other three with it.
+
+    Goes through settle() rather than calling the broker directly, so the exit price
+    and the NET result are read back from the venue and the local record cannot drift
+    from the account — the whole reason settle() exists.
+    """
+    broker = broker or _broker()
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return {"action": "none", "reason": "no symbol"}
+
+    row = next((r for r in store.live_positions("open")
+                if r["symbol"] == symbol), None)
+    if row is None:
+        # The venue is the source of truth. If it is open there but untracked here,
+        # closing it is still the right answer; reconcile() writes the record.
+        pos = broker.position_for(symbol)
+        if not pos:
+            return {"action": "none", "reason": "not open", "symbol": symbol}
+        broker.close_position(symbol)
+        log.warning("live: %s manual close of an UNTRACKED venue position", symbol)
+        return {"action": "closed", "symbol": symbol, "tracked": False}
+
+    mark = tabdeal.mark_price(symbol) or float(row.get("entry_price") or 0)
+    out = settle(broker, row, "manual_close", mark)
+    log.warning("live: %s manual_close at %s (net %s)",
+                symbol, out.get("exit_price"), out.get("realised_pnl"))
+    return {"action": "closed", "symbol": symbol, "tracked": True, **out}
 
 
 def _closing_fill(broker, symbol: str, row: dict) -> tuple[float | None, float | None]:
@@ -973,6 +1034,30 @@ def cycle() -> dict:
     return out
 
 
+def last_decisions() -> dict:
+    """What the manager decided about each open position on its most recent pass.
+
+    The board could show a position sitting an hour past the bar in clear profit and
+    say nothing at all about why it was still open — which reads exactly like a
+    broken close. The engine already knows: it returns `riding_signal` with the
+    verdict and score it is holding on. This surfaces that instead of leaving the
+    operator to infer a fault from silence.
+
+    Keyed by symbol, from the last cycle's own record; empty if no cycle has run yet.
+    """
+    out: dict[str, dict] = {}
+    try:
+        cycle_rec = store.get_kv("live.last_cycle") or {}
+        for d in cycle_rec.get("managed") or []:
+            sym = d.get("symbol")
+            if sym:
+                out[sym] = {"action": d.get("action"), "reason": d.get("reason"),
+                            "detail": d.get("detail"), "at": cycle_rec.get("at")}
+    except Exception as exc:                                   # noqa: BLE001
+        log.debug("live: could not read the last cycle's decisions: %s", exc)
+    return out
+
+
 def history(include_closed: int = 5) -> dict:
     """Per-position price history for the dashboard chart.
 
@@ -1163,6 +1248,7 @@ def state() -> dict:
         "venue_positions": positions,
         "live": _live_pnl(positions, cfg),
         "tracked": store.live_positions("pending", "open"),
+        "decisions": last_decisions(),
         "closed": store.live_closed()[:50],
         "slots": {"used": len(positions), "max": cfg["max_slots"]},
         "equity": account_equity(broker),

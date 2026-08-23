@@ -187,6 +187,14 @@ button, input, select { font: inherit; color: inherit; }
 .btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn--ghost { background: transparent; }
 
+/* Manual close. Outlined rather than filled: it sits once per row in a dense table,
+ * and a row of solid red blocks would read as an alarm about the positions rather
+ * than as a control. It fills in on hover, where the intent is already committed. */
+.btn--danger { background: transparent; border-color: var(--down); color: var(--down); }
+.btn--danger:hover:not(:disabled) { background: var(--down); border-color: var(--down); color: #fff; }
+.btn--xs { padding: 0.15rem 0.5rem; font-size: 0.72rem; line-height: 1.5; }
+.ltable td.act { text-align: end; white-space: nowrap; }
+
 /* Scan status */
 
 .scan {
@@ -1051,4 +1059,21 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   padding: .08rem .4rem;
   white-space: nowrap;
   align-self: center;
+}
+
+/* Why a position is still open. Reads as an annotation on the coin, not a status
+ * pill: it is the engine explaining itself, and it should not compete with the side
+ * or the P/L for attention. */
+.holdtag {
+  display: inline-block;
+  margin-inline-start: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  vertical-align: middle;
+  white-space: nowrap;
 }

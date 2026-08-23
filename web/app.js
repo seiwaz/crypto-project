@@ -23,6 +23,7 @@ const API = {
   reassess:   () => fetchJSON('/api/llm/reassess', {}),
   live:        () => fetchJSON('/api/live'),
   liveHistory: () => fetchJSON('/api/live/history'),
+  liveClose:   (symbol) => fetchJSON('/api/live/close', { symbol }),
 };
 
 async function fetchJSON(url, body) {
@@ -1075,7 +1076,23 @@ function positionChart(positions) {
  * a mark read at request time. This file does not recompute any of it — deriving P&L
  * in the browser from a 15s-old sampled mark is what put this column out of step with
  * the venue's «سود و زیان ناخالص» in the first place. */
-function livePositionRow(p, pnl) {
+/* Why the engine is still holding this one.
+ *
+ * A position an hour past the bar and clearly in profit, sitting open with no
+ * explanation, reads as a broken close - it was reported as exactly that. The engine
+ * knows perfectly well: `riding_signal` means the scan still calls this a TAKE at or
+ * above the hold score, so banking it would be leaving a live signal on the table.
+ * Say so on the row. */
+function holdBadge(decision) {
+  if (!decision || decision.action !== 'HOLD' || !decision.reason) return null;
+  const label = t(`live.hold.${decision.reason}`);
+  return el('span', {
+    class: 'holdtag', text: label === `live.hold.${decision.reason}` ? decision.reason : label,
+    attrs: { title: decision.detail || '' },
+  });
+}
+
+function livePositionRow(p, pnl, decision) {
   const mark = pnl && Number.isFinite(Number(pnl.mark)) ? Number(pnl.mark) : null;
   const pct = pnl && pnl.pct !== undefined ? Number(pnl.pct) : null;
   const gross = pnl && pnl.gross !== undefined ? Number(pnl.gross) : null;
@@ -1083,7 +1100,7 @@ function livePositionRow(p, pnl) {
   const money = (v) => (v === null || !Number.isFinite(v))
     ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(5)}`;
   const cells = [
-    el('td', {}, [el('strong', { text: p.coin, dir: 'ltr' })]),
+    el('td', {}, [el('strong', { text: p.coin, dir: 'ltr' }), holdBadge(decision)]),
     el('td', { class: `side side--${p.side}`, text: t(`side.${p.side}`) }),
     el('td', { class: 'num', text: fmtNum(p.entry), dir: 'ltr' }),
     el('td', { class: 'num', text: mark === null ? '—' : fmtNum(mark), dir: 'ltr' }),
@@ -1106,19 +1123,55 @@ function livePositionRow(p, pnl) {
       el('span', { class: 'sltp__tp', text: fmtNum(p.tp1) }),
     ]),
     el('td', { class: 'num', text: p.score != null ? Number(p.score).toFixed(1) : '—', dir: 'ltr' }),
+    el('td', { class: 'act' }, [closeButton(p, net)]),
   ];
   return el('tr', {}, cells);
 }
 
-function liveTable(positions, pnlBySymbol) {
+/* Manual close. The engine deliberately takes only ONE exit and never touches a
+ * losing position, so without this the only way out of a single trade from here was
+ * /api/live/flatten - the kill switch, which closes the whole book.
+ *
+ * Confirms first, and the confirmation names the symbol and the NET result, because
+ * this spends real money at market: a position closed while net is negative realises
+ * that loss, and the number is the part worth reading twice. */
+function closeButton(p, net) {
+  const btn = el('button', {
+    class: 'btn btn--danger btn--xs', text: t('live.close'),
+    attrs: { type: 'button', title: t('live.close.hint') },
+  });
+  btn.addEventListener('click', async () => {
+    const shown = Number.isFinite(net) ? `${net > 0 ? '+' : ''}${net.toFixed(5)}` : '—';
+    if (!window.confirm(t('live.close.confirm', { coin: p.coin, net: shown }))) return;
+    btn.disabled = true;
+    btn.textContent = t('live.close.working');
+    try {
+      const out = await api.liveClose(p.symbol);
+      /* Refresh from the server rather than patching the row: the venue is the
+       * source of truth and the realised figure comes back from it. */
+      await refreshLive();
+      if (out && out.action !== 'closed') {
+        window.alert(t('live.close.failed', { coin: p.coin, why: out.reason || '?' }));
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = t('live.close');
+      window.alert(t('live.close.failed', { coin: p.coin, why: err.message }));
+    }
+  });
+  return btn;
+}
+
+function liveTable(positions, pnlBySymbol, decisions) {
   const open = positions.filter((p) => p.status === 'open');
   if (!open.length) return el('div', { class: 'empty', text: t('live.none') });
   const head = el('tr', {},
-    ['coin', 'side', 'entry', 'mark', 'pct', 'gross', 'pnl', 'held', 'sltp', 'score']
+    ['coin', 'side', 'entry', 'mark', 'pct', 'gross', 'pnl', 'held', 'sltp', 'score', 'act']
       .map((k) => el('th', { text: t(`live.col.${k}`) })));
   return el('table', { class: 'ltable' }, [
     el('thead', {}, [head]),
-    el('tbody', {}, open.map((p) => livePositionRow(p, pnlBySymbol.get(p.symbol)))),
+    el('tbody', {}, open.map((p) => livePositionRow(
+      p, pnlBySymbol.get(p.symbol), (decisions || {})[p.symbol]))),
   ]);
 }
 
@@ -1230,7 +1283,7 @@ function renderLive() {
   host.replaceChildren(
     summary,
     el('h3', { class: 'sect', text: t('live.open') }),
-    liveTable(positions, pnlBySymbol),
+    liveTable(positions, pnlBySymbol, st.decisions),
     el('h3', { class: 'sect', text: t('live.history') }),
     historySummary(st.closed || []),
     historyTable(st.closed || []),
