@@ -757,6 +757,53 @@ locked at TP1, time stop at 6 candles) are **not** what runs. Tabdeal supports
 neither `reduceOnly` nor a partial close, so TP1 is a full close and there is no
 TP2. Keep that table in step with `agent/live.py`.
 
+## Websocket price feed, and what Tabdeal actually publishes (2026-08-23)
+
+**Marks now come from Tabdeal's pushed order book.** `agent/tabdeal_ws.py` keeps one
+socket to `wss://api1.tabdeal.org/stream/`, subscribes to the *open* symbols only,
+and `tabdeal.mark_price()` uses the pushed mid when it is fresher than 8s, falling
+back to REST otherwise. That removes ~80 REST calls a minute from the 3s loop.
+Verified live: 4 symbols subscribed, prices 0.1-1.6s old.
+
+**Exactly one stream exists.** Probed across both hosts and both sockets:
+`<sym>@depth@2000ms` on `api1` works and pushes a **full snapshot** (100 bids + 100
+asks, best first). Everything else is refused with an explicit `INVALID_FORMAT`:
+`trade`, `aggTrade`, `trades`, `deal`, `matches`, `kline`, `candle`, `ticker`,
+`miniTicker`, `bookTicker`, `markPrice`, `openInterest`.
+`wss://ws.tabdeal.org/special_margin/stream/` connects and accepts **nothing**.
+REST `trades`/`aggTrades`/`historicalTrades`/`ticker/24hr`/`klines`/`openInterest`
+all 404 on both hosts.
+
+**Consequences, both of which close old questions:**
+- **There is no "websocket only" configuration.** Candles — and therefore every
+  indicator — stay on REST, and account/position/order calls stay on signed REST.
+- **Futures volume is confirmed unobtainable.** No trade feed, no futures klines, no
+  ticker. The "volume bias" direction check (1 of 9) will keep measuring the *spot*
+  book. This is now verified across two hosts, two sockets and ten REST paths, not
+  inferred from one probe.
+
+The socket's symbol convention is the **inverse** of REST's: REST needs the
+underscore (`BTC_USDT`), the socket rejects it (`btcusdt@depth@2000ms`).
+
+The feed computes the bid/ask **mid** deliberately — the same quantity REST
+`mark_price()` returned — so changing transport did not shift every P&L figure. The
+frames also carry `p` (tracks a mark) and `f`/`f_bid`/`f_ask` (a fair-price family);
+adopting one would change what "mark" *means*, which is a separate decision.
+
+### Deployment gotcha: the service runs from a virtualenv
+
+**`websocket-client` must be installed into `/opt/crypto-screener/.venv`, not system
+python.** `run.sh` starts `/opt/crypto-screener/.venv/bin/python -m agent.server`.
+A system-wide `pip3 install` is invisible to it, and the failure is confusing:
+`import websocket` succeeds as the `screener` user, from the service's cwd, and
+inside a `systemd-run` sandbox with the same properties — while the live process
+still says `ModuleNotFoundError`. `/proc/<pid>/exe` says `/usr/bin/python3.12`
+because the venv python is a symlink, so that check *actively misleads*. Check
+`/proc/<pid>/cmdline` instead.
+
+The app otherwise stays **stdlib-only**; this is the one optional accelerator, and
+without it the feed reports itself unavailable and every mark falls back to REST.
+
 ## Real-money migration — the dossier that preceded going live
 
 The user has asked for everything to be prepared so a "migrate to real trading"
