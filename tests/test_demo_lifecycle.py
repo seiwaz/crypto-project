@@ -595,6 +595,30 @@ _below["score"] = 76.0
 results.append(check("and 76 is accepted",
                      [r["coin"] for r in demo.qualifying_signals()], ["LOWSCORE"]))
 
+print("23. Holding is judged on the thesis, not on the entry gates")
+# AAVE closed at score 74.0 with the verdict still TAKE, because the exit test WAS
+# the entry test (floor 75). A score near the bar churned, at 0.2% a round trip.
+# Strip comments before matching: the comment block here QUOTES the old rule to
+# explain why it went, and matching it would assert against prose, not behaviour.
+_pc_raw = _insp.getsource(demo._profit_signal_check)
+_pc = "\n".join(l for l in _pc_raw.splitlines() if not l.lstrip().startswith("#"))
+results.append(check("a hold floor exists below the entry bar",
+                     demo.hold_score_floor() < demo.min_score(), True))
+results.append(check("default band is 10 points",
+                     demo.min_score() - demo.hold_score_floor(), 10.0))
+results.append(check("holding no longer requires verdict == TAKE",
+                     'verdict == "TAKE"' in _pc, False))
+results.append(check("the entry bar is not the exit bar",
+                     ">= MIN_SCORE" in _pc, False))
+results.append(check("a direction flip closes the position",
+                     "direction flipped to" in _pc, True))
+results.append(check("a tied scan side does not count as a flip",
+                     'row.get("side_tied")' in _pc, True))
+results.append(check("conviction collapse closes the position",
+                     "hold_score_floor()" in _pc, True))
+results.append(check("missing scan data is still 'no opinion'",
+                     _pc.count("return False, None"), 2))
+
 print("22. A losing trade with a lapsed setup is closed, not waited out")
 # 23 live trades: winners banked +0.11R (signal_exit fires once profit clears the
 # fee), losers rode to the full -1.0R exchange stop because nothing ever checked

@@ -65,6 +65,16 @@ def min_score() -> float:
 # comes from `min_score()`.
 MIN_SCORE = DEFAULT_MIN_SCORE
 
+# How far below the entry bar conviction must fall before an OPEN position is closed
+# on score alone. Without a band, entry and exit share one threshold and a signal
+# sitting near it churns - each churn costing a 0.2% round trip.
+DEFAULT_EXIT_SCORE_MARGIN = 10.0
+
+
+def hold_score_floor() -> float:
+    m = config.load_settings().get("exit_score_margin")
+    return min_score() - float(m if m is not None else DEFAULT_EXIT_SCORE_MARGIN)
+
 # Ceiling on concurrent positions when slots track the signal count. Not a risk
 # limit — the heat cap is — but a bound on how thin the account will slice itself,
 # and on how many contracts the venue is asked about each cycle.
@@ -1149,12 +1159,38 @@ def _profit_signal_check(pos: dict) -> tuple[bool, str | None]:
     row = store.result_for(pos["coin"], pos.get("exchange") or settings()["exchange"])
     if not row:
         return False, None
+
+    # Holding is a different question from entering, and conflating them was costing
+    # real money.
+    #
+    # This used to require `verdict == "TAKE" and score >= MIN_SCORE` - the exact
+    # entry test. Two consequences, both seen live on 2026-08-23:
+    #
+    #   * No hysteresis. AAVE was entered at 76.9 and closed at 74.0 with the verdict
+    #     still TAKE, because the floor is 75. A score hovering near the bar churns in
+    #     and out, and every round trip costs 0.2% of notional. Nothing about the
+    #     setup had broken; the composite had drifted three points.
+    #   * The verdict is an ENTRY gate. It goes SKIP on cost efficiency, spread,
+    #     liquidity depth and drift - all questions about whether opening a NEW
+    #     position is worthwhile. Once we are in, the entry fee is spent and those
+    #     gates say nothing about the thesis. ICP showed the reverse case too: SKIP
+    #     at a score of 81.
+    #
+    # A held position should be closed when the REASON for it is gone: the direction
+    # flipped, or conviction collapsed. Not because we would decline to open it again
+    # at this moment. Under the old rule a multi-hour hold was impossible, since some
+    # entry gate fails eventually in any long window.
     verdict, score = row.get("verdict"), row.get("score")
-    if verdict == "TAKE" and score is not None and float(score) >= MIN_SCORE:
-        return True, None
-    # No "while in profit" here: adverse_exit calls this on LOSING positions too, and
-    # a log line that misstates the position's state is how a bug hides in this system.
-    return False, f"verdict is now {verdict} ({score})"
+    scan_side = (row.get("side") or "").lower()
+    pos_side = (pos.get("side") or "").lower()
+    if scan_side and pos_side and scan_side != pos_side and not row.get("side_tied"):
+        return False, f"direction flipped to {scan_side} (was {pos_side})"
+    if score is None:
+        return False, None
+    if float(score) < hold_score_floor():
+        return False, (f"conviction fell to {score}, below the {hold_score_floor():g} "
+                       f"hold floor (entry bar {min_score():g})")
+    return True, None
 
 
 def _review(pos: dict) -> str | None:
