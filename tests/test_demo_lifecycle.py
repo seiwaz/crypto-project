@@ -1548,6 +1548,14 @@ print("41. The minimum hold matches the target it is sized for")
 _tune2 = _json.loads((_pl.Path(__file__).resolve().parents[1]
                       / "config/strategy-tuning.json").read_text())
 results.append(check("profit_close waits 2h", _tune2["demo"]["profit_close_after_h"], 2.0))
+# The label in the reason column names the hold, so it has to move with it. It said
+# "(1h+)" for a while after the setting became 2.0.
+_hrs = int(_tune2["demo"]["profit_close_after_h"])
+for _l in ("en", "fa"):
+    _s = _json.loads((_pl.Path(__file__).resolve().parents[1]
+                      / f"web/i18n/{_l}.json").read_text())["demo.exit.profit_close"]
+    results.append(check(f"{_l} profit_close label names the real hold",
+                         str(_hrs) in _s or "۲" in _s, True))
 results.append(check("and the code default agrees",
                      '"profit_close_after_h": float(d.get("profit_close_after_h") or 2.0)'
                      in _insp.getsource(_lv.settings), True))
@@ -1635,6 +1643,42 @@ results.append(check("the screener poll updates BTC too",
 # Polling faster than the venue pushes just re-renders the same number.
 results.append(check("the live poll matches the 2s depth push",
                      "const LIVE_POLL_MS = 2000;" in _js, True))
+
+print("43. No phantom TP2 on a venue that cannot scale out")
+# The plan computed a TP2, stored it on the row, drew it on the chart and measured
+# the displayed R:R against it — on a venue where the engine closes the WHOLE
+# position at TP1, so TP2 can never be reached.
+_tpsrc = _insp.getsource(_tp)
+results.append(check("TP2 is only computed for a scale-out venue",
+                     'tp2_r = (args.tp2_r if args.tp2_r else prof["tp2_r"]) if scale_out else None'
+                     in _tpsrc, True))
+results.append(check("and the price follows it",
+                     "tp2 = (entry + sign * tp2_r * stop_distance) if tp2_r else None" in _tpsrc, True))
+results.append(check("levels emit None rather than a number",
+                     '"tp2": (round(tp2, 8) if tp2 else None)' in _tpsrc, True))
+results.append(check("R:R is not quoted against it either",
+                     '"rr_tp2": (round(tp2_r, 2) if tp2_r else None)' in _tpsrc, True))
+# The entry path must not demand a level that is deliberately absent, or every plan
+# would be rejected the moment TP2 stopped being invented.
+results.append(check("entry does not require tp2",
+                     "for v in (plan_entry, stop, tp1))" in _insp.getsource(_lv._enter), True))
+# valid_geometry treats a missing level as "not my problem" — confirm, since the
+# ordering check reads tp2.
+results.append(check("geometry passes with tp2 absent",
+                     demo.valid_geometry("long", {"entry": 10, "stop": 9, "tp1": 12,
+                                                  "tp2": None}), True))
+results.append(check("and still catches a real inversion",
+                     demo.valid_geometry("long", {"entry": 10, "stop": 11, "tp1": 12,
+                                                  "tp2": 13}), False))
+# The UI must omit the row, not render an empty one.
+_appjs = (_pl.Path(__file__).resolve().parents[1] / "web/app.js").read_text()
+results.append(check("the UI omits the TP2 stat when absent",
+                     "...(L.tp2 ? [stat(t('pos.tp2'), num(L.tp2))] : [])" in _appjs, True))
+results.append(check("and falls back to TP1 for R:R",
+                     "E.rr_tp2 ?? E.rr_tp1" in _appjs, True))
+# Other venues keep it.
+results.append(check("a scale-out venue still has a TP2 in its profile",
+                     _tp.PROFILES["scalp"]["tp2_r"], 3.0))
 
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")

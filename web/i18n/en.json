@@ -97,7 +97,7 @@
   "demo.exit.adverse_exit": "Setup lapsed while down",
   "demo.exit.gave_back": "Gave back",
   "demo.exit.liquidated": "Liquidated",
-  "demo.exit.profit_close": "Closed in profit (1h+)",
+  "demo.exit.profit_close": "Closed in profit (2h+)",
   "demo.exit.reduced": "Reduced at TP1",
   "demo.exit.review_exit": "Review exit",
   "demo.exit.signal_exit": "Signal exit",

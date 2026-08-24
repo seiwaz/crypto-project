@@ -641,7 +641,10 @@ def _enter(broker, row: dict, cfg: dict, notional_now: float) -> dict:
     levels = plan.get("levels") or {}
     plan_entry = levels.get("entry")
     stop, tp1, tp2 = levels.get("stop"), levels.get("tp1"), levels.get("tp2")
-    if not all(isinstance(v, (int, float)) for v in (plan_entry, stop, tp1, tp2)):
+    # tp2 is deliberately absent on a venue that cannot scale out — the position is
+    # closed whole at TP1 — so it is NOT required here. Requiring it would reject
+    # every plan the moment TP2 stopped being invented.
+    if not all(isinstance(v, (int, float)) for v in (plan_entry, stop, tp1)):
         raise ValueError("plan is missing levels")
 
     symbol = row["symbol"]

@@ -869,10 +869,18 @@ def cmd_plan(args):
             f"({prof['liq_buffer']}x required). Reduce leverage.")
 
     # --- targets ----------------------------------------------------------------
+    #
+    # TP2 only exists where the position can be scaled out of. On Tabdeal it cannot:
+    # no `reduceOnly`, no partial close, so the engine attaches TP1 to the position
+    # as a FULL take-profit and the trade is over when it fills. A TP2 was still
+    # being computed, stored on the row, drawn on the chart and counted in the
+    # displayed R:R — a level that can never be reached and a reward figure measured
+    # against it. Emit nothing rather than a number that cannot happen.
+    scale_out = (args.exchange or "").lower() != "tabdeal"
     tp1_r = args.tp1_r if args.tp1_r else prof["tp1_r"]
-    tp2_r = args.tp2_r if args.tp2_r else prof["tp2_r"]
+    tp2_r = (args.tp2_r if args.tp2_r else prof["tp2_r"]) if scale_out else None
     tp1 = entry + sign * tp1_r * stop_distance
-    tp2 = entry + sign * tp2_r * stop_distance
+    tp2 = (entry + sign * tp2_r * stop_distance) if tp2_r else None
 
     # --- costs ------------------------------------------------------------------
     fee_pct = args.fee_pct if args.fee_pct is not None else ex["default_fee_pct"]
@@ -901,7 +909,6 @@ def cmd_plan(args):
     # at TP1 and TP2 never happens — averaging the two credited the plan with a
     # second exit that cannot occur, overstating expectancy on every Tabdeal scan and
     # so overstating the score that decides whether to trade at all.
-    scale_out = (args.exchange or "").lower() != "tabdeal"
     avg_win_r = ((tp1_r + tp2_r) / 2.0) if scale_out else tp1_r
     e_gross = win_rate * avg_win_r - (1.0 - win_rate) * 1.0
     e_net = e_gross - cost_in_r
@@ -965,7 +972,7 @@ def cmd_plan(args):
             "stop_distance": round(stop_distance, 8),
             "stop_pct": round(stop_pct, 3),
             "tp1": round(tp1, 8), "tp1_r": tp1_r,
-            "tp2": round(tp2, 8), "tp2_r": tp2_r,
+            "tp2": (round(tp2, 8) if tp2 else None), "tp2_r": tp2_r,
             "liquidation_price_estimate": round(liq_price, 8),
         },
         "sizing": {
@@ -989,7 +996,8 @@ def cmd_plan(args):
             "holding_cost": round(holding_cost, 2),
             "total_cost": round(total_cost, 2),
             "cost_in_R": round(cost_in_r, 3),
-            "rr_tp1": round(tp1_r, 2), "rr_tp2": round(tp2_r, 2),
+            "rr_tp1": round(tp1_r, 2),
+            "rr_tp2": (round(tp2_r, 2) if tp2_r else None),
             "avg_win_R": round(avg_win_r, 2),
             "breakeven_win_rate": round(breakeven_wr, 3),
             "assumed_win_rate": win_rate,
@@ -1042,8 +1050,12 @@ def cmd_plan(args):
           f"   ({L['stop_pct']}%)")
     print(f"   TP1                  {L['tp1']:>14}  "
           f"{abs(L['tp1'] - L['entry']):>12.6g}   {L['tp1_r']:.2f}R")
-    print(f"   TP2                  {L['tp2']:>14}  "
-          f"{abs(L['tp2'] - L['entry']):>12.6g}   {L['tp2_r']:.2f}R")
+    if L.get("tp2"):
+        print(f"   TP2                  {L['tp2']:>14}  "
+              f"{abs(L['tp2'] - L['entry']):>12.6g}   {L['tp2_r']:.2f}R")
+    else:
+        print("   TP2                             --  "
+              "  (venue closes the whole position at TP1)")
     print(f"   liquidation (est.)   {L['liquidation_price_estimate']:>14}")
     print(f"   stop basis: {L['stop_source']}")
     print(f"\n SIZING")

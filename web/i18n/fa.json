@@ -97,7 +97,7 @@
   "demo.exit.adverse_exit": "ابطال سیگنال در ضرر",
   "demo.exit.gave_back": "بازپس‌دهی سود",
   "demo.exit.liquidated": "لیکوئید شد",
-  "demo.exit.profit_close": "بسته شده در سود (۱ ساعت+)",
+  "demo.exit.profit_close": "بسته شده در سود (۲ ساعت+)",
   "demo.exit.reduced": "کاهش در حد سود ۱",
   "demo.exit.review_exit": "خروج پس از بازبینی",
   "demo.exit.signal_exit": "خروج با تغییر سیگنال",

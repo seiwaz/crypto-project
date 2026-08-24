@@ -392,7 +392,10 @@ function positionBlock(card) {
     stat(t('pos.entry'), num(L.entry)),
     stat(t('pos.stop'), num(L.stop)),
     stat(t('pos.tp1'), num(L.tp1)),
-    stat(t('pos.tp2'), num(L.tp2)),
+    /* TP2 only exists where the position can be scaled out of. Tabdeal closes the
+     * whole position at TP1, so the plan emits no TP2 there and showing an empty row
+     * would imply a level that was merely unset rather than impossible. */
+    ...(L.tp2 ? [stat(t('pos.tp2'), num(L.tp2))] : []),
     stat(t('pos.quantity'), num(S.quantity)),
     /* Toobit takes orders in contracts, not coins. Showing only the coin figure
        next to an order ticket is how you enter a position 1000x the intended size. */
@@ -423,7 +426,9 @@ function economicsBlock(card) {
       stat(t('econ.holding'), num(E.holding_cost)),
       stat(t('econ.total'), num(E.total_cost)),
       stat(t('econ.costOfR'), num(null, { raw: E.cost_in_R !== undefined ? fmtPct(E.cost_in_R * 100, 1) : null })),
-      stat(t('econ.rr'), num(E.rr_tp2)),
+      /* Against the target that can actually fill. This read rr_tp2, so on Tabdeal
+       * it showed the reward ratio of an exit the venue cannot perform. */
+      stat(t('econ.rr'), num(E.rr_tp2 ?? E.rr_tp1)),
       stat(t('econ.breakeven'), num(null, { raw: E.breakeven_win_rate !== undefined ? fmtPct(E.breakeven_win_rate * 100, 1) : null })),
       stat(t('econ.expectancy'), num(null, { raw: E.expectancy_net_R !== undefined ? `${fmtNum(E.expectancy_net_R, 3)}R` : null })),
     ]),
