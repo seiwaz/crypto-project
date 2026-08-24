@@ -25,8 +25,8 @@
     "history_interval_seconds": 15.0,
     "history_keep_days": 14.0,
     "profit_close_fee_multiple": 1.5,
-    "hold_take_score": 70.0
+    "hold_take_score": 65.83
   },
-  "min_score": 75.0,
+  "min_score": 70.83,
   "allow_shorts": true
 }

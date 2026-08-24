@@ -1476,6 +1476,36 @@ _loss, _win = 1.29, _sc["tp1_r"] - 0.15
 results.append(check("2R target now beats the true cost of a stop", _win > _loss, True))
 results.append(check("a 1R target would not have", (1.0 - 0.15) > _loss, False))
 
+print("40. The entry bar moves with the scale it is measured on")
+# Making the expectancy model honest took ~4.17 points off every score. Left alone,
+# min_score 75 would have been a silent 4-point tightening of the entry bar — the
+# live board went to ZERO TAKEs with a maximum score of 70.0.
+import json as _json, pathlib as _pl
+_tune = _json.loads((_pl.Path(__file__).resolve().parents[1]
+                     / "config/strategy-tuning.json").read_text())
+
+def _pts(e):                      # the score's own expectancy factor
+    return 25 * max(0.0, min(1.0, e / 0.30))
+
+_cost = 0.114                     # FLOKI's measured cost_in_R on scan 1063
+_old = _pts(0.50 * ((1.0 + 2.0) / 2) - 0.50 - _cost)
+_new = _pts(0.40 * 2.0 - 0.60 - _cost)
+_offset = _old - _new
+results.append(check("the offset is ~4.17 points", round(_offset, 2), 4.17))
+# and it reproduces what the live board actually printed for FLOKI
+results.append(check("matches the live breakdown (7.1 pts)", round(_new, 1), 7.2, 0.15))
+
+results.append(check("min_score moved down by the offset",
+                     round(75.0 - _tune["min_score"], 2), round(_offset, 2), 0.05))
+results.append(check("the hold bar moved with it",
+                     round(70.0 - _tune["demo"]["hold_take_score"], 2), round(_offset, 2), 0.05))
+# The gap between them is what makes banking a winner need a positive reason while
+# abandoning one only needs the thesis to be dead. It must survive the shift.
+results.append(check("the 5-point gap between entry and hold survives",
+                     round(_tune["min_score"] - _tune["demo"]["hold_take_score"], 2), 5.0))
+results.append(check("neither became a round guess",
+                     _tune["min_score"] != 70.0 and _tune["min_score"] != 71.0, True))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
