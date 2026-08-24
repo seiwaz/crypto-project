@@ -843,6 +843,88 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 21 (2026-08-24) — the entry point, audited against candles and indicators
+
+**Asked:** there may be a mistake in the entry point — verify carefully against
+candles, charts and indicator history.
+
+### Verified CORRECT — these are not the problem
+
+| check | result |
+|---|---|
+| bar alignment | spacing exactly 300s / 3600s; at production limits the phase is stable |
+| indicator reproducibility | two fetches 40s apart: ATR/EMA identical to **0.000%** |
+| data freshness at entry | snapshot fetched -> fill median **22s**, max 39s |
+| fill vs plan entry | median **+0.0037%** |
+| fill vs the bar it landed in | median **+0.0043%**, above the close exactly 50% of the time |
+
+An early reading suggested bars were off-boundary (BTC 5m starting at 04:48:27).
+That was an artefact of probing with `limit=6`: `klines()` derives `from_ts` from the
+requested count, and a short window makes the venue bucket from `from` instead of a
+canonical origin. At the limits production actually uses, bars are aligned. **Not a
+bug** — but worth knowing before anyone probes this API again with a small limit.
+
+### Genuinely wrong, and small
+
+**1. The chart feed lags the futures book, directionally.** 85 paired samples across
+5 symbols: correlation(60s price move, chart-vs-mid gap) = **-0.475**. While price is
+falling the chart reads **+0.049%** above the market; while rising, **+0.005%**. So
+the decision price is stale-high into declines. Median gap is otherwise tiny
+(-0.03% to +0.05%), so this is lag, not basis. It is roughly a fifth of the 0.225pp
+drawdown gap from Round 20 — real, but not the explanation.
+
+**2. `entry_tf` is computed in full and then discarded.** The scalp profile declares
+`entry_tf: 1m`. `compute_indicators` produces EMA20/50/200, RSI, VWAP, Ichimoku,
+swings and structure for it, and **exactly one field survives**:
+`snap["last_price"]`. All nine direction checks read the bias (1H) or decision (5m)
+timeframe. A strategy whose entire difficulty is *when* to enter throws away the only
+timeframe fine enough to time it. ZEC is the illustration: at entry its 1m close
+(872.746) sat under its own 1m EMA20 (873.76) and inside the 1m cloud.
+
+### Seven hypotheses now tested and REJECTED
+
+| # | hypothesis | n | result |
+|---|---|---|---|
+| 1 | prior 15m run-up | 39,303 | MFE/MAE flat 1.03-1.26 across every band |
+| 2 | extension over 1H EMA200 | 28,812 | flat; least-extended band is the worst |
+| 3 | position in the 2h range | 38,709 | flat 1.08-1.19 even in the top decile |
+| 4 | entry slippage | 53 | fill +0.004% vs bar close, 50/50 either side |
+| 5 | "buys the top of a 5m push" | 53 | median in-bar fill at the **56.5th** percentile, not ~100; 67% of the next hour trades above the fill; only 8% never exceeded |
+| 6 | 1m close above its 1m EMA20 | 7,681 | **backwards** — above 1.04, below **1.14** |
+| 7 | both of the 1m confirmations | 7,681 | 1.05, no better than the 1.07 baseline |
+
+**#5 deserves a note.** Two hand-picked trades (NEAR filling at 2.06 against a bar
+high of 2.0629, TAO at 242.24 against a spot bar high of 242.00) looked like proof
+that the engine buys the exact local top. Measured across all 53 entries it is not
+true. Two examples are not evidence; this is the third time this session that a
+pattern visible in a handful of trades dissolved at scale.
+
+### The one gradient that survived
+
+Where price sits inside the **last five 1m bars** does grade monotonically:
+
+| position in the 5x1m range | n | MFE/MAE |
+|---|---|---|
+| 0-25% | 2,430 | **1.19** |
+| 25-50% | 1,407 | 1.09 |
+| 50-75% | 1,365 | 1.10 |
+| 75-90% | 757 | 0.95 |
+| 90-100% | 1,722 | 0.98 |
+
+Real and in the intuitive direction, but modest (1.19 vs a 1.07 baseline) and it
+keeps only a third of entries. Not shipped: it is a candidate, not a finding, and
+combining it with the EMA20 check destroyed it (1.05).
+
+### Standing conclusion
+
+**No bug in the entry point.** The price is right, the data is fresh, the indicators
+are reproducible. The Round 20 result stands — entries take a significantly deeper
+drawdown than a random moment on the same coin in the same hour (p=0.0019) for
+identical upside (p=0.40) — and after seven tests the cause is still unidentified.
+The two real defects found here (a ~0.05% directional feed lag, and an unused entry
+timeframe) are together too small to account for it.
+
+
 ## Round 20 (2026-08-24) — why a fresh position shows red, and what the stops really cost
 
 **Asked:** positions almost always go to loss right after opening — why? And
