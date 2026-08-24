@@ -276,5 +276,12 @@
   "live.refresh": "Refresh",
   "live.refresh.hint": "Marks are live from the websocket; the account snapshot behind them is {age}s old.",
   "live.hist.more": "Show {n} more ({left} left)",
-  "live.hist.less": "Show fewer"
+  "live.hist.less": "Show fewer",
+  "demo.exit.exchange_exit": "Exchange (SL/TP)",
+  "demo.exit.manual_close": "Closed by hand",
+  "demo.exit.duplicate": "Duplicate row",
+  "bar.theme": "Theme",
+  "theme.system": "Auto",
+  "theme.light": "Light",
+  "theme.dark": "Dark"
 }

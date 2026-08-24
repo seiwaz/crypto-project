@@ -1528,6 +1528,78 @@ results.append(check("held_h only ever gates a PROFITABLE close",
 results.append(check("no time stop crept back in", "time_stop" in _m1s.split("No time stop")[0]
                      .replace("time_stop_hours", ""), False))
 
+print("42. Web UI: translations, theme, and the header ticker")
+import re as _re
+_root = _pl.Path(__file__).resolve().parents[1]
+_js = (_root / "web/app.js").read_text()
+_css = (_root / "web/app.css").read_text()
+_html = (_root / "web/index.html").read_text()
+_en = _json.loads((_root / "web/i18n/en.json").read_text())
+_fa = _json.loads((_root / "web/i18n/fa.json").read_text())
+
+# Every literal t('...') key must exist in BOTH locales, or the UI prints the key.
+_lit = set(_re.findall(r"""\bt\(\s*['\"]([^'\"]+)['\"]""", _js))
+_lit |= set(_re.findall(r"\bt\(\s*`([^`$]+)`", _js))
+_lit = {k for k in _lit if not k.endswith(".")}      # drop template prefixes
+results.append(check("no literal string is missing from en",
+                     sorted(k for k in _lit if k not in _en), []))
+results.append(check("no literal string is missing from fa",
+                     sorted(k for k in _lit if k not in _fa), []))
+
+# The exit reasons the engine can actually write must all be translated. This is what
+# printed "demo.exit.exchange_exit" on the busiest column in the table.
+for _r in ("exchange_exit", "profit_close", "signal_exit", "adverse_exit", "tp1",
+           "tp2", "time_stop", "manual_close", "duplicate"):
+    results.append(check(f"exit reason {_r} is translated",
+                         f"demo.exit.{_r}" in _en and f"demo.exit.{_r}" in _fa, True))
+# ...and an untranslated one must degrade to the raw word, not the key. t() returns
+# the KEY on a miss, which is truthy, so `t(k) || raw` could never fire.
+results.append(check("unknown reasons fall back to the raw word",
+                     "s === key ? reason.replace" in _js, True))
+
+# Language switch: repaint from strings already held, before any network call.
+_seg = _js.split("langToggle")[1][:1400]
+# Strip comments first. The prose in this very handler mentions both names in the
+# opposite order to the code, and an ordering assertion that reads comments is
+# asserting nothing.
+_code = "\n".join(l for l in _seg.splitlines()
+                  if not l.strip().startswith(("*", "/*", "//")))
+results.append(check("the toggle repaints before talking to the server",
+                     _code.index("applyDirection()") < _code.index("API.settings"), True))
+results.append(check("a failed server sync cannot abort the repaint",
+                     "catch (err)" in _code, True))
+results.append(check("both panels repaint, not just the screener",
+                     "renderAll()" in _seg, True))
+
+# Theme: three states, and 'system' must stamp nothing so the OS setting still works.
+results.append(check("three theme states", "['system', 'light', 'dark']" in _js, True))
+results.append(check("system removes the attribute",
+                     "root.removeAttribute('data-theme')" in _js, True))
+results.append(check("there is a toggle to press", 'id="themeToggle"' in _html, True))
+results.append(check("the choice persists", "localStorage.setItem('theme'" in _js, True))
+for _t in ("system", "light", "dark"):
+    results.append(check(f"theme.{_t} is translated",
+                         f"theme.{_t}" in _en and f"theme.{_t}" in _fa, True))
+# The stylesheet must keep supporting all three, including the un-stamped default.
+results.append(check("light is defined on a bare :root", ":root {" in _css, True))
+results.append(check("dark OS is guarded so an explicit light choice wins",
+                     ':root:not([data-theme="light"])' in _css, True))
+results.append(check("an explicit dark choice is honoured",
+                     ':root[data-theme="dark"]' in _css, True))
+
+# Direction colour, both places it renders.
+results.append(check("long is green in the table", ".side--long  { color: var(--pnl-up); }" in _css, True))
+results.append(check("short is red in the table", ".side--short { color: var(--pnl-down); }" in _css, True))
+results.append(check("and on the screener cards",
+                     ".pill--long" in _css and ".pill--short" in _css, True))
+
+# The header ticker is shared but was only driven by the live tab's poll.
+results.append(check("the screener poll updates BTC too",
+                     "if (state.data && state.data.btc != null) renderBtc" in _js, True))
+# Polling faster than the venue pushes just re-renders the same number.
+results.append(check("the live poll matches the 2s depth push",
+                     "const LIVE_POLL_MS = 2000;" in _js, True))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

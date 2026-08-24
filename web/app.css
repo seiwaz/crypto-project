@@ -309,8 +309,12 @@ main { max-width: 1180px; margin-inline: auto; padding: var(--gap) clamp(1rem, 3
   border: 1px solid var(--border);
 }
 .pill--provisional { border-color: var(--warning); color: var(--ink); background: rgba(250,178,25,0.14); }
-.pill--long  { border-color: var(--up);   color: var(--up); }
-.pill--short { border-color: var(--down); color: var(--down); }
+/* Screener cards: same green/red as the live table, tinted so the direction reads
+   at a glance in a dense list rather than only on close inspection. */
+.pill--long  { border-color: var(--up);   color: var(--up);
+               background: color-mix(in srgb, var(--up) 12%, transparent); }
+.pill--short { border-color: var(--down); color: var(--down);
+               background: color-mix(in srgb, var(--down) 12%, transparent); }
 .pill--muted { color: var(--ink-muted); }
 
 /* Body */
@@ -976,8 +980,15 @@ details[open] .card__head { border-block-end: 1px solid var(--hairline); margin-
   letter-spacing: .06em;
   text-transform: uppercase;
 }
+/* Direction is the first thing read off a row, so it carries the semantic colour on
+ * its own rather than relying on the P/L beside it — green long, red short, in both
+ * themes and in both the open table and the closed history. */
 .side--long  { color: var(--pnl-up); }
 .side--short { color: var(--pnl-down); }
+/* `.ltable td` is (0,1,1) and `.side--long` is (0,1,0); the table rule sets no
+   colour today, but it would silently win if it ever did. Anchor it. */
+.ltable td.side--long  { color: var(--pnl-up); }
+.ltable td.side--short { color: var(--pnl-down); }
 
 /* -- stop / target pair ---------------------------------------------------- */
 

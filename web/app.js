@@ -44,6 +44,11 @@ const HISTORY_PAGE = 10;
 
 const state = {
   lang: localStorage.getItem('lang') || 'en',
+  /* 'system' | 'light' | 'dark'. The stylesheet already supported all three — a bare
+   * :root for light, a prefers-color-scheme block guarded by :not([data-theme=light])
+   * so an explicit light choice beats a dark OS, and a [data-theme=dark] block so the
+   * toggle wins the other way. What was missing was any way to choose. */
+  theme: localStorage.getItem('theme') || 'system',
   strings: {},
   data: null,
   filter: 'ALL',
@@ -93,7 +98,26 @@ function ts(text) {
   return value === undefined ? text : value;
 }
 
+const THEMES = ['system', 'light', 'dark'];
+const THEME_ICON = { system: '\u25D0', light: '\u2600', dark: '\u263D' };
+
+function applyTheme() {
+  const root = document.documentElement;
+  /* 'system' means stamp NOTHING and let prefers-color-scheme decide — an explicit
+   * data-theme on every visit would defeat the OS setting the CSS is written for. */
+  if (state.theme === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', state.theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) {
+    btn.textContent = THEME_ICON[state.theme] || THEME_ICON.system;
+    const label = `${t('bar.theme')}: ${t(`theme.${state.theme}`)}`;
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+}
+
 function applyDirection() {
+  applyTheme();                       // its label is translated, so it follows lang
   const rtl = state.lang === 'fa';
   document.documentElement.lang = state.lang;
   document.documentElement.dir = rtl ? 'rtl' : 'ltr';
@@ -1214,6 +1238,17 @@ function historySummary(closed) {
   ]);
 }
 
+/* `t()` returns the KEY when a string is missing, which is truthy — so the old
+ * `t(key) || raw` fallback could never fire and the column printed literal
+ * "demo.exit.exchange_exit". That was the single most common exit reason in the
+ * table (21 of 58 closed trades). Fall back to the raw reason, de-underscored. */
+function exitReason(reason) {
+  if (!reason) return '—';
+  const key = `demo.exit.${reason}`;
+  const s = t(key);
+  return s === key ? reason.replace(/_/g, ' ') : s;
+}
+
 function historyTable(all) {
   if (!all.length) return el('div', { class: 'empty', text: t('live.hist.none') });
   const shown = Math.min(state.histShown, all.length);
@@ -1248,7 +1283,7 @@ function historyTable(all) {
         text: heldLabel(Number(r.opened_ts),
                         r.closed_at ? Date.parse(r.closed_at) / 1000 : undefined),
       }),
-      el('td', { text: t(`demo.exit.${r.exit_reason}`) || r.exit_reason || '—' }),
+      el('td', { text: exitReason(r.exit_reason) }),
       el('td', { class: 'num', dir: 'ltr', text: atLocal(r.closed_at) }),
     ]);
   });
@@ -1381,7 +1416,10 @@ async function refreshLive() {
   renderLive();
 }
 
-const LIVE_POLL_MS = 3000;
+/* The venue pushes depth every 2000ms and /api/live now answers in ~14ms, so the
+ * limit is the feed, not us: polling faster than the push interval re-renders the
+ * same number. 2s tracks it without asking for data that does not exist yet. */
+const LIVE_POLL_MS = 2000;
 
 function startLivePolling() {
   clearInterval(state.liveTimer);
@@ -1402,6 +1440,14 @@ function renderTabs() {
   document.getElementById('panelLive').hidden = state.tab !== 'live';
 }
 
+/* Both panels. `render()` only ever touched the screener, so a language switch (or
+ * a theme switch) left whichever tab was NOT being polled in the old state until its
+ * own timer came round. */
+function renderAll() {
+  render();
+  if (state.live) renderLive();
+}
+
 function render() {
   applyDirection();
   renderTabs();
@@ -1411,6 +1457,10 @@ function render() {
   renderUnavailable();
   renderSettingsForm();
   renderDrawer();
+  /* The header ticker is shared by both tabs but was only ever updated by the live
+   * tab's own poll, so it sat frozen while the screener was open. /api/state
+   * carries the same cached BTC mark, so the screener poll can drive it too. */
+  if (state.data && state.data.btc != null) renderBtc(state.data.btc);
 }
 
 /* ------------------------------------------------------------------- app */
@@ -1453,15 +1503,38 @@ function wireControls() {
     startPolling();
   });
 
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    state.theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length];
+    localStorage.setItem('theme', state.theme);
+    applyTheme();
+    /* The price charts read their colours from CSS variables when they are built,
+     * so they have to be rebuilt or they keep the old theme's palette. */
+    for (const chart of state.charts.values()) chart.remove();
+    state.charts.clear();
+    renderAll();
+  });
+
   document.getElementById('langToggle').addEventListener('click', async () => {
     state.lang = state.lang === 'en' ? 'fa' : 'en';
     localStorage.setItem('lang', state.lang);
     await loadStrings(state.lang);
-    await API.settings({ language: state.lang });
     /* Charts cache colours and locale at construction, so rebuild them. */
     for (const chart of state.charts.values()) chart.remove();
     state.charts.clear();
-    await refresh();
+    /* Repaint from the strings we already hold, BEFORE talking to the server.
+     * This used to await API.settings() first, and any failure there — a 401 after
+     * the session expired, a write error — threw before applyDirection() ran, so
+     * the button looked broken: the language had changed in localStorage and
+     * nothing on screen moved. The server copy is a preference, not the source of
+     * truth for what this browser displays. */
+    applyDirection();
+    renderAll();
+    try {
+      await API.settings({ language: state.lang });
+    } catch (err) {
+      console.warn('language preference not saved to the server:', err);
+    }
+    refresh();
   });
 
   for (const btn of document.querySelectorAll('.tab')) {
@@ -1482,6 +1555,10 @@ function wireControls() {
 }
 
 (async function main() {
+  /* Before the first fetch, not after: applyTheme() otherwise runs inside the first
+   * render() and a viewer whose chosen theme differs from their OS sees a flash of
+   * the wrong one for the length of a network round trip. */
+  applyTheme();
   await loadStrings(state.lang);
   wireControls();
   await refresh();

@@ -296,5 +296,12 @@
   "live.refresh": "به‌روزرسانی",
   "live.refresh.hint": "قیمت‌ها زنده از وب‌سوکت می‌آیند؛ وضعیت حساب پشت آن‌ها {age} ثانیه قدمت دارد.",
   "live.hist.more": "نمایش {n} مورد دیگر ({left} باقی‌مانده)",
-  "live.hist.less": "نمایش کمتر"
+  "live.hist.less": "نمایش کمتر",
+  "demo.exit.exchange_exit": "صرافی (حد ضرر/سود)",
+  "demo.exit.manual_close": "بستن دستی",
+  "demo.exit.duplicate": "رکورد تکراری",
+  "bar.theme": "پوسته",
+  "theme.system": "خودکار",
+  "theme.light": "روشن",
+  "theme.dark": "تیره"
 }
