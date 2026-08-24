@@ -55,6 +55,27 @@ PROFILES = {
         # tradability gates
         "atr_pct_min": 0.3, "atr_pct_max": 1.5,
         "max_spread_pct": 0.10, "liquidity_multiple": 3.0,
+        # --- target-reachability gates (2026-08-24, Round 19) ---------------------
+        #
+        # TP1 sits at 1R, so the stop distance IS the target distance. Measured over
+        # 28,812 gated entries on real 5m candles, walked forward to the touch:
+        #
+        #   stop > 2.25%   n=2,718   TP-in-1h 12.3%   meanR 1h -0.0973  2h -0.1500
+        #   stop < 1.00%   n=6,641   TP-in-1h 28.2%   meanR 1h -0.1039  2h -0.0248
+        #   1H ATR > 2.25% n=8,371   TP-in-1h 18.1%   meanR 1h -0.0929  2h -0.0641
+        #
+        # Both tails are negative in BOTH halves of the sample, so this is avoiding a
+        # measured harm rather than chasing a fitted gain. Keeping only the middle:
+        # 47.4% of entries, TP-in-1h 30.5%, meanR 1h +0.0058 (baseline -0.0481) and
+        # 2h +0.0562 (baseline +0.0026), positive in both halves.
+        #
+        # The wide tail is where a target cannot be reached inside the intended hold
+        # and only the stop can be; the tight tail is where the 0.2% round trip eats
+        # the trade (cost_in_R = 2 x fee / stop_pct, so 0.8-1.0% costs 0.20-0.25R).
+        # Live corroboration on 14 closed trades: blocks 4 of 8 stop-outs (both ZECs,
+        # AAVE, XRP; -0.674 USDT of realised loss) and 0 of 6 target hits.
+        "gate_stop_pct_min": 1.0, "gate_stop_pct_max": 2.25,
+        "gate_bias_atr_max": 2.25,
     },
     "intraday": {
         "label": "Intraday (1-4H)",
@@ -490,7 +511,8 @@ def snap_leverage(value, steps, cap):
 
 def qualify(prof, *, atr_pct=None, spread_pct=None, book_value=None, notional=None,
             direction_ratio=None, expectancy_net=None, cost_in_r=None,
-            liq_buffer_ratio=None, rr_tp2=None, blockers=None, market_closed=None):
+            liq_buffer_ratio=None, rr_tp2=None, blockers=None, market_closed=None,
+            stop_pct=None, bias_atr_pct=None):
     """Return a TAKE / WATCH / SKIP verdict with the reasoning that produced it."""
     gates, score_parts = [], []
 
@@ -525,6 +547,29 @@ def qualify(prof, *, atr_pct=None, spread_pct=None, book_value=None, notional=No
         ok = cost_in_r <= 1.0 / prof["cost_filter"]
         gate("cost efficiency", ok,
              f"costs are {cost_in_r:.2f}R (max {1.0 / prof['cost_filter']:.2f}R)")
+
+    # Target reachability. TP1 is 1R, so the stop distance is also how far price must
+    # travel to win — and the existing cost gate only bounds it from ONE side, which
+    # is why a 2.876% stop (ZEC, 2026-08-23) passed every gate at 0.08R of cost and
+    # then took a full -1.32R. See the profile block for the measurement.
+    lo, hi = prof.get("gate_stop_pct_min"), prof.get("gate_stop_pct_max")
+    if stop_pct is not None and lo is not None and hi is not None:
+        ok = lo <= stop_pct <= hi
+        why = ("target is unreachable in the intended hold; only the stop is"
+               if stop_pct > hi else
+               "the round trip eats too much of R" if stop_pct < lo else "in range")
+        gate("stop reachability", ok,
+             f"stop {stop_pct:.2f}% vs band {lo}-{hi}% ({why})")
+
+    # Regime volatility, read on the BIAS timeframe rather than the ATR timeframe.
+    # The existing "volatility fit" gate reads the 15m ATR that sets the stop; this
+    # one asks whether the instrument's whole hourly regime is orderly enough for a
+    # level to mean anything. They disagree often: ZEC passed volatility fit at 1.24%
+    # while its 1H ATR was 2.58%.
+    cap = prof.get("gate_bias_atr_max")
+    if bias_atr_pct is not None and cap is not None:
+        gate("regime volatility", bias_atr_pct <= cap,
+             f"{prof['bias_tf']} ATR {bias_atr_pct:.2f}% vs max {cap}%")
     for b in (blockers or []):
         gate("plan blocker", False, b)
 
@@ -851,6 +896,9 @@ def cmd_plan(args):
         rr_tp2=tp2_r,
         blockers=blockers,
         market_closed=closed,
+        stop_pct=stop_pct,
+        bias_atr_pct=(((snapshot or {}).get("timeframes") or {})
+                      .get("bias", {}).get("indicators", {}).get("atr_pct")),
     )
 
     plan = {

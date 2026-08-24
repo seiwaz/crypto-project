@@ -843,6 +843,87 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 19 (2026-08-24) — why ZEC was a mistake, and the two gates that catch it
+
+**Asked:** ZEC hit its stop — was the signal wrong? And prevent the AAVE / TAO /
+NEAR stop-outs.
+
+### What actually happened to ZEC
+
+Entry 873.545 at 18:46, stop 848.418 (**2.876%**), stopped at 842.2 for **-1.32R**.
+ZEC had run **+2.81% in ten minutes** (18:03->18:13) and topped at 885.4 by 18:18.
+The engine bought at 18:46 — **28 minutes after the top, on the way down** — and it
+never made a new high afterwards. BTC was flat (+0.10% to +0.29%) the whole time,
+so this was ZEC-specific.
+
+Every gate passed. Nothing was broken. The failure was that **TP1 sits at 1R, so the
+stop distance IS the target distance, and only ONE side of it was bounded.** The cost
+gate rejects a stop that is too TIGHT (cost_in_R = 2 x fee / stop_pct). Nothing
+rejected one too WIDE — and a 2.876% stop scored *well* on cost drag (0.08R, 10.5/15
+points). The scoring was rewarding exactly the geometry that cannot resolve.
+
+### The test — 28,812 gated entries, 33 symbols, real 5m candles, no lookahead
+
+Each 5m bar taken as an entry with the stop the planner would set, walked forward to
+the first touch, scored in R net of the round trip. Bias-TF figures read only from
+1H bars already closed; swing highs via production's own `find_swings`, which
+confirms a swing only `right` bars later.
+
+**Tails, measured (the thing to exclude):**
+
+| excluded tail | n | TP in 1h | mean R 1h | mean R 2h |
+|---|---|---|---|---|
+| stop > 2.25% | 2,718 | 12.3% | -0.0973 | -0.1500 |
+| stop < 1.00% | 6,641 | 28.2% | -0.1039 | -0.0248 |
+| 1H ATR > 2.25% | 8,371 | 18.1% | -0.0929 | -0.0641 |
+
+All negative in **both** halves of the sample.
+
+**Keeping the middle** (`1.0 <= stop <= 2.25` and `1H ATR <= 2.25`): 47.4% of
+entries, TP-in-1h **30.5%** (baseline 26.3%), mean R 1h **+0.0058** (baseline
+-0.0481), 2h **+0.0562** (baseline +0.0026), positive in both halves.
+
+### Two hypotheses TESTED AND REJECTED — do not retry
+
+1. **Extension over the 1H EMA200 does not matter.** ZEC was +36.9% extended and it
+   looked decisive on the live record (5 of 8 stop-outs above +20%, 0 of 6 winners).
+   The replay says otherwise: ext < 20% gives 2h +0.0033, ext >= 20% gives -0.0002,
+   and the *least* extended band (0-5%) is the worst of all at -0.1013 (1h). This is
+   a 14-trade pattern that 28,812 entries do not support.
+2. **Buying under a swing high is worse — but the filter is not worth having.**
+   The direction is real: price already ABOVE the last confirmed 1H swing high gives
+   TP-in-1h 36.3% vs 21.9% below it. But stacked on the stop/ATR bounds it *lowers*
+   2h expectancy (+0.0387 vs +0.0562) while cutting trade count 60%, and on the live
+   record it would have blocked **4 of 6 winners**. The bounds already capture it.
+
+Also rejected earlier and worth restating: tightening the ATR timeframe (Round 15) —
+a tighter stop raises cost_in_R proportionally.
+
+### Shipped
+
+Two gates in `trade_plan.qualify()`, scalp only (`gate_stop_pct_min` 1.0,
+`gate_stop_pct_max` 2.25, `gate_bias_atr_max` 2.25); other profiles carry no such
+keys and are untouched.
+
+- **`stop reachability`** — the stop, and therefore TP1, must sit in 1.0-2.25%.
+- **`regime volatility`** — the **bias-TF** ATR must be <= 2.25%. Distinct from the
+  existing "volatility fit", which reads the 15m ATR that sets the stop: ZEC passed
+  that at 1.24% while its 1H ATR was 2.58%.
+
+`stop_pct_min` / `stop_pct_max` were left as warnings. They were never gates — the
+scalp ceiling of 1.5% would reject most of the profitable band, which is how a
+2.876% stop passed a profile that documents a 1.5% ceiling.
+
+**Live corroboration, 14 closed trades that reached a level:** blocks **4 of 8**
+stop-outs — both ZECs, AAVE, XRP, together **-0.674 USDT** of realised loss — and
+**0 of 6** target hits.
+
+**Honest limit: NEAR (stop 1.802 / 1H ATR 1.93) and TAO (2.048 / 1.77) are NOT
+blocked, and should not be.** They sit in the middle of the profitable band. With
+TP-in-1h around 30%, losses are the cost of the distribution; a filter that removed
+those two would be fitted to them. What is preventable here has been prevented.
+
+
 ## Round 18 (2026-08-23) — does the geometry resolve inside a 5m-1h hold?
 
 **Question asked:** the strategy is meant for 5-minute to 1-hour trades. Are the

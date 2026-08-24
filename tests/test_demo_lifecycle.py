@@ -1323,6 +1323,51 @@ results.append(check("the exchange owns the stop", "survives" in _m["stop"], Tru
 _g = _tp._management(_prof, _tp.EXCHANGES["toobit"], _ap.Namespace(exchange="toobit"))
 results.append(check("another venue keeps the generic rules", "Close 50%" in _g["on_tp1"], True))
 
+print("37. Target-reachability gates (Round 19)")
+# TP1 is 1R, so the stop distance IS the target distance, and the cost gate only
+# bounded it from one side. ZEC passed every gate with a 2.876% stop at 0.08R of
+# cost, then took a full -1.32R because 2.876% was reachable downward inside the
+# hold and not upward. Measured over 28,812 replayed entries; see the profile block.
+_scalp = _tp.PROFILES["scalp"]
+
+def _fails(stop=None, atr=None):
+    q = _tp.qualify(_scalp, stop_pct=stop, bias_atr_pct=atr)
+    return {g["gate"] for g in q["gates"] if not g["passed"]}
+
+results.append(check("ZEC's 2.876% stop is refused", "stop reachability" in _fails(stop=2.876), True))
+results.append(check("a 1.36% stop (TAO, +1.19R) passes", _fails(stop=1.364), set()))
+results.append(check("a 2.25% stop passes at the edge", _fails(stop=2.25), set()))
+results.append(check("a 0.9% stop is refused — the fee eats it",
+                     "stop reachability" in _fails(stop=0.9), True))
+results.append(check("ZEC's 2.58% 1H ATR is refused",
+                     "regime volatility" in _fails(atr=2.58), True))
+results.append(check("a 2.18% 1H ATR passes (SHIB, a winner)", _fails(atr=2.18), set()))
+
+# The gates must stay inert where they were never measured. Only scalp carries them.
+for _p in ("intraday", "swing"):
+    q = _tp.qualify(_tp.PROFILES[_p], stop_pct=9.9, bias_atr_pct=9.9)
+    names = {g["gate"] for g in q["gates"]}
+    results.append(check(f"{_p} is untouched by both gates",
+                         ("stop reachability" in names) or ("regime volatility" in names),
+                         False))
+# ...and inert when the caller has no figure to give them.
+results.append(check("absent inputs raise no gate", _tp.qualify(_scalp)["gates"], []))
+
+# The whole point: block the losers without blocking the winners. These are the real
+# entry figures from the 14 closed trades that reached a level either way.
+_losers = [(1.802,1.93),(2.048,1.77),(2.441,2.35),(1.612,2.11),
+           (2.617,2.68),(2.876,2.58),(1.707,2.24),(1.987,2.37)]
+_winners = [(2.069,2.18),(1.654,1.65),(1.364,1.65),(1.881,2.09),(1.856,2.14),(1.966,2.18)]
+results.append(check("blocks 4 of the 8 real stop-outs",
+                     sum(1 for st, at in _losers if _fails(stop=st, atr=at)), 4))
+results.append(check("blocks NONE of the 6 real target hits",
+                     sum(1 for st, at in _winners if _fails(stop=st, atr=at)), 0))
+
+# The plan must actually feed them — a gate nothing calls is not a gate.
+_src = _insp.getsource(_tp).split("qualification = qualify(")[1][:600]
+results.append(check("the plan passes stop_pct", "stop_pct=stop_pct" in _src, True))
+results.append(check("the plan passes the bias ATR", "bias_atr_pct=" in _src, True))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
