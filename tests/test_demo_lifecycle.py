@@ -626,8 +626,10 @@ results.append(check("a loser is not touched by default",
                      _live.settings()["adverse_exit_enabled"], False))
 results.append(check("adverse_exit is still gated on the flag if re-enabled",
                      'cfg["adverse_exit_enabled"] and upnl < 0' in _mo2c, True))
-results.append(check("default profit hour is 1.0",
-                     _live.settings()["profit_close_after_h"], 1.0))
+# Raised to 2.0 alongside the 2R target — see section 41. A one-hour bank would cut
+# most winners before a 2R target could be reached.
+results.append(check("the profit close waits for the full hold",
+                     _live.settings()["profit_close_after_h"], 2.0))
 # PEPE closed at -0.00039 under a bar of exactly 1x the round trip: the test reads
 # the MARK, the close is a MARKET order, and the fill crossed the spread.
 results.append(check("the bar sits above the round trip, not on it",
@@ -1505,6 +1507,26 @@ results.append(check("the 5-point gap between entry and hold survives",
                      round(_tune["min_score"] - _tune["demo"]["hold_take_score"], 2), 5.0))
 results.append(check("neither became a round guess",
                      _tune["min_score"] != 70.0 and _tune["min_score"] != 71.0, True))
+
+print("41. The minimum hold matches the target it is sized for")
+_tune2 = _json.loads((_pl.Path(__file__).resolve().parents[1]
+                      / "config/strategy-tuning.json").read_text())
+results.append(check("profit_close waits 2h", _tune2["demo"]["profit_close_after_h"], 2.0))
+results.append(check("and the code default agrees",
+                     '"profit_close_after_h": float(d.get("profit_close_after_h") or 2.0)'
+                     in _insp.getsource(_lv.settings), True))
+# Coherence is the point: banking at 1h would cut most winners before a 2R target
+# could be reached (8.4% reach 2R in 1h vs 20.6% in 2h).
+results.append(check("the hold is at least as long as the target needs",
+                     _tune2["demo"]["profit_close_after_h"] >= 2.0
+                     and _tp.PROFILES["scalp"]["tp1_r"] >= 2.0, True))
+# It is a MINIMUM, not a deadline — nothing may close a position merely for ageing.
+_m1s = _insp.getsource(_lv._manage_one)
+results.append(check("held_h only ever gates a PROFITABLE close",
+                     'held_h >= cfg["profit_close_after_h"] and exit_upnl > close_bar' in _m1s,
+                     True))
+results.append(check("no time stop crept back in", "time_stop" in _m1s.split("No time stop")[0]
+                     .replace("time_stop_hours", ""), False))
 
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")

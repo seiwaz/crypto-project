@@ -85,7 +85,18 @@ def settings() -> dict:
         "adverse_exit_enabled": bool(d.get("adverse_exit_enabled", False)),
         # A position held this long that is NET profitable - after the round trip, not
         # merely above entry - is banked, whatever the setup says.
-        "profit_close_after_h": float(d.get("profit_close_after_h") or 1.0),
+        # 2.0 since 2026-08-24. Not merely "better on average" — REQUIRED for
+        # coherence with the 2R target Round 23 shipped: only 8.4% of trades reach
+        # 2R inside an hour against 20.6% inside two, so banking at the hour would
+        # cut most winners before the target they were sized for could be reached.
+        # Three independent samples agree the longer horizon is worth more
+        # (Round 17 +0.348% @8h, Round 18 +0.302% @2h, Round 23 +0.1422R @2h vs
+        # +0.0287R @1h). The cost is real and has been seen live: TAO sat at
+        # +0.03349 net at 1h10m and -0.00142 forty minutes later. This is a MINIMUM
+        # hold, not a deadline — the exchange stop and the 2R take-profit are on the
+        # position throughout, so the extra hour is only ever spent waiting for one
+        # of them or for the signal to fade.
+        "profit_close_after_h": float(d.get("profit_close_after_h") or 2.0),
         # How far past the round trip the gross must be before closing counts as
         # profitable. Not 1.0: the test uses the MARK and the close is a MARKET order,
         # so the fill crosses the spread and lands below what was measured. PEPE

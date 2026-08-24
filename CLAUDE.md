@@ -712,14 +712,24 @@ left untouched.
 
 | | |
 |---|---|
-| Engine closes | held **≥ 1h** AND profitable **at the exit-side price** by > 1.5 × round trip AND the signal is no longer green (`profit_close`) |
+| Engine closes | held **≥ 2h** AND profitable **at the exit-side price** by > 1.5 × round trip AND the signal is no longer green (`profit_close`) |
 | Engine **keeps** a winner | past the hour and above the bar, but the scan still says **TAKE at ≥ `hold_take_score` (70)** on our side — logged as `riding_signal` |
 | Everything else | the exchange's own **stop** and **TP1**, attached to the position |
 | A losing position | never touched by the engine, at any hold |
 
+**The minimum hold went 1h → 2h on 2026-08-24**, and it is required for coherence
+with the 2R target rather than merely better on average: only **8.4%** of trades
+reach 2R inside an hour against **20.6%** inside two, so banking at the hour would
+cut most winners before the target they were sized for could be reached. Three
+independent samples agree the longer horizon is worth more (Round 17 +0.348% @8h,
+Round 18 +0.302% @2h, Round 23 **+0.1422R @2h vs +0.0287R @1h**). The cost is real
+and has been seen live: TAO sat at +0.03349 net at 1h10m and **-0.00142** forty
+minutes later. It is a MINIMUM hold, not a deadline — the exchange stop and the 2R
+take-profit sit on the position throughout.
+
 `signal_exit`, `time_stop` and `adverse_exit` are all gone from the live path
 (`adverse_exit` survives behind `adverse_exit_enabled: false`). Settings:
-`profit_close_after_h: 1.0`, `profit_close_fee_multiple: 1.5`, `hold_take_score: 70`,
+`profit_close_after_h: 2.0`, `profit_close_fee_multiple: 1.5`, `hold_take_score: 70`,
 `live_cycle_seconds: 3`, `allow_shorts: false`, `min_score: 75`.
 
 **Value the exit side, never the mid.** A long exits into the best bid, so the mid
