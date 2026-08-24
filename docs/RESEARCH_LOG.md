@@ -843,6 +843,72 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 22 (2026-08-24) — asked to fix the entry point; one was already fixed, the other does not survive testing
+
+**Instruction:** fix the two defects Round 21 found.
+
+### Defect 1 was already fixed, and Round 21 mis-stated it
+
+`agent/tabdeal.py: build_snapshot()` has anchored the plan entry to the **live
+futures order-book mid** (`mark_price`) since the Tabdeal cutover, falling back to
+the candle close only when the book is unavailable. The lag therefore never touched
+the entry price — measured fill-vs-plan-entry is **+0.0037%**. It touches only the
+indicator values, and those cannot be moved: Tabdeal publishes no futures candles
+anywhere, and a series built forward from the depth feed has no history for a 200-bar
+1H EMA. Round 21's entry has been corrected in place rather than left to mislead.
+
+### Defect 2: the entry timeframe stays unused, because no use of it survives
+
+Four separate tests, all on real candles:
+
+| use of the 1m timeframe | n | result |
+|---|---|---|
+| require 1m close > 1m EMA20 | 7,681 | **backwards** — above 1.04, below 1.14 |
+| both 1m confirmations together | 7,681 | 1.05 vs a 1.07 baseline |
+| refuse entries in the top quarter of the last 5x1m range | 7,813 | see below |
+
+The spike gate looked like the one worth having — kept set ratio 1.10 against a 1.04
+baseline, refused tail 0.96, and it improves 23 of 33 symbols. **It fails on
+stability, which is the test that matters:**
+
+| | first half | second half |
+|---|---|---|
+| baseline | 1.15 | 0.94 |
+| keep spike < 75 | 1.30 | 0.95 |
+| refused tail | 0.87 | 0.99 |
+
+By chronological quarter the benefit decays straight to nothing: **+0.200, +0.149,
++0.007, -0.041**. In the most recent quarter the refused entries are *better* than
+the kept ones. An effect that is strong early, absent late, and monotonically
+decaying is a regime artefact, not a structural edge — and the whole baseline swings
+1.15 -> 0.94 across the same span, which is what it is riding on.
+
+(One symbol, XAUT, reports 1.42 -> 28.01. Its median MAE collapses to near zero
+because it is gold-backed and barely moves — ATR 0.16%, already flagged in
+`coins.txt`. A degenerate ratio, not a result.)
+
+**Not shipped.** Putting a filter that works in one half of a four-day sample in
+front of real money is precisely the overfit Round 16 committed and Round 17 had to
+undo. The entry timeframe stays fetched-but-unread, which is honest waste rather than
+a fitted rule.
+
+### What the evidence does support, and is NOT being done unilaterally
+
+Every measurement taken since Round 17 puts the **two-hour** horizon well ahead of
+the one-hour horizon the engine actually uses:
+
+| source | 1h | 2h (or longer) |
+|---|---|---|
+| Round 17, 21,315 signals | +0.086% @4h | **+0.348% @8h** |
+| Round 18, 19,855 entries | +0.053% | **+0.302%** |
+| Round 19, post-gate kept set | +0.0058R | **+0.0562R** |
+
+`profit_close_after_h` is **1.0**. Three independent samples say the geometry needs
+longer, and this is far better supported than anything tested in this round. It is
+left alone because the one-hour rule was an explicit operator instruction, not a
+default — changing it is a decision to put to the operator, not to infer.
+
+
 ## Round 21 (2026-08-24) — the entry point, audited against candles and indicators
 
 **Asked:** there may be a mistake in the entry point — verify carefully against
@@ -868,10 +934,19 @@ bug** — but worth knowing before anyone probes this API again with a small lim
 
 **1. The chart feed lags the futures book, directionally.** 85 paired samples across
 5 symbols: correlation(60s price move, chart-vs-mid gap) = **-0.475**. While price is
-falling the chart reads **+0.049%** above the market; while rising, **+0.005%**. So
-the decision price is stale-high into declines. Median gap is otherwise tiny
-(-0.03% to +0.05%), so this is lag, not basis. It is roughly a fifth of the 0.225pp
-drawdown gap from Round 20 — real, but not the explanation.
+falling the chart reads **+0.049%** above the market; while rising, **+0.005%**.
+Median gap is otherwise tiny (-0.03% to +0.05%), so this is lag, not basis.
+
+> **CORRECTION (Round 22).** This entry first said "the decision price is stale-high
+> into declines". That is **wrong**, and the fix it implied was already in the code.
+> `tabdeal.build_snapshot()` anchors `last_price` to `mark_price(symbol)` — the live
+> futures order-book mid — and falls back to the candle close only when the book is
+> unavailable, with a comment saying exactly why. The plan's ENTRY is live; that is
+> why fill-vs-plan-entry measures +0.0037%. The lag touches only the INDICATOR
+> values, which need a series and have no futures source: no futures klines exist on
+> any Tabdeal host, verified across 2 hosts, 2 sockets and 10 REST paths, and candles
+> built forward from the depth feed would have no history for a 200-bar 1H EMA. So
+> the indicator lag is real, ~0.05%, and not fixable.
 
 **2. `entry_tf` is computed in full and then discarded.** The scalp profile declares
 `entry_tf: 1m`. `compute_indicators` produces EMA20/50/200, RSI, VWAP, Ichimoku,
