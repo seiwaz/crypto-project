@@ -843,6 +843,84 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 24 (2026-08-24) — the account audited, and a frozen sample opened
+
+**Asked:** the signalling looks bad, the account is losing.
+
+### The account, all 93 closed trades
+
+```
+realised -1.96870 USDT     wins 44 (47%)  mean +0.02457
+                           loss 49 (53%)  mean -0.06224
+decomposition:  PRICE -0.88943    FEES -0.94611   (fees = 48% of the loss)
+```
+
+| exit reason | n | sum |
+|---|---|---|
+| **exchange_exit** (the stop) | **34** | **-2.15771** |
+| adverse_exit | 7 | -0.26089 |
+| time_stop | 4 | -0.03968 |
+| signal_exit | 21 | +0.05048 |
+| tp1 | 2 | +0.14574 |
+| profit_close | 24 | +0.29336 |
+
+**Engine-decided exits total +0.043 across 56 trades. Venue levels total -2.012
+across 36.** The stop-outs alone exceed the entire loss.
+
+### The signal is the part that works
+
+Judged on price alone, fees excluded: **60 of 93 trades (65%) moved in the
+predicted direction**, median **+0.2013%**. A coin flip is 50% and the round trip
+costs **0.200%**. The direction call is good and the fee consumes exactly what it
+earns. Mean is -0.196% against a median of +0.20% — many small correct calls and a
+few large stop-outs.
+
+**This is the binding constraint and no signal change addresses it.** The fix is
+fewer, larger trades, which is what the last three changes do.
+
+### Four give-back remedies tested, all REJECTED
+
+| remedy | n | result |
+|---|---|---|
+| TP down to 4:3 (1.333R) | 15 real stop-outs | **0 of 15** ever reached 1.333R |
+| TP down generally | 13,689 | mean R falls monotonically with TP |
+| break-even stop at +0.5R | 13,756 | **-0.2921R** — 50% get cut at break-even |
+| break-even at +1.0R / +1.25R | 13,756 | -0.1292R / -0.0754R |
+
+Break-even stops are the clearest refutation of the give-back theory: protecting
+the two trades that gave back real profit costs far more than it saves, because
+half of everything that touches +0.5R is then stopped at entry instead of running.
+
+**How far the 15 stop-outs actually got toward target** (real 1m candles,
+side-aware): median **4%**, max **56%** (WIF). Two reached half; **none reached
+two-thirds**.
+
+### A long-bias bug in my own analysis, caught
+
+A first pass computed peak favourable excursion as `max(high)/entry - 1` for every
+position. That is correct only for a long. **ALGO was a short** — stop above entry,
+tp1 below — so a 2% adverse move was read as reaching 55% of target. Exactly the
+long-bias this project already shipped once in `side_from_direction`. Redone
+side-aware, the 1m candles and the 15s samples agree within ~0.07R, confirming both.
+
+### The record cannot judge the current system
+
+Of the 93 trades, **78 ran with a 1R target and only 15 with 2R** — and most of
+those 15 predate the 2h hold, the 73 entry bar and the Round 19 gates. Nearly the
+whole record was produced by configurations changed *because* it exposed a defect.
+That is context, not an excuse: **the current configuration has almost no live
+evidence either.**
+
+### Frozen sample
+
+`var/sample-baseline.json` records the configuration and the first position id
+(**99**) belonging to the next sample. `tools/sample_report.py` reports it on
+demand — no daemon, because everything it needs is already in `live_positions` and
+a poller is just a second copy of the database that dies with an ssh session (one
+did). **Do not change a trading parameter until this sample has ~20 closed trades**,
+or it becomes as uninterpretable as the 93 before it.
+
+
 ## Round 22 (2026-08-24) — asked to fix the entry point; one was already fixed, the other does not survive testing
 
 **Instruction:** fix the two defects Round 21 found.
