@@ -19,23 +19,86 @@ thing that reaches the browser, and .env values are not part of it.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import mimetypes
 import posixpath
 import threading
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote, parse_qs
 
-from . import config, demo, discover, exchange, guard, llm, report, scanner, store
+from . import auth, config, demo, discover, exchange, guard, llm, report, scanner, store
 
 log = logging.getLogger("server")
 
 VERDICT_ORDER = {"TAKE": 0, "WATCH": 1, "INCOMPLETE": 2, "SKIP": 3, "ERROR": 4}
 
 _stop_event = threading.Event()
+
+
+# Served inline rather than from web/, because web/ is behind the gate and a login
+# page that needs a login is a locked door with the key inside. Self-contained: no
+# external fonts or scripts, so it renders identically on a machine that cannot reach
+# a CDN — which is the normal case for this operator.
+LOGIN_HTML = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Crypto Screener</title>
+<style>
+  :root{--bg:#0d0f13;--card:#151920;--line:#252b36;--ink:#e6e9ef;--dim:#8b93a3;
+        --accent:#3d8bfd;--bad:#e5484d}
+  @media (prefers-color-scheme: light){
+    :root{--bg:#f4f5f7;--card:#fff;--line:#dfe3ea;--ink:#12151a;--dim:#616b7c}}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100dvh;display:grid;place-items:center;background:var(--bg);
+       color:var(--ink);font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       padding:1.5rem}
+  form{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:1.75rem;width:min(22rem,100%);box-shadow:0 12px 40px rgb(0 0 0/.28)}
+  h1{margin:0 0 .25rem;font-size:1rem;letter-spacing:.06em;text-transform:uppercase}
+  p.sub{margin:0 0 1.4rem;color:var(--dim);font-size:.78rem}
+  label{display:block;margin:0 0 .3rem;font-size:.72rem;letter-spacing:.05em;
+        text-transform:uppercase;color:var(--dim)}
+  input{width:100%;padding:.6rem .7rem;margin-bottom:1rem;border-radius:7px;
+        border:1px solid var(--line);background:var(--bg);color:var(--ink);
+        font:inherit}
+  input:focus-visible{outline:2px solid var(--accent);outline-offset:1px;
+        border-color:var(--accent)}
+  button{width:100%;padding:.65rem;border:0;border-radius:7px;background:var(--accent);
+         color:#fff;font:inherit;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.6;cursor:progress}
+  .err{color:var(--bad);font-size:.8rem;min-height:1.2em;margin:0 0 .8rem}
+</style></head><body>
+<form id="f" autocomplete="on">
+  <h1>Crypto Screener</h1>
+  <p class="sub">Live Tabdeal engine &mdash; real funds. Sign in to continue.</p>
+  <p class="err" id="err" role="alert">{{MESSAGE}}</p>
+  <label for="u">Username</label>
+  <input id="u" name="username" autocomplete="username" autofocus required>
+  <label for="p">Password</label>
+  <input id="p" name="password" type="password" autocomplete="current-password" required>
+  <button id="b" type="submit">Sign in</button>
+</form>
+<script>
+const f=document.getElementById('f'),e=document.getElementById('err'),b=document.getElementById('b');
+f.addEventListener('submit',async(ev)=>{
+  ev.preventDefault(); e.textContent=''; b.disabled=true; b.textContent='Checking...';
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:f.username.value,password:f.password.value})});
+    if(r.ok){ location.replace('/'); return; }
+    const d=await r.json().catch(()=>({}));
+    e.textContent=d.error||('HTTP '+r.status);
+  }catch(err){ e.textContent=String(err&&err.message||err); }
+  b.disabled=false; b.textContent='Sign in'; f.password.value=''; f.password.focus();
+});
+</script></body></html>
+"""
 
 
 # --------------------------------------------------------------------------------
@@ -315,9 +378,56 @@ class Handler(BaseHTTPRequestHandler):
     # That is not a server error and there is nobody left to send a 500 to.
     DISCONNECTS = (BrokenPipeError, ConnectionResetError, TimeoutError)
 
+    # -- authentication ----------------------------------------------------------
+
+    def _session_token(self):
+        return auth.token_from_cookie(self.headers.get("Cookie"))
+
+    def _authed(self, path: str) -> bool:
+        """Every path is gated except the health check and the login endpoint.
+
+        Gating happens HERE rather than per-endpoint on purpose: a new route added
+        later is protected by default, and the failure mode of forgetting is a locked
+        door rather than an open one. This board can close positions and flatten the
+        book, so an open door is not a small mistake.
+        """
+        if not auth.configured():
+            return True                     # no credential set: behave as before
+        if path in auth.PUBLIC_PATHS:
+            return True
+        tok = auth.api_token()
+        if tok and hmac.compare_digest(self.headers.get("X-Auth-Token") or "", tok):
+            return True                     # server-side jobs (the report push)
+        return auth.valid(self._session_token())
+
+    def _deny(self, path: str) -> None:
+        """A browser gets the login page; anything else gets a plain 401."""
+        if path.startswith("/api/"):
+            return self._error(401, "authentication required")
+        return self._login_page()
+
+    def _login_page(self, message: str = "") -> None:
+        body = LOGIN_HTML.replace("{{MESSAGE}}", message).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _secure_cookie(self) -> bool:
+        # nginx terminates TLS and forwards over plain HTTP, so the scheme has to come
+        # from the header it sets. Marking the cookie Secure on a plain-HTTP hop would
+        # make the browser drop it and the login would silently never stick.
+        return (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+
     def do_GET(self):
         path = urlparse(self.path).path
         try:
+            if not self._authed(path):
+                return self._deny(path)
+            if path == "/api/logout":
+                return self._logout()
             if path.startswith("/api/"):
                 return self._api_get(path)
             return self._static(path)
@@ -327,15 +437,53 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("GET %s failed", path)
             self._safe_error(path)
 
+    def _logout(self):
+        auth.revoke(self._session_token())
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie",
+                         f"{auth.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
+        self.end_headers()
+
     def do_POST(self):
         path = urlparse(self.path).path
         try:
+            if path == "/api/login":
+                return self._login()
+            if not self._authed(path):
+                return self._deny(path)
             return self._api_post(path)
         except self.DISCONNECTS:
             self.close_connection = True
         except Exception:
             log.exception("POST %s failed", path)
             self._safe_error(path)
+
+    def _login(self):
+        body = self._body()
+        user = str(body.get("username") or "")
+        pw = str(body.get("password") or "")
+        if not auth.check(user, pw):
+            # A small, fixed delay. Not a lockout — one operator, and locking the
+            # only account out is its own denial of service — but enough that the
+            # endpoint is not a fast oracle to grind against.
+            time.sleep(1.0)
+            log.warning("failed dashboard login for %r from %s",
+                        user[:32], self.client_address[0])
+            return self._error(401, "wrong username or password")
+        token = auth.issue()
+        cookie = (f"{auth.COOKIE}={token}; Path=/; Max-Age={auth.SESSION_TTL_S}; "
+                  f"HttpOnly; SameSite=Lax")
+        if self._secure_cookie():
+            cookie += "; Secure"
+        payload = json.dumps({"ok": True}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Set-Cookie", cookie)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _safe_error(self, path: str):
         """Report a 500 without raising a second exception on a dead socket."""

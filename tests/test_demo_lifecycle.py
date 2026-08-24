@@ -1368,6 +1368,73 @@ _src = _insp.getsource(_tp).split("qualification = qualify(")[1][:600]
 results.append(check("the plan passes stop_pct", "stop_pct=stop_pct" in _src, True))
 results.append(check("the plan passes the bias ATR", "bias_atr_pct=" in _src, True))
 
+print("38. Dashboard login")
+# The board can close positions and flatten the book. It was open to anyone who knew
+# the host.
+from agent import auth as _auth
+
+_salt = bytes.fromhex("00112233445566778899aabbccddeeff")
+_h = _auth._hash("Sw0rdfish!", _salt)
+results.append(check("the password is never stored, only a hash",
+                     _h != "Sw0rdfish!" and len(_h) == 64, True))
+results.append(check("the same password rehashes identically",
+                     _auth._hash("Sw0rdfish!", _salt), _h))
+results.append(check("a different salt gives a different hash",
+                     _auth._hash("Sw0rdfish!", bytes(16)) != _h, True))
+
+# check() reads settings, so drive it through a stub rather than touching real config
+_saved_load = _auth.config.load_settings
+_auth.config.load_settings = lambda: {"web": {
+    "username": "admin", "salt": _salt.hex(), "hash": _h, "iterations": _auth.ITERATIONS}}
+results.append(check("correct credentials pass", _auth.check("admin", "Sw0rdfish!"), True))
+results.append(check("wrong password fails", _auth.check("admin", "sw0rdfish!"), False))
+results.append(check("wrong username fails", _auth.check("root", "Sw0rdfish!"), False))
+results.append(check("empty credentials fail", _auth.check("", ""), False))
+results.append(check("it reports itself configured", _auth.configured(), True))
+
+_tok = _auth.issue()
+results.append(check("a fresh session is valid", _auth.valid(_tok), True))
+results.append(check("a made-up token is not", _auth.valid("nope"), False))
+results.append(check("None is not a session", _auth.valid(None), False))
+_auth.revoke(_tok)
+results.append(check("a revoked session stops working", _auth.valid(_tok), False))
+# expiry is enforced on read, not by a timer
+_old = _auth.issue()
+_auth._sessions[_old] = _auth.time.time() - 1
+results.append(check("an expired session stops working", _auth.valid(_old), False))
+
+results.append(check("the cookie parser finds our token",
+                     _auth.token_from_cookie(f"a=1; {_auth.COOKIE}=xyz; b=2"), "xyz"))
+results.append(check("a junk Cookie header does not raise",
+                     _auth.token_from_cookie("=;;garbage"), None))
+results.append(check("no Cookie header is fine", _auth.token_from_cookie(None), None))
+
+# With no credential configured the board must behave exactly as it did before.
+_auth.config.load_settings = lambda: {}
+results.append(check("unconfigured means unlocked", _auth.configured(), False))
+_auth.config.load_settings = _saved_load
+
+# Health stays reachable: a health check that needs a password reports the padlock.
+results.append(check("/api/health is public", "/api/health" in _auth.PUBLIC_PATHS, True))
+results.append(check("/api/login is public", "/api/login" in _auth.PUBLIC_PATHS, True))
+for _p in ("/api/live/flatten", "/api/live/close", "/api/settings", "/api/state", "/"):
+    results.append(check(f"{_p} is NOT public", _p in _auth.PUBLIC_PATHS, False))
+
+# Gating is central, not per-endpoint, so a route added later is closed by default.
+_srv = _insp.getsource(__import__("agent.server", fromlist=["x"]))
+results.append(check("do_GET checks auth before routing",
+                     _srv.index("if not self._authed(path)") < _srv.index("return self._api_get(path)"),
+                     True))
+results.append(check("do_POST checks auth before routing",
+                     "if not self._authed(path):\n                return self._deny(path)\n            return self._api_post(path)" in _srv,
+                     True))
+results.append(check("the session cookie is HttpOnly", "HttpOnly" in _srv, True))
+results.append(check("and SameSite", "SameSite=Lax" in _srv, True))
+results.append(check("Secure is set only behind TLS",
+                     'X-Forwarded-Proto' in _srv and 'cookie += "; Secure"' in _srv, True))
+results.append(check("no password appears in the repo's own source",
+                     "Segm@" in _srv or "Segm@" in _insp.getsource(_auth), False))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
