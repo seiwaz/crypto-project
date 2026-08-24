@@ -395,7 +395,7 @@ for its own fees. Missing scan data does **not** hold.
 
 **`TAKE` is not the same as "will trade".** This skill grades TAKE at score ≥ 70 with
 every gate passed. The live engine has its own entry bar (`min_score`, currently
-**70.83**), so a TAKE just under it will never open a position. If you are reading a
+**73.0**), so a TAKE under it will never open a position. If you are reading a
 board and wondering why a green signal did nothing, check the score against the
 engine's bar before looking for a fault.
 

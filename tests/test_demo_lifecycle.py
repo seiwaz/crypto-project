@@ -1534,11 +1534,15 @@ results.append(check("the entry bar is at or above the skill's TAKE grade",
 results.append(check("the hold bar sits below the entry bar",
                      _tune["demo"]["hold_take_score"] < _tune["min_score"], True))
 # The gap between them is what makes banking a winner need a positive reason while
-# abandoning one only needs the thesis to be dead. It must survive the shift.
-results.append(check("the 5-point gap between entry and hold survives",
-                     round(_tune["min_score"] - _tune["demo"]["hold_take_score"], 2), 5.0))
-results.append(check("neither became a round guess",
-                     _tune["min_score"] != 70.0 and _tune["min_score"] != 71.0, True))
+# abandoning one only needs the thesis to be dead. The SIZE of the gap is a judgement
+# (it is ~7 points since the operator raised only the entry bar to 73.0); what must
+# never invert is the ordering.
+_gap = round(_tune["min_score"] - _tune["demo"]["hold_take_score"], 2)
+results.append(check("a winner is banked on a higher bar than it is abandoned on",
+                     _gap > 0, True))
+results.append(check("the gap is a few points, not a chasm", 3.0 <= _gap <= 10.0, True))
+results.append(check("the entry bar clears the skill's own TAKE grade",
+                     _tune["min_score"] >= 70.0, True))
 
 print("41. The minimum hold matches the target it is sized for")
 _tune2 = _json.loads((_pl.Path(__file__).resolve().parents[1]

@@ -732,7 +732,7 @@ take-profit sit on the position throughout.
 (`adverse_exit` survives behind `adverse_exit_enabled: false`). Settings:
 `profit_close_after_h: 2.0`, `profit_close_fee_multiple: 1.5`,
 `hold_take_score: 65.83`, `live_cycle_seconds: 3`, `allow_shorts: **true**`,
-`min_score: 70.83`, `tp1_r: 2.0` / `tp2_r: 3.0`, `default_win_rate: 0.40`.
+`min_score: **73.0**`, `tp1_r: 2.0` / `tp2_r: 3.0`, `default_win_rate: 0.40`.
 **These moved on 2026-08-24 — see "Round 23" below for why the two score bars are
 not round numbers.**
 
@@ -877,12 +877,37 @@ for**. Stopped at 2.0, not 3.0: the curve flattens while the hit rate falls 8.4%
   average credited every plan with an exit that cannot occur. Now `tp1_r` alone on
   that venue; other venues keep the average.
 
+**A follow-on bug, and the real reason the board went green-less.** The score's
+net-expectancy factor divided by a hardcoded **+0.30R** for full marks. The honest
+model's zero-cost ceiling is `wr × avg_win − (1−wr)` = 0.40 × 2.0 − 0.60 = **0.20R**,
+*below* that anchor — so a 25-point factor could never award more than 16.7 and in
+practice awarded 6–8. It stopped ranking candidates and simply subtracted a constant,
+taking the whole board under the skill's own TAKE grade of 70. **Zero green cards on
+any market.** The anchor is now the ceiling itself, passed in from the profile: full
+marks stay unreachable (they would need zero fees) but the gradient is restored, and
+the factor is steeper in cost — the right direction on a venue where fees are the
+binding constraint. SHIB 68.3 → 73.1; a live scan went 0 TAKE → **3 TAKE**.
+
+**The lesson: when you change what a score MEASURES, check every constant that was
+calibrated against the old scale.** The uniform-offset correction below was necessary
+and not sufficient — it moved the two thresholds and missed the anchor inside the
+factor itself.
+
 **Then the bar had to move with the scale.** Making expectancy honest removed a
 uniform **4.17 points** from every score (`25 × 0.05/0.30`), and the live board went
 to **zero TAKEs, max 70.0**. Caught by reading a real scan after deploy — every test
-passed. `min_score` 75 → **70.83**, `hold_take_score` 70 → **65.83**, both by exactly
-that offset, so selectivity is unchanged and the 5-point entry/hold gap survives.
-Not rounded to 71/66 on purpose: rounding would re-tighten by the amount corrected.
+passed. `min_score` went 75 → 70.83 and `hold_take_score` 70 → **65.83**, both by
+exactly that offset.
+
+**That offset is no longer why the bars sit where they do** — it was arithmetic
+against the *broken* anchor. With the anchor fixed, a live scan clears 3 of 33 at
+70.83 and 0 of 33 at 75. **`min_score` is now 73.0**, set by the operator on
+2026-08-24: on that same scan it admits SHIB at 73.1 and nothing else, i.e. ~1 of
+33, which is the historically normal rate. `hold_take_score` was deliberately left
+at 65.83 — the operator asked for the *entry* bar, and raising the hold bar would
+change when open positions get banked, which is a separate decision. The gap between
+them is now ~7 points rather than 5, so a position is held slightly longer relative
+to how selectively it was opened.
 
 **A misaligned sweep nearly poisoned this.** The first pass mapped a 5m bar to
 `int(i/3)` of the 15m series; those series do not start together, so every entry was

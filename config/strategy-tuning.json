@@ -27,6 +27,6 @@
     "profit_close_fee_multiple": 1.5,
     "hold_take_score": 65.83
   },
-  "min_score": 70.83,
+  "min_score": 73.0,
   "allow_shorts": true
 }
