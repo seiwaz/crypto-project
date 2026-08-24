@@ -909,6 +909,52 @@ left alone because the one-hour rule was an explicit operator instruction, not a
 default — changing it is a decision to put to the operator, not to infer.
 
 
+## Round 20b (2026-08-24) — re-asked: why does a new position go negative?
+
+Re-measured with more history (40 positions with recorded samples, up from 32).
+**The answer splits cleanly in two, and the first part is almost the whole of it.**
+
+### It does not go negative. It STARTS negative, by exactly the round trip.
+
+The board shows **net**, which subtracts the full 0.2% of notional the moment the
+position exists. Live proof from one row, FLOKI at 32 minutes: **gross +0.00436**
+— price moving our way — against a 0.00882 round trip, so **net −0.00445**. A
+winning position displaying red.
+
+| within | ever GROSS positive | ever NET positive |
+|---|---|---|
+| 1 min | **58%** | **6%** |
+| 2 min | 69% | 25% |
+| 5 min | 72% | 28% |
+| 10 min | 87% | 49% |
+| 30 min | 90% | 68% |
+| 60 min | 92% | 70% |
+
+Time to the first positive reading: **gross median 0.6 minutes, net median 7.8
+minutes** — thirteen times longer. Price goes our way almost immediately in most
+trades; what takes eight minutes is earning back the fee. A position must move
+**+0.200%** simply to display zero, against a median ten-minute best case of
++0.206% (Round 20). That is why almost every position looks red early even when
+nothing is wrong with it.
+
+### The residual effect from Round 20 is still there, and got stronger
+
+Permutation test, 20,000 draws, each position matched against random bars on the
+**same coin in the same hour**:
+
+| | live | null | p |
+|---|---|---|---|
+| MAE (10 min) | **-0.540%** | -0.310% | **0.0003** (was 0.0019 at n=32) |
+| MFE (10 min) | +0.335% | +0.363% | 0.27 |
+
+Same upside, ~74% deeper drawdown, now significant at p=0.0003. **Cause still
+unidentified after seven tests** (Round 21's table). It is comparable in size to
+the fee — 0.230pp of excess drawdown against 0.200% of round trip — but unlike the
+fee it is a distribution property, not something visible in the first minute. For
+the specific experience of "it goes red the instant I open it", the fee is the
+entire story.
+
+
 ## Round 21 (2026-08-24) — the entry point, audited against candles and indicators
 
 **Asked:** there may be a mistake in the entry point — verify carefully against
