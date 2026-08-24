@@ -1437,6 +1437,9 @@ results.append(check("logout sends Content-Length",
                      'self.send_header("Content-Length", "0")' in
                      _insp.getsource(__import__("agent.server", fromlist=["x"]).Handler._logout),
                      True))
+# settings.json holds the password hash, its salt and the api_token.
+results.append(check("saving settings leaves the file owner-only",
+                     "os.chmod(tmp, 0o600)" in _insp.getsource(config.save_settings), True))
 results.append(check("no password appears in the repo's own source",
                      "Segm@" in _srv or "Segm@" in _insp.getsource(_auth), False))
 

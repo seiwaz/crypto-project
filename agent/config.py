@@ -133,6 +133,16 @@ def save_settings(patch: dict) -> dict:
         tmp = SETTINGS_PATH.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(merged, fh, indent=2, ensure_ascii=False)
+        # Owner-only. This file holds the dashboard password hash, its salt and the
+        # api_token, and every save used to recreate it world-readable — including
+        # the saves that happen automatically when the deploy timer applies
+        # strategy-tuning.json, so tightening it by hand did not stay tightened.
+        # Set on the temp file before the rename so the permissive window does not
+        # exist at all.
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass                       # a filesystem that cannot chmod is not fatal
         tmp.replace(SETTINGS_PATH)
         return merged
 
