@@ -843,6 +843,92 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 20 (2026-08-24) — why a fresh position shows red, and what the stops really cost
+
+**Asked:** positions almost always go to loss right after opening — why? And
+re-check the stops.
+
+### Part 1: the red is mostly arithmetic, and partly real
+
+**The arithmetic, which is most of it.** The board's net P/L subtracts the whole
+0.2% round trip, so a position is *born* showing -0.2% of notional and has to rise
+0.2% before it reads zero. Median best-case in the first ten minutes is +0.33%.
+Almost every position therefore shows red for its first minutes **even when price
+is moving our way**. That is not a signal fault; it is the fee being shown honestly.
+
+**The dip is also transient.** Gross price move from entry, 32 positions with
+recorded samples:
+
+| after | median | negative |
+|---|---|---|
+| ~15s | -0.001% | 50% |
+| 1 min | -0.051% | 61% |
+| 3 min | -0.112% | 68% |
+| 5 min | **-0.211%** | **71%** |
+| 10 min | -0.028% | 55% |
+| 30 min | **+0.145%** | 44% |
+
+It bottoms around five minutes and recovers by thirty.
+
+**But there IS a real effect underneath, and it is significant.** Permutation test,
+20,000 draws, each live position matched against random bars on **the same coin in
+the same hour**:
+
+| | live | null (same coin, same hour) | p |
+|---|---|---|---|
+| MAE (10 min) | **-0.540%** | -0.315% [-0.429, -0.193] | **0.0019** |
+| MFE (10 min) | +0.335% | +0.353% [+0.227, +0.478] | 0.40 |
+
+**Same upside, 70% deeper drawdown.** Regime is controlled (BTC moved -0.54% over
+the whole 17h span, and the peers come from the same hours on the same coins).
+
+### Four mechanisms tested and REJECTED — do not retry these
+
+1. **Prior 15m run-up** (n=39,303). MFE/MAE is flat at 1.03-1.26 across every
+   band from -1% to +2%. A bigger run-up raises MAE *and* MFE together — that is
+   volatility, not adverse timing. This also re-kills the "chasing extended moves"
+   idea from Round 10 with a much larger sample.
+2. **Extension over the 1H EMA200** (n=28,812). Already rejected in Round 19.
+3. **Position in the 2h range** (n=38,709). Flat at 1.08-1.19 even in the top
+   decile. Live entries *do* sit high in the range (median 78th percentile, 38% in
+   the top fifth vs a 29% baseline) — but since range position does not predict a
+   deeper drawdown, that skew explains nothing.
+4. **Entry slippage** (n=32). The fill is **+0.0043%** against the close of the 5m
+   bar it landed in, above it exactly 50% of the time, and +0.0037% against the plan
+   entry. Execution is clean; it accounts for ~2% of the gap.
+
+**Conclusion: the effect is real and the cause is not identified.** n=32 is enough
+to establish it and not enough to explain it. No fix is being shipped on a guess —
+this project has already had Round 16 overturned by Round 17 for exactly that.
+
+### Part 2: the stops
+
+**Placement is correct.** Both open positions carry a venue stop matching the plan
+to within 0.1%, `sl_tp_set=1`, at 2.026% and 1.874% — inside Round 19's new band.
+Across the whole history exactly **one** position ever ran with no stop attached
+(HYPE, 08-23), the race `reconcile()` now repairs every cycle.
+
+**Most exits are not stop-outs.** Of 70 closed trades only **12** filled at or
+through their stop; 57 exited while still inside it (engine closes and TP hits).
+An earlier read of this conflated the two — several 08-22 rows show a fill 2-3%
+*above* the stop on a long, which is not a stop-out at all.
+
+**Fills are good; one real gap.** Overshoot beyond the level: median **+0.232%**,
+mean +0.472%, worst **+2.972%** (XRP, 08-23). 11 of 12 filled at or through.
+
+**The number that matters: a stop-out realises -1.29R, not -1R** (median -1.292,
+mean -1.351). Roughly 0.12R of overshoot plus 0.15R of round trip on top of the
+-1R the plan assumes.
+
+**What that does to the geometry.** TP1 is +1R gross, so a win nets about +0.85R
+against a loss of -1.29R. Breakeven win rate is **60.5%**, and Round 19 measured
+TP-in-1h at 30.5% after the new gates. **The TP1=1R geometry cannot pay for itself
+on target hits alone.** Whatever edge exists has to come from the engine's >=1h
+`profit_close` on the 52.8% of positions that touch neither level (Round 18) — and
+Round 18 measured those at +0.049R mean. This is the central economic problem and
+no filter fixes it.
+
+
 ## Round 19 (2026-08-24) — why ZEC was a mistake, and the two gates that catch it
 
 **Asked:** ZEC hit its stop — was the signal wrong? And prevent the AAVE / TAO /
