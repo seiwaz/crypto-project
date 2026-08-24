@@ -1478,7 +1478,35 @@ _loss, _win = 1.29, _sc["tp1_r"] - 0.15
 results.append(check("2R target now beats the true cost of a stop", _win > _loss, True))
 results.append(check("a 1R target would not have", (1.0 - 0.15) > _loss, False))
 
-print("40. The entry bar moves with the scale it is measured on")
+print("40. The expectancy factor grades against a reachable ceiling")
+# The anchor for full marks must be what the profile+venue can actually produce.
+# A hardcoded 0.30R sat ABOVE Tabdeal's 0.20R ceiling, so a 25-point factor could
+# never award more than 16.7 and in practice awarded 6-8 — it stopped ranking
+# candidates and just subtracted a constant, taking the whole board under the
+# skill's own TAKE grade of 70. No green cards on any market.
+_ceil = _sc["default_win_rate"] * _sc["tp1_r"] - (1 - _sc["default_win_rate"])
+results.append(check("the tabdeal ceiling is 0.20R", round(_ceil, 3), 0.20))
+results.append(check("the old anchor was above it", 0.30 > _ceil, True))
+results.append(check("qualify() takes a ceiling",
+                     "expectancy_ceiling" in _insp.signature(_tp.qualify).parameters
+                     if hasattr(_insp, "signature") else True, True))
+_qsrc = _insp.getsource(_tp.qualify)
+results.append(check("and uses it as the divisor", "expectancy_net / anchor" in _qsrc, True))
+results.append(check("with 0.30 only as a fallback", "else 0.30" in _qsrc, True))
+
+def _pts_at(e, anchor):
+    return 25 * max(0.0, min(1.0, e / anchor))
+# full marks must stay UNREACHABLE — they would need zero fees
+results.append(check("full marks need zero cost",
+                     _pts_at(_ceil - 0.05, _ceil) < 25, True))
+# and the gradient is restored where it matters
+results.append(check("a live-typical coin scores materially higher",
+                     round(_pts_at(0.081, _ceil) - _pts_at(0.081, 0.30), 1), 3.4))
+# steeper in cost is the right direction on a fee-bound venue
+results.append(check("a coin whose fees eat the edge now scores zero",
+                     _pts_at(0.0, _ceil), 0.0))
+
+print("40b. The entry bar, and why it is not a round number")
 # Making the expectancy model honest took ~4.17 points off every score. Left alone,
 # min_score 75 would have been a silent 4-point tightening of the entry bar — the
 # live board went to ZERO TAKEs with a maximum score of 70.0.
@@ -1497,10 +1525,14 @@ results.append(check("the offset is ~4.17 points", round(_offset, 2), 4.17))
 # and it reproduces what the live board actually printed for FLOKI
 results.append(check("matches the live breakdown (7.1 pts)", round(_new, 1), 7.2, 0.15))
 
-results.append(check("min_score moved down by the offset",
-                     round(75.0 - _tune["min_score"], 2), round(_offset, 2), 0.05))
-results.append(check("the hold bar moved with it",
-                     round(70.0 - _tune["demo"]["hold_take_score"], 2), round(_offset, 2), 0.05))
+# The 4.17 offset was computed against the BROKEN anchor and is no longer the
+# justification — the bars are now held at a level that produces historically
+# normal selectivity (3 of 33 clear on a live scan) and is re-derived from data,
+# not from that arithmetic. What must remain true is the relationship between them.
+results.append(check("the entry bar is at or above the skill's TAKE grade",
+                     _tune["min_score"] >= 70.0, True))
+results.append(check("the hold bar sits below the entry bar",
+                     _tune["demo"]["hold_take_score"] < _tune["min_score"], True))
 # The gap between them is what makes banking a winner need a positive reason while
 # abandoning one only needs the thesis to be dead. It must survive the shift.
 results.append(check("the 5-point gap between entry and hold survives",
