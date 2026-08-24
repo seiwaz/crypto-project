@@ -536,7 +536,7 @@ def snap_leverage(value, steps, cap):
 def qualify(prof, *, atr_pct=None, spread_pct=None, book_value=None, notional=None,
             direction_ratio=None, expectancy_net=None, cost_in_r=None,
             liq_buffer_ratio=None, rr_tp2=None, blockers=None, market_closed=None,
-            stop_pct=None, bias_atr_pct=None):
+            stop_pct=None, bias_atr_pct=None, expectancy_ceiling=None):
     """Return a TAKE / WATCH / SKIP verdict with the reasoning that produced it."""
     gates, score_parts = [], []
 
@@ -611,9 +611,26 @@ def qualify(prof, *, atr_pct=None, spread_pct=None, book_value=None, notional=No
         total += part("setup quality", 35, direction_ratio,
                       f"{direction_ratio:.0%} of automated direction checks agree")
     if expectancy_net is not None:
-        total += part("net expectancy", 25, expectancy_net / 0.30,
+        # Grade against what this profile and venue can ACTUALLY produce, not a
+        # fixed +0.30R.
+        #
+        # The ceiling is the zero-cost expectancy, `wr x avg_win - (1 - wr)`. When
+        # Round 23 made the model honest for Tabdeal — TP1 alone rather than an
+        # average with a TP2 that cannot happen, and a measured 0.40 win rate — that
+        # ceiling became 0.40 x 2.0 - 0.60 = **0.20R**, below the hardcoded 0.30R
+        # anchor. A factor worth 25 points could then never award more than 16.7 and
+        # in practice awarded 6-8, so it stopped discriminating between candidates
+        # and simply subtracted a constant from everyone. The live board went to a
+        # maximum score of 66.9 and no coin could reach the skill's own TAKE grade
+        # of 70 — no green cards at all, on any market.
+        #
+        # Anchoring at the ceiling keeps full marks unreachable (it would need zero
+        # fees) while restoring the gradient across the band that is actually
+        # attainable. Falls back to 0.30 when the caller cannot supply a ceiling.
+        anchor = expectancy_ceiling if expectancy_ceiling and expectancy_ceiling > 0 else 0.30
+        total += part("net expectancy", 25, expectancy_net / anchor,
                       f"{expectancy_net:+.3f}R per trade after costs "
-                      f"(+0.30R scores full marks)")
+                      f"(+{anchor:.2f}R scores full marks)")
     if cost_in_r is not None:
         total += part("cost drag", 15, 1.0 - cost_in_r / 0.25,
                       f"costs consume {cost_in_r:.1%} of R (under 0.05R is excellent)")
@@ -929,6 +946,7 @@ def cmd_plan(args):
         stop_pct=stop_pct,
         bias_atr_pct=(((snapshot or {}).get("timeframes") or {})
                       .get("bias", {}).get("indicators", {}).get("atr_pct")),
+        expectancy_ceiling=win_rate * avg_win_r - (1.0 - win_rate),
     )
 
     plan = {
