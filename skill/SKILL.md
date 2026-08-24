@@ -94,7 +94,7 @@ Read `references/exchange-profiles.md` before computing anything for a named ven
 
 | Profile | Bias TF | Decision TF | Entry TF | ATR TF | ATR mult | Valid stop | TP1 | TP2 | Liq buffer |
 |---|---|---|---|---|---|---|---|---|---|
-| `scalp` (5–15m) | 1H | 15m | 5m | 15m | 1.5 | < 1.5% | 1.0R | 2.0R | 3× |
+| `scalp` (5–20m) | 1H | **5m** | **1m** | 15m | 1.5 | **1.0–2.25%** | **2.0R** | **3.0R** | 3× |
 | `intraday` (1–4H) | 1D | 4H | 1H | 4H | 2.0 | 2–5% | 1.5R | 3.0R | 4× |
 | `swing` (1D+) | 1W | 1D | 4H | 1D | 2.5 | 5–12% | 2.0R | 4.0R | 5× |
 
@@ -253,7 +253,30 @@ price fixes an illiquid book or a flat chart.
 | liquidity depth | top-of-book value below 3× / 2× / 1.5× the position |
 | liquidation buffer | liquidation closer than buffer × stop distance |
 | cost efficiency | costs exceed 1/4 or 1/5 of R |
+| **stop reachability** | stop outside **1.0–2.25%** (scalp only) |
+| **regime volatility** | **bias-TF** ATR above **2.25%** (scalp only) |
 | plan blockers | weak direction score, hold beyond the venue limit, etc. |
+
+**The last two are target-reachability gates, added 2026-08-24 (Round 19).** TP1 sits
+at a multiple of R, so *the stop distance is also the target distance* — and the cost
+gate only bounds it from one side, because a wide stop is *cheap* in R. ZEC passed
+every gate with a 2.876% stop at 0.08R of cost, scoring 10.5/15 on cost drag, and
+then took a full −1.32R: the target was unreachable inside the hold and only the stop
+was not. Measured over 28,812 gated entries, both excluded tails are negative in
+*both* halves of the sample:
+
+| excluded | n | TP in 1h | mean R 1h | mean R 2h |
+|---|---|---|---|---|
+| stop > 2.25% | 2,718 | 12.3% | −0.0973 | −0.1500 |
+| stop < 1.00% | 6,641 | 28.2% | −0.1039 | −0.0248 |
+| bias ATR > 2.25% | 8,371 | 18.1% | −0.0929 | −0.0641 |
+
+`regime volatility` is a different question from `volatility fit`: the latter reads
+the **ATR-TF** ATR that sets the stop, this one asks whether the instrument's whole
+hourly regime is orderly enough for a level to mean anything. ZEC passed the first at
+1.24% while its 1H ATR was 2.58%. `stop_pct_min`/`stop_pct_max` remain **warnings**,
+not gates — the scalp ceiling of 1.5% would reject most of the profitable band, which
+is how a 2.876% stop passed a profile documenting a 1.5% ceiling.
 
 **Score (0–100)** — graded quality for ranking candidates that cleared the gates:
 setup quality 35 · net expectancy 25 · cost drag 15 · liquidity headroom 15 ·
@@ -282,6 +305,33 @@ accept if:   1R ≥ 4 × total_cost  (scalp)   |   1R ≥ 5 × total_cost  (intr
 This is where high-leverage scalping usually dies. At 5×, a 0.3% round-trip fee equals
 1.5% of margin — a third of the risk unit. Always show cost as a percentage of R.
 
+**A stop does not cost 1R — it costs about 1.29R.** Price overshoots the level by a
+measured median **0.232%** before the fill, and the round trip is charged on top. So
+a 1R target paying about **+0.85R** net against a **−1.29R** loss needs a **60%** hit
+rate, and the measured rate is 31% at an hour. That asymmetry is why `scalp`'s TP1
+moved from 1.0R to **2.0R** on 2026-08-24. Swept over 13,375 gated entries with the
+ATR matched by timestamp and the overshoot charged on every stop:
+
+| TP | 1h | 2h | 4h |
+|---|---|---|---|
+| 1.00 | **−0.0212** | +0.0240 | +0.0576 |
+| 1.50 | +0.0103 | +0.0920 | +0.1835 |
+| **2.00** | **+0.0287** | **+0.1422** | **+0.2818** |
+| 3.00 | +0.0385 | +0.1815 | +0.3849 |
+
+Monotone in TP at every horizon, and **1.0R was negative at the hold the engine
+actually uses**. It stops at 2.0 rather than 3.0 because the curve is flattening
+while the hit rate falls from 8.4% to 2.5% — chasing the tail of a curve fitted to
+four days of one regime is how a previous round went wrong.
+
+Two things had to move with it, or raising the target would have done harm:
+`default_win_rate` 0.50 → **0.40** (0.50 was never measured; 40.6% of *resolved*
+trades reach 2R), and `avg_win_R` stopped averaging TP1 with TP2 on a venue that
+cannot scale out — see the Tabdeal table below. The engine's minimum hold also went
+1h → **2h**, because only 8.4% of trades reach 2R inside an hour against 20.6%
+inside two: banking at the hour would cut most winners before the target they were
+sized for could be reached.
+
 Management rules to state in the plan, so the exit isn't improvised under pressure:
 
 - On TP1: close 50%, stop **locked at the TP1 fill price itself** — risk-free and
@@ -306,8 +356,8 @@ loss was round-trip fees, i.e. **71%**.
 |---|---|
 | **The exchange owns both levels** | Stop **and** TP1 are attached to the position via `positionSlTp`, so they are honoured even if the engine process dies. Verify by reading `stopLossPrice` back — a `success` response is not proof. |
 | **TP1 is a full close** | Not a 50% partial. Tabdeal supports neither `reduceOnly` nor a partial close, so a half-exit would have to be an opposing MARKET order that can **flip** the position instead of trimming it. There is no TP2. |
-| **The engine takes exactly one exit** | Held **≥ 1 hour** *and* the position is profitable **at the price it could actually exit at**, by more than 1.5 × the round trip. Nothing else. |
-| **…unless the signal still backs it** | Past the hour and above the bar, it is still **held** while the scan says `TAKE` at ≥ 70 on the same side. It banks only when that lapses. |
+| **The engine takes exactly one exit** | Held **≥ 2 hours** *and* the position is profitable **at the price it could actually exit at**, by more than 1.5 × the round trip. Nothing else. |
+| **…unless the signal still backs it** | Past the hold and above the bar, it is still **held** while the scan says `TAKE` at ≥ `hold_take_score` (**65.83**) on the same side. It banks only when that lapses. |
 | **A losing position is never touched** | It rides its exchange stop. No time stop, no signal exit, no adverse exit. |
 
 Why the engine's own exits were removed, all measured on its live record:
@@ -337,17 +387,25 @@ WIF is the clearest: the mid implied a fill at 0.20115 and it filled at 0.2009, 
 better guess; valuing the position at the touch it must cross is the measurement.
 
 **Holding a winner needs a positive reason, not merely the absence of a negative
-one.** The hold bar (70) sits *above* the abandon floor (65) deliberately: the floor
+one.** The hold bar (**65.83**) sits *above* the abandon floor (**60.83**) deliberately: the floor
 answers "is the thesis dead", which is the right test for leaving a trade and the
 wrong one for banking it — a position can sit well above the floor and still be a
 fading signal, and holding a fading winner re-exposes a profit that has already paid
 for its own fees. Missing scan data does **not** hold.
 
 **`TAKE` is not the same as "will trade".** This skill grades TAKE at score ≥ 70 with
-every gate passed. The live engine has its own entry bar (`min_score`, currently 75),
-so 70–74.9 is a genuine TAKE that will never open a position. If you are reading a
+every gate passed. The live engine has its own entry bar (`min_score`, currently
+**70.83**), so a TAKE just under it will never open a position. If you are reading a
 board and wondering why a green signal did nothing, check the score against the
 engine's bar before looking for a fault.
+
+The engine's two bars are **not round numbers on purpose**. Round 23 made the
+expectancy model honest — it had been averaging TP1 and TP2 as if a 50/50 scale-out
+were possible, which Tabdeal cannot do, and assuming a 50% win rate nobody had
+measured. That removed a uniform **4.17 points** from every score, so `min_score`
+and `hold_take_score` were shifted down by exactly that to keep selectivity
+unchanged. Rounding them would silently re-tighten the bar by the amount being
+corrected.
 
 ---
 

@@ -628,7 +628,8 @@ the 8h long-only configuration on its own sample before adding size.
 
 **The live engine now takes exactly ONE exit, at the operator's instruction:**
 held **>= 1 hour** AND **net profitable after the round trip**
-(`profit_close_after_h: 1.0`). Everything else belongs to the exchange's own stop
+(`profit_close_after_h: 2.0` since 2026-08-24). Everything else belongs to the
+exchange's own stop
 and take-profit, which sit on the position at the venue and survive this process
 dying. Three exits were removed to make that true:
 - `signal_exit` banked a winner as soon as profit cleared the fee — median hold
@@ -713,7 +714,7 @@ left untouched.
 | | |
 |---|---|
 | Engine closes | held **≥ 2h** AND profitable **at the exit-side price** by > 1.5 × round trip AND the signal is no longer green (`profit_close`) |
-| Engine **keeps** a winner | past the hour and above the bar, but the scan still says **TAKE at ≥ `hold_take_score` (70)** on our side — logged as `riding_signal` |
+| Engine **keeps** a winner | past the hold and above the bar, but the scan still says **TAKE at ≥ `hold_take_score` (65.83)** on our side — logged as `riding_signal` |
 | Everything else | the exchange's own **stop** and **TP1**, attached to the position |
 | A losing position | never touched by the engine, at any hold |
 
@@ -729,8 +730,11 @@ take-profit sit on the position throughout.
 
 `signal_exit`, `time_stop` and `adverse_exit` are all gone from the live path
 (`adverse_exit` survives behind `adverse_exit_enabled: false`). Settings:
-`profit_close_after_h: 2.0`, `profit_close_fee_multiple: 1.5`, `hold_take_score: 70`,
-`live_cycle_seconds: 3`, `allow_shorts: false`, `min_score: 75`.
+`profit_close_after_h: 2.0`, `profit_close_fee_multiple: 1.5`,
+`hold_take_score: 65.83`, `live_cycle_seconds: 3`, `allow_shorts: **true**`,
+`min_score: 70.83`, `tp1_r: 2.0` / `tp2_r: 3.0`, `default_win_rate: 0.40`.
+**These moved on 2026-08-24 — see "Round 23" below for why the two score bars are
+not round numbers.**
 
 **Value the exit side, never the mid.** A long exits into the best bid, so the mid
 overstates what a position is worth closing by half the spread — a large share of the
@@ -971,19 +975,26 @@ because the venv python is a symlink, so that check *actively misleads*. Check
 The app otherwise stays **stdlib-only**; this is the one optional accelerator, and
 without it the feed reports itself unavailable and every mark falls back to REST.
 
-## `TAKE` is not "will trade" — the 70 / 75 gap
+## `TAKE` is not "will trade" — the grading gap
 
 **The skill grades `TAKE` at score ≥ 70 with all gates passed; the live engine opens
-only at `min_score` (75).** So 70–74.9 renders as a green TAKE that can never become
-a position. This is the answer to "the scanner signalled and nothing opened" — check
-the score against the entry bar before looking for a fault. Live example: scan 926
-showed SUI 79.9, TAO 75.9 (both already held) and **ZEC TAKE 74.1**, which was simply
-under the bar. Three green cards, an idle engine, all of it correct.
+only at `min_score`.** Those are two different bars and they always have been, so a
+green TAKE below the engine's bar can never become a position. This is the answer to
+"the scanner signalled and nothing opened" — check the score against the entry bar
+before looking for a fault. The board marks such a card **"below entry bar"**, and
+`/api/state` serves `min_score` and `allow_shorts` so it can.
 
-`/api/state` now serves `min_score` and `allow_shorts`, and the board marks such a
-card **"below entry bar"**. Before lowering `min_score` to 70: 40 of the 100 score
-points come from net-expectancy and cost-drag, both capped by the 0.1%/side fee, so
-that band is exactly where the edge is thinnest against costs.
+**The numbers moved on 2026-08-24** and are no longer 70/75: `min_score` is
+**70.83** and the skill's TAKE grade is still 70, so the gap is now under a point.
+Both engine bars were shifted down by exactly the 4.17 points that Round 23's honest
+expectancy model removed from every score — see that section. Do not "tidy" them to
+round numbers; the offset is a measurement, and rounding re-tightens the bar by the
+amount being corrected.
+
+Historic example, before the rescale: scan 926 showed SUI 79.9, TAO 75.9 (both
+already held) and **ZEC TAKE 74.1**, simply under the then-bar of 75. Three green
+cards, an idle engine, all of it correct.
+
 
 ## Shorts are back on, and provably symmetric
 
