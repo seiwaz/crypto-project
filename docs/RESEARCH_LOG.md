@@ -843,6 +843,97 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 25 (2026-08-24) — the signal does not last as long as the trade
+
+**Operator's claim:** if a signal is TAKE now and WATCH or SKIP five minutes later,
+the signalling system is faulty. **Correct, and the data is not close.**
+
+Measured straight from the observation archive — 1,451 observations, 44 scans,
+4.1h, 33 coins, scans 5.8 min apart. This measures the SIGNAL, not outcomes, so it
+does not depend on the forward window and is unaffected by the coverage problem
+that limits everything else in Round 24.
+
+### What a verdict becomes at the next scan
+
+| from | n | TAKE | WATCH | SKIP |
+|---|---|---|---|---|
+| **TAKE** | 108 | **44.4%** | 29.6% | 25.9% |
+| WATCH | 492 | 7.9% | 69.9% | 22.2% |
+| SKIP | 818 | 2.6% | 14.1% | 83.4% |
+
+**A TAKE is still a TAKE six minutes later only 44% of the time.**
+
+### How long a TAKE lasts
+
+```
+63 runs   median 1 scan (6 min)   longest 7 scans (41 min)
+>= 2 scans  (12 min):  39.7%
+>= 5 scans  (29 min):   4.8%
+>= 10 scans (58 min):   0.0%
+>= 21 scans (122 min):  0.0%   <-- what a 2h hold needs
+```
+
+**60% of TAKEs exist for a single scan.** Not one survived the ~21 scans the
+engine's own two-hour minimum hold implies. The engine opens on a thesis that, more
+often than not, has evaporated before the position is six minutes old.
+
+### Where the flicker comes from
+
+Median |score change| between consecutive scans: **3.10 points** (p90 9.70, max 22).
+
+| component | weight | median move | share of jitter |
+|---|---|---|---|
+| **setup quality** | 35 | 1.30 | **42%** |
+| net expectancy | 25 | 0.50 | 16% |
+| cost drag | 15 | 0.30 | 10% |
+| volatility centring | 10 | 0.30 | 10% |
+| liquidity headroom | 15 | 0.00 | 0% |
+
+Underneath, the direction vote count usually holds (median change 0.000) but **the
+vote or the side changed in 52% of consecutive pairs**, and the fastest-moving input
+is the 5m RSI at a median **3.23 points per scan** against hard band edges (45-65 for
+a long). A coin sitting near a boundary flips that check every scan, one check moves
+the weighted ratio, and 35 points of setup quality move with it.
+
+**14.3% of all observations sit within 3 points of the 73 entry bar** — against a
+median 3.10-point scan-to-scan move. Those cross the bar on noise alone.
+
+### The root cause is a timeframe mismatch, not a bug
+
+The `scalp` profile decides on a **5-minute** chart. The engine now holds for a
+minimum of **two hours**. That is a 24x mismatch: the signal measures something far
+faster than the position it opens, so of course it does not survive the hold.
+
+This is also a documented inconsistency. The profile is labelled "Scalp (5-20m
+hold)" and carries `time_stop_candles: 4` — twenty minutes. Every timeframe in it
+was chosen for a 5-20 minute trade. The hold was stretched to 8h (Round 17) and then
+set to 2h without the decision timeframe ever following.
+
+### Persistence filter — tested, and it did NOT help
+
+Requiring a TAKE to repeat before entering:
+
+| require | n | SL% | mean R |
+|---|---|---|---|
+| >= 1 consecutive | 65 | 69.2% | -0.8459 |
+| >= 2 consecutive | 29 | 75.9% | -0.9697 |
+| >= 3 consecutive | 13 | 84.6% | -1.0553 |
+
+Worse, monotonically. **But this measurement is one market slice** — 4.1h of
+coverage against a 2h horizon means nearly every observation shares a forward
+window, exactly the limitation Round 24 built a warning for. Do not treat the
+persistence result as settled; the stability result above does not share that
+weakness and is solid.
+
+### Where this leaves things
+
+The candidate fix is to match the decision timeframe to the hold — 5m decides a 5-20
+minute trade, and a 2h trade wants 15m or 1H. That is a profile change big enough to
+need the full study behind it, so nothing is being changed on this round.
+
+`tools/signal_stability.py` runs this check on demand.
+
+
 ## Round 24 (2026-08-24) — the account audited, and a frozen sample opened
 
 **Asked:** the signalling looks bad, the account is losing.
