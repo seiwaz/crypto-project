@@ -1432,6 +1432,11 @@ results.append(check("the session cookie is HttpOnly", "HttpOnly" in _srv, True)
 results.append(check("and SameSite", "SameSite=Lax" in _srv, True))
 results.append(check("Secure is set only behind TLS",
                      'X-Forwarded-Proto' in _srv and 'cookie += "; Secure"' in _srv, True))
+# An empty 302 still needs a length, or a keep-alive client hangs waiting for a body.
+results.append(check("logout sends Content-Length",
+                     'self.send_header("Content-Length", "0")' in
+                     _insp.getsource(__import__("agent.server", fromlist=["x"]).Handler._logout),
+                     True))
 results.append(check("no password appears in the repo's own source",
                      "Segm@" in _srv or "Segm@" in _insp.getsource(_auth), False))
 

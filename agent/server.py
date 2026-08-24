@@ -443,6 +443,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Location", "/")
         self.send_header("Set-Cookie",
                          f"{auth.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
+        # An empty 302 still needs a length. Without it a keep-alive client sits
+        # waiting for a body that never comes — the request simply hangs, which is
+        # exactly how this was found.
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_POST(self):
