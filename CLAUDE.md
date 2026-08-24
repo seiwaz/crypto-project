@@ -807,6 +807,113 @@ so the rate is readable rather than inferred. Closed history shows 10 rows with 
 **Show more** button; the page size lives in `state`, not the DOM, or the 3s
 re-render collapses it under the reader.
 
+## The dashboard has a password now (2026-08-24)
+
+The board could `POST /api/live/close`, `/api/live/flatten` and `/api/settings` — real
+money — and was open to anyone who knew the host. It is now gated.
+
+- **Where the credential lives: the SERVER's `config/settings.json` under `web`**, as
+  a PBKDF2-SHA256 salt + hash (200k iterations) plus an `api_token`. **Never in this
+  repo** — it is public, and the deploy pipeline deliberately never copies
+  `config/settings.json` from git. Same rule as `demo.reset_password`.
+- Set it on the box with `agent.auth.set_password(user, pw)`. There is **no code path
+  that writes a password from a request**, so the gate cannot be reset through the gate.
+- **Gating is central**, in `do_GET`/`do_POST` *before* routing — a route added later
+  is closed by default. Only `/api/health` and `/api/login` are public; a health check
+  that needs a password reports the padlock, not the service.
+- Sessions: opaque 256-bit token, HttpOnly + SameSite=Lax cookie, 12h, in memory. A
+  restart logs everyone out. `Secure` is set **only** when `X-Forwarded-Proto: https`
+  — marking it Secure on nginx's plain-HTTP hop makes the browser drop it and the
+  login silently never sticks.
+- **`X-Auth-Token`** lets server-side jobs through without the operator password.
+  `/opt/crypto-screener-deploy/push-report.sh` reads it from settings and sends it;
+  that script is **not in git**, so a fresh clone will not carry the change.
+- `config.save_settings()` now chmods 0600 **on the temp file before the rename**.
+  Tightening by hand did not stay tightened — the deploy timer rewrites settings
+  through `save_settings()` every five minutes.
+- **Unconfigured means unlocked**, so nothing changes until a credential is set.
+- Gotcha found live: an empty 302 needs `Content-Length: 0`, or a keep-alive client
+  hangs forever. `/api/logout` did exactly that.
+
+## Round 23 — TP raised to 2R, and the score rescaled to match (2026-08-24)
+
+**A stop does not cost 1R. It costs ~1.29R** — a measured median 0.232% of overshoot
+past the level, plus the round trip. A 1R target paying +0.85R net against that needs
+a 60% hit rate; the measured rate is 31% at an hour. The operator spotted this from
+the P/L before it was measured.
+
+Swept over **13,375 gated entries**, ATR matched by timestamp, overshoot charged:
+
+| TP | 1h | 2h | 4h |
+|---|---|---|---|
+| 1.00 (was) | **-0.0212** | +0.0240 | +0.0576 |
+| 1.50 | +0.0103 | +0.0920 | +0.1835 |
+| **2.00 (now)** | **+0.0287** | **+0.1422** | **+0.2818** |
+| 3.00 | +0.0385 | +0.1815 | +0.3849 |
+
+Monotone at every horizon, and **1.0R was negative at the one hour the engine holds
+for**. Stopped at 2.0, not 3.0: the curve flattens while the hit rate falls 8.4% →
+2.5%, and chasing the tail of a curve fitted to four days is Round 16's mistake.
+
+**Two companion fixes, without which raising TP would have done harm:**
+- `default_win_rate` 0.50 → **0.40**. The 0.50 was never measured; at TP 2.0R, 40.6%
+  of *resolved* trades win.
+- `avg_win_r` was `(tp1_r + tp2_r)/2`, describing a **50/50 scale-out Tabdeal cannot
+  do**. The engine closes the whole position at TP1 and TP2 never happens, so the
+  average credited every plan with an exit that cannot occur. Now `tp1_r` alone on
+  that venue; other venues keep the average.
+
+**Then the bar had to move with the scale.** Making expectancy honest removed a
+uniform **4.17 points** from every score (`25 × 0.05/0.30`), and the live board went
+to **zero TAKEs, max 70.0**. Caught by reading a real scan after deploy — every test
+passed. `min_score` 75 → **70.83**, `hold_take_score` 70 → **65.83**, both by exactly
+that offset, so selectivity is unchanged and the 5-point entry/hold gap survives.
+Not rounded to 71/66 on purpose: rounding would re-tighten by the amount corrected.
+
+**A misaligned sweep nearly poisoned this.** The first pass mapped a 5m bar to
+`int(i/3)` of the 15m series; those series do not start together, so every entry was
+sized with an ATR from ~25h earlier, reading -0.13R where the aligned run reads
+-0.02R. **Match candle series by timestamp, never by index.**
+
+## Tested and REJECTED — do not retry these
+
+Nine hypotheses have now died against real data. They are listed so nobody spends the
+day re-deriving them:
+
+| hypothesis | n | result |
+|---|---|---|
+| prior 15m run-up predicts the dip | 39,303 | flat 1.03-1.26 across every band |
+| extension over 1H EMA200 | 28,812 | flat; least-extended band is worst |
+| position in the 2h range | 38,709 | flat even in the top decile |
+| entry slippage | 53 | +0.004% vs bar close, 50/50 either side |
+| "the engine buys the top of a 5m push" | 53 | median in-bar fill at the 56.5th pct |
+| 1m close above its 1m EMA20 | 7,681 | **backwards** — below is better |
+| refuse top-quarter 1m spikes | 7,813 | works in half one, absent in half two |
+| tighter ATR timeframe | — | raises cost_in_R proportionally (Round 15) |
+| **pullback limit entry below market** | 16,234 | **worse at every offset** |
+
+The pullback result is worth keeping in mind because the intuition is so appealing:
+
+| offer below market | fill% | TP% | SL% | mean R |
+|---|---|---|---|---|
+| market | 100% | 36.9% | 31.8% | -0.1273 |
+| 0.10 × stop | 73% | 36.7% | 35.3% | -0.1714 |
+| 0.50 × stop | 22% | 42.1% | 40.7% | -0.1999 |
+
+A limit under the market only fills when price is **already coming down**, so it
+selectively fills into declines. Total R improves only because it trades less — doing
+less of a losing thing is not an edge.
+
+## Entry price is correct; the LEVELS carry spot/futures noise
+
+`build_snapshot()` anchors `last_price` to the live futures order-book mid, so the
+plan entry is the real instrument's price (fill vs plan entry: **+0.0037%** median).
+But ATR and swing structure come from `plots/history`, which is the **spot** series.
+Measured across all 33 symbols: |basis| median **0.083%**, max 0.494%, which is a
+median **7.7%** of the stop distance (max 89.7% on XAUT, already gated out). Signed
+mean -0.013% with futures above spot on 15 of 33 — **noise, not a systematic skew**,
+and unfixable: no futures candles exist on any Tabdeal host.
+
 ## Websocket price feed, and what Tabdeal actually publishes (2026-08-23)
 
 **Marks now come from Tabdeal's pushed order book.** `agent/tabdeal_ws.py` keeps one
