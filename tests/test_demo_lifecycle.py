@@ -1443,6 +1443,39 @@ results.append(check("saving settings leaves the file owner-only",
 results.append(check("no password appears in the repo's own source",
                      "Segm@" in _srv or "Segm@" in _insp.getsource(_auth), False))
 
+print("39. TP raised, and the expectancy model stops inventing a second exit")
+_sc = _tp.PROFILES["scalp"]
+results.append(check("scalp TP1 is 2.0R", _sc["tp1_r"], 2.0))
+results.append(check("TP2 stays above it", _sc["tp2_r"] > _sc["tp1_r"], True))
+# 0.50 was never measured. At TP 2.0R, 20.6% reach it and 30.2% stop within 2h, so
+# 40.6% of RESOLVED trades win. Pairing an unmeasured 50% with a raised target would
+# have inflated every score by inventing expectancy.
+results.append(check("the assumed win rate is the measured one", _sc["default_win_rate"], 0.40))
+
+# Tabdeal has no reduceOnly and no partial close: the engine closes the WHOLE
+# position at TP1, so TP2 never happens and averaging the two credits a plan with an
+# exit that cannot occur.
+_src = _insp.getsource(_tp)
+_seg = _src.split("avg_win_r =")[1][:220]
+results.append(check("avg win is TP1 alone on a venue with no scale-out",
+                     "scale_out" in _seg and "tp1_r" in _seg, True))
+
+def _e(exchange, wr=0.40, cost=0.15):
+    scale = exchange != "tabdeal"
+    avg = ((_sc["tp1_r"] + _sc["tp2_r"]) / 2.0) if scale else _sc["tp1_r"]
+    return wr * avg - (1 - wr) - cost
+
+results.append(check("tabdeal expectancy uses 2.0R not 2.5R", round(_e("tabdeal"), 3), 0.05))
+results.append(check("a scale-out venue still averages", round(_e("toobit"), 3), 0.25))
+results.append(check("tabdeal is the more conservative of the two",
+                     _e("tabdeal") < _e("toobit"), True))
+
+# A stop costs ~1.29R (0.232% median overshoot + the round trip), so a 1R target
+# cannot pay for itself. Check the arithmetic that motivated the change.
+_loss, _win = 1.29, _sc["tp1_r"] - 0.15
+results.append(check("2R target now beats the true cost of a stop", _win > _loss, True))
+results.append(check("a 1R target would not have", (1.0 - 0.15) > _loss, False))
+
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

@@ -46,10 +46,34 @@ PROFILES = {
         "bias_tf": "1H", "decision_tf": "5m", "entry_tf": "1m", "atr_tf": "15m",
         "atr_mult": 1.5,
         "stop_pct_min": 0.0, "stop_pct_max": 1.5,
-        "tp1_r": 1.0, "tp2_r": 2.0,
+        # TP1 raised 1.0 -> 2.0 (Round 23). A stop does not cost 1R: it costs about
+        # 1.29R, because price overshoots the level by a measured median 0.232% and
+        # the round trip is charged on top. A 1R target paying +0.85R net against a
+        # 1.29R loss needs a 60% hit rate; the measured rate is 31% at one hour.
+        #
+        # Swept over 13,375 gated entries with the ATR matched by timestamp, mean R
+        # net of costs and with the overshoot charged on every stop:
+        #
+        #   TP      1h        2h        4h
+        #   0.75  -0.0434   -0.0165   +0.0007
+        #   1.00  -0.0212   +0.0240   +0.0576     <- what this was
+        #   1.50  +0.0103   +0.0920   +0.1835
+        #   2.00  +0.0287   +0.1422   +0.2818     <- what this is
+        #   3.00  +0.0385   +0.1815   +0.3849
+        #
+        # Monotone in TP at every horizon, and 1.0R is NEGATIVE at the one hour the
+        # engine actually holds for. Stopping at 2.0 rather than 3.0 on purpose: the
+        # curve is flattening (3.0 buys +0.010R more at 1h) while the hit rate falls
+        # from 8.4% to 2.5%, and chasing the tail of a curve fitted to four days of
+        # one regime is how Round 16 went wrong.
+        "tp1_r": 2.0, "tp2_r": 3.0,
         "liq_buffer": 3.0,
         "cost_filter": 4.0,
-        "default_win_rate": 0.50,
+        # Measured, not assumed. At TP 2.0R over the same 13,375 entries, 20.6% reach
+        # the target within 2h and 30.2% are stopped — 40.6% of RESOLVED trades win.
+        # It was 0.50, which was never measured and, paired with the raised target,
+        # would have inflated every score by inventing expectancy.
+        "default_win_rate": 0.40,
         # 4 x 5m decision candles = the 20-minute ceiling of the intended hold.
         "time_stop_candles": 4,
         # tradability gates
@@ -855,7 +879,13 @@ def cmd_plan(args):
 
     # --- expectancy -------------------------------------------------------------
     win_rate = args.win_rate if args.win_rate is not None else prof["default_win_rate"]
-    avg_win_r = (tp1_r + tp2_r) / 2.0          # 50/50 scale-out
+    # An average of TP1 and TP2 describes a 50/50 scale-out. Tabdeal supports neither
+    # `reduceOnly` nor a partial close, so the live engine closes the WHOLE position
+    # at TP1 and TP2 never happens — averaging the two credited the plan with a
+    # second exit that cannot occur, overstating expectancy on every Tabdeal scan and
+    # so overstating the score that decides whether to trade at all.
+    scale_out = (args.exchange or "").lower() != "tabdeal"
+    avg_win_r = ((tp1_r + tp2_r) / 2.0) if scale_out else tp1_r
     e_gross = win_rate * avg_win_r - (1.0 - win_rate) * 1.0
     e_net = e_gross - cost_in_r
     breakeven_wr = 1.0 / (1.0 + avg_win_r)
