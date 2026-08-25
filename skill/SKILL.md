@@ -94,7 +94,7 @@ Read `references/exchange-profiles.md` before computing anything for a named ven
 
 | Profile | Bias TF | Decision TF | Entry TF | ATR TF | ATR mult | Valid stop | TP1 | TP2 | Liq buffer |
 |---|---|---|---|---|---|---|---|---|---|
-| `scalp` (5–20m) | 1H | **5m** | **1m** | 15m | 1.5 | **1.0–2.25%** | **2.0R** | **3.0R** | 3× |
+| `scalp` (**2h+ hold**) | **4H** | **15m** | **5m** | 15m | 1.5 | **1.0–2.25%** | **2.0R** | **3.0R** | 3× |
 | `intraday` (1–4H) | 1D | 4H | 1H | 4H | 2.0 | 2–5% | 1.5R | 3.0R | 4× |
 | `swing` (1D+) | 1W | 1D | 4H | 1D | 2.5 | 5–12% | 2.0R | 4.0R | 5× |
 
@@ -147,7 +147,7 @@ python3 scripts/trade_plan.py indicators --csv eth_4h.csv
 The snapshot does the arithmetic; your job is to read it, add the manual checks, and
 state the tally explicitly so the decision is auditable.
 
-**Scalp (need ≥ 5 of up to 9 automated):** price vs EMA200 on 1H · EMA50 vs EMA200 ·
+**Scalp (need ≥ 5 of up to 9 automated):** price vs EMA200 on 4H · EMA50 vs EMA200 ·
 price vs session VWAP · structure HH/HL or LH/LL on 15m · price vs EMA50 on 15m ·
 RSI(14) 45–65 long / 35–55 short · volume bias (last 10 candles) · price vs Ichimoku
 cloud (`references/indicators.md` §16 — skipped, not forced, when price sits inside
@@ -254,7 +254,7 @@ price fixes an illiquid book or a flat chart.
 | liquidation buffer | liquidation closer than buffer × stop distance |
 | cost efficiency | costs exceed 1/4 or 1/5 of R |
 | **stop reachability** | stop outside **1.0–2.25%** (scalp only) |
-| **regime volatility** | **bias-TF** ATR above **2.25%** (scalp only) |
+| **regime volatility** | **bias-TF** ATR above **5.20%** (scalp only) |
 | plan blockers | weak direction score, hold beyond the venue limit, etc. |
 
 **The last two are target-reachability gates, added 2026-08-24 (Round 19).** TP1 sits
@@ -273,10 +273,45 @@ was not. Measured over 28,812 gated entries, both excluded tails are negative in
 
 `regime volatility` is a different question from `volatility fit`: the latter reads
 the **ATR-TF** ATR that sets the stop, this one asks whether the instrument's whole
-hourly regime is orderly enough for a level to mean anything. ZEC passed the first at
-1.24% while its 1H ATR was 2.58%. `stop_pct_min`/`stop_pct_max` remain **warnings**,
-not gates — the scalp ceiling of 1.5% would reject most of the profitable band, which
-is how a 2.876% stop passed a profile documenting a 1.5% ceiling.
+regime is orderly enough for a level to mean anything. ZEC passed the first at 1.24%
+while its bias ATR was 2.58% on the 1H chart it was then measured on.
+`stop_pct_min`/`stop_pct_max` remain **warnings**, not gates — the scalp ceiling of
+1.5% would reject most of the profitable band, which is how a 2.876% stop passed a
+profile documenting a 1.5% ceiling.
+
+**The threshold was 2.25% when the bias chart was 1H.** Moving the bias chart to 4H
+(below) changed what the number means: measured across all 33 symbols the 4H ATR is
+**2.31×** the 1H ATR (median 3.033% vs 1.312%). Left at 2.25 the gate would have
+passed **7 of 33 symbols instead of 32**, with every test still green. It is now
+2.25 × 2.31 = **5.20**. The figures in the table above were measured on the 1H
+scale; multiply by 2.31 to compare them with the current threshold.
+
+## The signal must last as long as the trade
+
+The scalp profile decided on a **5-minute** chart while the engine held for a minimum
+of **two hours** — a 24× mismatch, and it was measured over 5,567 candidates across
+176 scans:
+
+```
+a TAKE is still a TAKE six minutes later   55% of the time
+54% of TAKEs exist for a SINGLE scan
+longest run observed                        19 scans (110 min)
+survived the ~21 scans a 2h hold needs      ZERO of 130
+```
+
+The cause is not market noise. The 5m RSI moves a median **3.2 points per scan**
+against hard band edges (45–65 for a long), one check flips, and the 35 points of
+setup quality move with it — median score change **2.60 points every six minutes**,
+against an entry bar that 7.7% of candidates sit within 3 points of.
+
+Retimed 2026-08-25: bias **1H → 4H**, decision **5m → 15m**, entry **1m → 5m**. The
+**ATR timeframe does not move** — it sets the stop, and that is a cost decision
+settled separately: a 5m ATR shrinks the stop ~40% and raises `cost_in_R` by the same
+proportion, needing a 75–87% win rate.
+
+**When a timeframe moves, re-derive every threshold that reads it.** The bias-ATR
+gate above is one. This is the second such coupling found — an expectancy anchor was
+the first, and it silently took every score under the TAKE grade.
 
 **Score (0–100)** — graded quality for ranking candidates that cleared the gates:
 setup quality 35 · net expectancy 25 · cost drag 15 · liquidity headroom 15 ·

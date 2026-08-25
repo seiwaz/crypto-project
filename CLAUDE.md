@@ -914,6 +914,96 @@ to how selectively it was opened.
 sized with an ATR from ~25h earlier, reading -0.13R where the aligned run reads
 -0.02R. **Match candle series by timestamp, never by index.**
 
+## The signal must last as long as the trade (Round 25-26, 2026-08-25)
+
+**The operator's rule: if a coin is TAKE now and WATCH/SKIP at the next scan, the
+signalling is faulty.** Measured over **5,567 candidates across 176 scans, 16.8h**:
+
+```
+a TAKE is still a TAKE six minutes later   55%
+54% of TAKEs exist for a SINGLE scan
+longest run observed                        19 scans (110 min)
+survived the ~21 scans a 2h hold needs      ZERO of 130 runs
+```
+
+Not market noise: the 5m RSI moved a median **3.2 points per scan** against hard band
+edges, one check flipped, and the 35 points of setup quality moved with it — median
+score change **2.60 points every six minutes**, with 7.7% of candidates sitting
+within 3 points of the entry bar.
+
+**Root cause was a timeframe mismatch, not a bug.** The `scalp` profile decided on a
+5-minute chart while the engine held ≥2h — 24×. Retimed 2026-08-25:
+
+| | was | now |
+|---|---|---|
+| bias | 1H | **4H** |
+| decision | 5m | **15m** |
+| entry | 1m | **5m** |
+| **ATR** | 15m | **15m — unchanged** |
+
+The ATR timeframe is a **cost** decision, settled by Round 15: a 5m ATR shrinks the
+stop ~40% and raises `cost_in_R` proportionally, needing a 75-87% win rate. Only the
+SIGNAL timeframes moved.
+
+**`gate_bias_atr_max` 2.25 → 5.20, and this is the rule to remember.** That gate
+reads the BIAS chart. Across all 33 symbols the 4H ATR is **2.31×** the 1H ATR
+(median 3.033% vs 1.312%; a random walk gives 2.00×). Left at 2.25 it would have
+passed **7 of 33 symbols instead of 32** — strangling the scanner with every test
+still green. **When a timeframe moves, re-derive every threshold that reads it.**
+Second occurrence: Round 23's +0.30R expectancy anchor was the first.
+
+## What 17 hours of market behaviour showed (Round 26)
+
+`tools/observe.py` archives every scored candidate before `store.prune(keep_scans=40)`
+discards it (~4h of retention); `tools/observe_report.py` joins each to the candles
+that followed. 5,567 candidates, BTC +6.03% over the window.
+
+**The score selects STOP WIDTH, not opportunity.** Raw it looks inversely predictive
+(score 0-55 reaches TP 29.4%, 73-100 only 11.0%) — but median stop width climbs
+**0.884% → 2.096%** straight up the score bands, because `cost drag` rewards a low
+`cost_in_R = 2 × fee / stop_pct`, which is a reward for a wider stop. In percent,
+which the stop cannot distort:
+
+| score | med MFE% | med stop% | **MFE/stop** |
+|---|---|---|---|
+| 0-55 | +0.854 | 0.884 | **0.97** |
+| 65-70 | +1.120 | 1.685 | 0.66 |
+| 70-73 | +1.082 | 1.846 | **0.59** |
+
+**Price travels ~1% either way regardless of score.** Inside a fixed stop band the
+score shows no consistent direction, and within a single coin high score beat low on
+**3 coins and lost on 14**.
+
+**Gates, by what each refused:** `liquidation buffer` −0.993R and `volatility fit`
+−0.971R clearly earn their place; `stop reachability` refused 1,722 candidates at
+−0.102R, i.e. mostly removing trades rather than losers.
+
+**By coin the edge is concentrated:** HYPE +0.709R, SOL +0.522, ZEC +0.370 against
+XAUT **−1.210**, PAXG −0.979, TRX −0.890. The gold-backed pairs barely move and never
+cover the round trip.
+
+**Not acted on:** reweighting `cost drag`, and lowering `gate_stop_pct_min` below 1.0
+(the 0.8-1.2% stop band with score <60 was the only positive cell in the controlled
+table, +0.0438R). The timeframe change altered every input those gates read, so any
+threshold derived from the old data describes a system that no longer exists.
+Re-measure first.
+
+## The frozen sample, and the routine that feeds it
+
+- `var/sample-baseline.json` pins the configuration and the first position id of the
+  current sample. `tools/sample_report.py` reports it — **no daemon**: everything is
+  already in `live_positions`, and a poller is a second copy of the database that
+  dies with an ssh session (one did). Re-frozen whenever a trading parameter changes.
+- `crypto-observe.timer` (5 min) archives candidates; `crypto-study.timer` (hourly)
+  rebuilds `var/study-1h.txt` / `var/study-4h.txt`. `tools/signal_stability.py` runs
+  the TAKE-persistence check on demand.
+- **The study warns and refuses to be read when coverage is under 3× the horizon.**
+  Consecutive scans of one coin share a forward window, so at a 4h horizon ~41
+  observations are the same market move counted 41 times; the report prints
+  *effective* independent observations, not the row count. The first run read 67%
+  stop-outs against 44% from every other replay purely because it accepted partial
+  forward windows.
+
 ## Tested and REJECTED — do not retry these
 
 Nine hypotheses have now died against real data. They are listed so nobody spends the

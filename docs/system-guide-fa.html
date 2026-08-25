@@ -518,8 +518,8 @@ footer {
       <div class="stage__b">
         <h4>محاسبهٔ اندیکاتورها</h4>
         <p>
-          روی سه تایم‌فریم: بایاس <span class="num">1H</span>، تصمیم
-          <span class="num">5m</span>، ورود <span class="num">1m</span>؛ و
+          روی سه تایم‌فریم: بایاس <span class="num">4H</span>، تصمیم
+          <span class="num">15m</span>، ورود <span class="num">5m</span>؛ و
           <span class="num">ATR</span> روی <span class="num">15m</span>.
         </p>
         <span class="meta">EMA۲۰/۵۰/۲۰۰ · RSI۱۴ · VWAP · ابر ایچیموکو · ساختار بازار · ATR · حجم</span>
@@ -557,7 +557,7 @@ footer {
           <strong>کارایی هزینه</strong>. اگر هرکدام رد شود، نتیجه
           <code>SKIP</code> است.
         </p>
-        <span class="meta">امتیاز نهایی ۰ تا ۱۰۰ · آستانهٔ ورود <span class="num">۷۵</span></span>
+        <span class="meta">امتیاز نهایی ۰ تا ۱۰۰ · آستانهٔ ورود <span class="num">۷۳</span></span>
       </div>
     </div>
 
@@ -612,15 +612,15 @@ footer {
     <table>
       <thead><tr><th>بررسی</th><th>تایم‌فریم</th><th>خانواده</th></tr></thead>
       <tbody>
-        <tr><td>قیمت نسبت به EMA۲۰۰</td><td class="num">1H</td><td>روند تایم‌فریم بایاس</td></tr>
-        <tr><td>EMA۵۰ نسبت به EMA۲۰۰</td><td class="num">1H</td><td>روند تایم‌فریم بایاس</td></tr>
-        <tr><td>قیمت نسبت به EMA۵۰</td><td class="num">5m</td><td>میانگین تایم‌فریم تصمیم</td></tr>
-        <tr><td>قیمت نسبت به VWAP</td><td class="num">5m</td><td>میانگین تایم‌فریم تصمیم</td></tr>
-        <tr><td>ساختار بازار (سقف/کف)</td><td class="num">5m</td><td>مستقل</td></tr>
-        <tr><td>باند RSI</td><td class="num">5m</td><td>مستقل</td></tr>
-        <tr><td>سوگیری حجم (۱۰ کندل اخیر)</td><td class="num">5m</td><td>مستقل</td></tr>
-        <tr><td>ابر ایچیموکو</td><td class="num">5m</td><td>مستقل</td></tr>
-        <tr><td>هم‌راستایی با بیت‌کوین</td><td class="num">1H</td><td>مستقل</td></tr>
+        <tr><td>قیمت نسبت به EMA۲۰۰</td><td class="num">4H</td><td>روند تایم‌فریم بایاس</td></tr>
+        <tr><td>EMA۵۰ نسبت به EMA۲۰۰</td><td class="num">4H</td><td>روند تایم‌فریم بایاس</td></tr>
+        <tr><td>قیمت نسبت به EMA۵۰</td><td class="num">15m</td><td>میانگین تایم‌فریم تصمیم</td></tr>
+        <tr><td>قیمت نسبت به VWAP</td><td class="num">15m</td><td>میانگین تایم‌فریم تصمیم</td></tr>
+        <tr><td>ساختار بازار (سقف/کف)</td><td class="num">15m</td><td>مستقل</td></tr>
+        <tr><td>باند RSI</td><td class="num">15m</td><td>مستقل</td></tr>
+        <tr><td>سوگیری حجم (۱۰ کندل اخیر)</td><td class="num">15m</td><td>مستقل</td></tr>
+        <tr><td>ابر ایچیموکو</td><td class="num">15m</td><td>مستقل</td></tr>
+        <tr><td>هم‌راستایی با بیت‌کوین</td><td class="num">4H</td><td>مستقل</td></tr>
       </tbody>
     </table>
   </div>
@@ -706,7 +706,7 @@ footer {
     <strong>۴۰ امتیاز از ۱۰۰ مستقیماً به کارمزد گره خورده است</strong> (امید ریاضی
     و فشار هزینه). به همین دلیل روی تبدیل امتیاز عملاً هرگز از
     <span class="num">۷۹</span> بالاتر نمی‌رود — آستانه‌ای مثل ۸۵ دست‌نیافتنی
-    است و آستانهٔ واقعی روی <span class="num">۷۵</span> تنظیم شده.
+    است و آستانهٔ واقعی روی <span class="num">۷۳</span> تنظیم شده.
   </p>
 
   <h4>حکم نهایی</h4>
@@ -1045,19 +1045,116 @@ footer {
     <table>
       <thead><tr><th>کلید</th><th class="n">مقدار</th><th>اثر</th></tr></thead>
       <tbody>
-        <tr><td><code>profit_close_after_h</code></td><td class="n num">1.0</td><td>حداقل مدت نگه‌داری پیش از بستن سودده</td></tr>
+        <tr><td><code>profit_close_after_h</code></td><td class="n num">2.0</td><td>حداقل مدت نگه‌داری پیش از بستن سودده</td></tr>
         <tr><td><code>profit_close_fee_multiple</code></td><td class="n num">1.5</td><td>حاشیه در برابر لغزش قیمت</td></tr>
-        <tr><td><code>hold_take_score</code></td><td class="n num">70</td><td>حداقل امتیاز سیگنال سبز برای نگه‌داشتن برنده</td></tr>
+        <tr><td><code>hold_take_score</code></td><td class="n num">65.83</td><td>حداقل امتیاز سیگنال سبز برای نگه‌داشتن برنده</td></tr>
         <tr><td><code>adverse_exit_enabled</code></td><td class="n"><span class="tag tag--off">خاموش</span></td><td>پوزیشن زیان‌ده هرگز دست‌کاری نمی‌شود</td></tr>
-        <tr><td><code>allow_shorts</code></td><td class="n"><span class="tag tag--off">خاموش</span></td><td>فقط خرید</td></tr>
+        <tr><td><code>allow_shorts</code></td><td class="n"><span class="tag tag--on">روشن</span></td><td>خرید و فروش، با تقارن اثبات‌شده</td></tr>
         <tr><td><code>live_cycle_seconds</code></td><td class="n num">3</td><td>دورهٔ حلقهٔ پایش</td></tr>
         <tr><td><code>history_interval_seconds</code></td><td class="n num">15</td><td>فاصلهٔ ثبت نمونه</td></tr>
-        <tr><td><code>min_score</code></td><td class="n num">75</td><td>آستانهٔ ورود</td></tr>
-        <tr><td><code>exit_score_margin</code></td><td class="n num">10</td><td>کف نگه‌داری = ۶۵</td></tr>
+        <tr><td><code>min_score</code></td><td class="n num">73</td><td>آستانهٔ ورود</td></tr>
+        <tr><td><code>exit_score_margin</code></td><td class="n num">10</td><td>کف رهاکردن = <span class="num">۶۳</span></td></tr>
         <tr><td><code>max_entry_drift_r</code></td><td class="n num">0.3</td><td>سقف انحراف سیگنال کهنه</td></tr>
       </tbody>
     </table>
   </div>
+
+  <h3>سیگنال باید به‌اندازهٔ خودِ معامله دوام بیاورد</h3>
+  <p>
+    قاعده‌ای که اپراتور مطرح کرد و داده‌ها آن را تأیید کردند: اگر ارزی همین حالا
+    <strong>TAKE</strong> باشد و در اسکن بعدی به <strong>WATCH</strong> یا
+    <strong>SKIP</strong> تبدیل شود، سیستم سیگنال‌دهی ایراد دارد. اندازه‌گیری روی
+    <span class="num">۵٬۵۶۷</span> نامزد در <span class="num">۱۷۶</span> اسکن و
+    <span class="num">۱۶٫۸</span> ساعت:
+  </p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>پرسش</th><th class="n">پاسخ</th></tr></thead>
+      <tbody>
+        <tr><td>یک TAKE شش دقیقه بعد هنوز TAKE است</td><td class="n num">۵۵٪</td></tr>
+        <tr><td>TAKE‌هایی که فقط یک اسکن دوام می‌آورند</td><td class="n num">۵۴٪</td></tr>
+        <tr><td>طولانی‌ترین دنبالهٔ مشاهده‌شده</td><td class="n num">۱۹ اسکن (۱۱۰ دقیقه)</td></tr>
+        <tr><td>دوام تا ۲۱ اسکنی که نگه‌داری ۲ ساعته لازم دارد</td><td class="n loss num">صفر از ۱۳۰</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    ریشه، نویزِ بازار نبود؛ <strong>ناهماهنگی تایم‌فریم</strong> بود. پروفایل روی
+    نمودار <span class="num">۵ دقیقه‌ای</span> تصمیم می‌گرفت در حالی که موتور حداقل
+    <span class="num">۲ ساعت</span> پوزیشن را نگه می‌داشت — نسبت
+    <span class="num">۲۴ برابر</span>. RSI پنج‌دقیقه‌ای در هر اسکن به‌طور میانه
+    <span class="num">۳٫۲</span> واحد جابه‌جا می‌شد و لبه‌های باند سخت بودند؛ یک چک
+    برمی‌گشت و ۳۵ امتیازِ «کیفیت ستاپ» با آن جابه‌جا می‌شد.
+  </p>
+  <div class="panel panel--accent">
+    <p class="panel__title">تایم‌فریم‌های جدید (۱۴۰۵/۰۶/۰۳ — 2026-08-25)</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>نقش</th><th class="n">قبل</th><th class="n">اکنون</th></tr></thead>
+        <tbody>
+          <tr><td>بایاس</td><td class="n num">1H</td><td class="n num">4H</td></tr>
+          <tr><td>تصمیم</td><td class="n num">5m</td><td class="n num">15m</td></tr>
+          <tr><td>ورود</td><td class="n num">1m</td><td class="n num">5m</td></tr>
+          <tr><td><strong>ATR</strong></td><td class="n num">15m</td><td class="n num">15m — بدون تغییر</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      تایم‌فریم <span class="num">ATR</span> یک تصمیم <em>هزینه‌ای</em> است، نه
+      سیگنالی: ATR پنج‌دقیقه‌ای حد ضرر را حدود <span class="num">۴۰٪</span> تنگ‌تر
+      می‌کند و <code>cost_in_R</code> را به همان نسبت بالا می‌برد، که نرخ برد
+      <span class="num">۷۵ تا ۸۷٪</span> می‌طلبد. فقط تایم‌فریم‌های سیگنال جابه‌جا شدند.
+    </p>
+  </div>
+  <div class="panel panel--warn">
+    <p class="panel__title">وابستگی‌ای که می‌توانست سیستم را خفه کند</p>
+    <p>
+      گیت <code>gate_bias_atr_max</code> روی نمودار <strong>بایاس</strong> خوانده
+      می‌شود، پس تغییر آن نمودار معنای عدد را عوض می‌کند. اندازه‌گیری روی هر
+      <span class="num">۳۳</span> ارز: ATR چهارساعته
+      <strong><span class="num">۲٫۳۱ برابر</span></strong> ATR یک‌ساعته است (میانهٔ
+      <span class="num">۳٫۰۳۳٪</span> در برابر <span class="num">۱٫۳۱۲٪</span>).
+      اگر روی <span class="num">۲٫۲۵</span> می‌ماند، به‌جای
+      <span class="num">۳۲</span> ارز فقط <span class="num">۷</span> ارز از گیت
+      عبور می‌کردند — و همهٔ تست‌ها هم سبز می‌ماندند. مقدار جدید:
+      <span class="num">۲٫۲۵ × ۲٫۳۱ = ۵٫۲۰</span>.
+    </p>
+    <p>
+      <strong>قاعده: وقتی یک تایم‌فریم عوض می‌شود، هر آستانه‌ای که آن را می‌خواند
+      باید دوباره استخراج شود.</strong> این دومین بار بود؛ بار اول لنگرِ
+      <span class="num">۰٫۳۰R</span> در فاکتور انتظار بود که بی‌صدا کل تابلو را
+      زیر حد TAKE برد.
+    </p>
+  </div>
+
+  <h3>امتیاز، «عرضِ حد ضرر» را انتخاب می‌کند نه «فرصت» را</h3>
+  <p>
+    در نگاه خام، امتیاز وارونه به نظر می‌رسد: باند <span class="num">۰ تا ۵۵</span>
+    در <span class="num">۲۹٫۴٪</span> موارد به هدف می‌رسد و باند
+    <span class="num">۷۳ تا ۱۰۰</span> فقط در <span class="num">۱۱٫۰٪</span>. اما این
+    یک هم‌آمیختگی است: میانهٔ عرض حد ضرر در همان مسیر از
+    <span class="num">۰٫۸۸۴٪</span> به <span class="num">۲٫۰۹۶٪</span> بالا می‌رود،
+    چون <code>cost drag</code> به <code>cost_in_R</code>ِ پایین امتیاز می‌دهد و آن
+    چیزی جز پاداش‌دادن به حد ضررِ عریض‌تر نیست.
+  </p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>امتیاز</th><th class="n">میانهٔ MFE٪</th><th class="n">میانهٔ حد ضرر٪</th><th class="n">MFE ÷ حد ضرر</th></tr></thead>
+      <tbody>
+        <tr><td>۰–۵۵</td><td class="n num">+۰٫۸۵۴</td><td class="n num">۰٫۸۸۴</td><td class="n num win">۰٫۹۷</td></tr>
+        <tr><td>۶۵–۷۰</td><td class="n num">+۱٫۱۲۰</td><td class="n num">۱٫۶۸۵</td><td class="n num">۰٫۶۶</td></tr>
+        <tr><td>۷۰–۷۳</td><td class="n num">+۱٫۰۸۲</td><td class="n num">۱٫۸۴۶</td><td class="n num loss">۰٫۵۹</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    یعنی <strong>قیمت صرف‌نظر از امتیاز حدود یک درصد حرکت می‌کند</strong>؛ آنچه
+    امتیاز پیش‌بینی می‌کند فاصلهٔ حد ضرر است، و حد ضررِ دورتر همان حرکت را در
+    مقیاس <span class="num">R</span> کم‌ارزش‌تر می‌کند. درون یک باند ثابتِ حد ضرر
+    امتیاز جهت مشخصی ندارد، و درون یک ارز واحد امتیاز بالا روی
+    <span class="num">۳</span> ارز بهتر و روی <span class="num">۱۴</span> ارز بدتر
+    عمل کرد.
+  </p>
 
   <div class="panel panel--warn">
     <p class="panel__title">قاعده‌ای که چند بار به‌سختی آموخته شد</p>
