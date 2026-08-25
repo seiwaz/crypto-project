@@ -1341,9 +1341,14 @@ results.append(check("a 1.36% stop (TAO, +1.19R) passes", _fails(stop=1.364), se
 results.append(check("a 2.25% stop passes at the edge", _fails(stop=2.25), set()))
 results.append(check("a 0.9% stop is refused — the fee eats it",
                      "stop reachability" in _fails(stop=0.9), True))
-results.append(check("ZEC's 2.58% 1H ATR is refused",
-                     "regime volatility" in _fails(atr=2.58), True))
-results.append(check("a 2.18% 1H ATR passes (SHIB, a winner)", _fails(atr=2.18), set()))
+# These were measured as 1H ATR. The gate now reads the 4H chart (Round 26), where
+# the same volatility is 2.31x larger, so the historical figures are converted rather
+# than compared across scales — the numbers describe the same market either way.
+_TO_4H = 2.31
+results.append(check("ZEC's volatility is still refused",
+                     "regime volatility" in _fails(atr=2.58 * _TO_4H), True))
+results.append(check("SHIB's still passes (it was a winner)",
+                     _fails(atr=2.18 * _TO_4H), set()))
 
 # The gates must stay inert where they were never measured. Only scalp carries them.
 for _p in ("intraday", "swing"):
@@ -1357,9 +1362,13 @@ results.append(check("absent inputs raise no gate", _tp.qualify(_scalp)["gates"]
 
 # The whole point: block the losers without blocking the winners. These are the real
 # entry figures from the 14 closed trades that reached a level either way.
+# stop% is read from the ATR chart, which did not move; the ATR figures are 1H and
+# are converted to the 4H scale the gate now reads.
 _losers = [(1.802,1.93),(2.048,1.77),(2.441,2.35),(1.612,2.11),
            (2.617,2.68),(2.876,2.58),(1.707,2.24),(1.987,2.37)]
 _winners = [(2.069,2.18),(1.654,1.65),(1.364,1.65),(1.881,2.09),(1.856,2.14),(1.966,2.18)]
+_losers = [(st, at * _TO_4H) for st, at in _losers]
+_winners = [(st, at * _TO_4H) for st, at in _winners]
 results.append(check("blocks 4 of the 8 real stop-outs",
                      sum(1 for st, at in _losers if _fails(stop=st, atr=at)), 4))
 results.append(check("blocks NONE of the 6 real target hits",
@@ -1679,6 +1688,39 @@ results.append(check("and falls back to TP1 for R:R",
 # Other venues keep it.
 results.append(check("a scale-out venue still has a TP2 in its profile",
                      _tp.PROFILES["scalp"]["tp2_r"], 3.0))
+
+print("44. The signal timeframe now matches the hold (Round 25/26)")
+_p = _tp.PROFILES["scalp"]
+# 5,567 observations said a TAKE read on a 5m chart survives six minutes 55% of the
+# time and NEVER lasted the ~21 scans a 2h hold implies.
+results.append(check("decisions are made on 15m", _p["decision_tf"], "15m"))
+results.append(check("entry timing on 5m", _p["entry_tf"], "5m"))
+results.append(check("bias on 4H", _p["bias_tf"], "4H"))
+# The ATR timeframe is a COST decision and was settled by Round 15: a 5m ATR shrinks
+# the stop ~40% and raises cost_in_R by the same proportion.
+results.append(check("the ATR timeframe did NOT move", _p["atr_tf"], "15m"))
+# 8 x 15m = the 2h minimum hold; it said 20 minutes beside a 2h hold before.
+results.append(check("the printed time stop matches the hold",
+                     _p["time_stop_candles"] * 15, 120))
+results.append(check("the label no longer claims a 5-20m hold",
+                     "5-20m" not in _p["label"], True))
+
+# Every timeframe the plan asks for must exist on the venue, or the snapshot is
+# silently short an indicator.
+from agent import tabdeal as _tbd
+for _role in ("bias_tf", "decision_tf", "entry_tf", "atr_tf"):
+    results.append(check(f"{_p[_role]} resolves to a Tabdeal resolution",
+                         _p[_role] in _tbd.TF_TO_RESOLUTION, True))
+
+# THE COUPLING: gate_bias_atr_max reads the BIAS chart, so moving that chart changes
+# what the number means. Measured across all 33 symbols the 4H ATR is 2.31x the 1H.
+results.append(check("the bias-ATR gate was rescaled with the chart",
+                     _p["gate_bias_atr_max"], 5.20))
+results.append(check("it is ~2.31x the old 1H threshold",
+                     round(_p["gate_bias_atr_max"] / 2.25, 2), 2.31))
+# The stop gates read the ATR timeframe, which did not move, so they must NOT change.
+results.append(check("stop gates untouched — they read the ATR chart",
+                     (_p["gate_stop_pct_min"], _p["gate_stop_pct_max"]), (1.0, 2.25)))
 
 store.paper_init(exchange='toobit', capital=1000.0, slots=5, heat_cap_pct=6.0, reset=True)
 print(f"\n{sum(results)}/{len(results)} checks passed")

@@ -31,19 +31,36 @@ from datetime import datetime, timezone
 
 PROFILES = {
     "scalp": {
-        # Retimed 2026-08-22 for a 5-20 MINUTE hold.
+        # Retimed 2026-08-25 so the SIGNAL LASTS AS LONG AS THE TRADE.
         #
-        # The decision timeframe was 15m, so a trade held 20 minutes acted on barely
-        # one fresh bar — the signal could not update inside the life of the position.
-        # Decision moves to 5m (four updates per hold) and entry to 1m.
+        # It had been retimed the other way on 2026-08-22, for a 5-20 minute hold:
+        # decision 5m, entry 1m. The hold then went to 8h (Round 17) and settled at a
+        # 2h minimum, and the timeframes never followed. Round 25 measured what that
+        # cost, over 5,567 observations across 176 scans:
         #
-        # ATR deliberately STAYS on 15m. It sets the stop, and a 5m ATR would shrink
-        # the stop by roughly 40%, which raises cost_in_R by the same proportion
-        # (cost = 2 x fee / stop_pct). At 0.1% a side that is the difference between
-        # ~0.13R and ~0.23R of fees per trade. A faster signal is worth having; a
-        # tighter stop is not, on this venue.
-        "label": "Scalp (5-20m hold)",
-        "bias_tf": "1H", "decision_tf": "5m", "entry_tf": "1m", "atr_tf": "15m",
+        #   a TAKE is still a TAKE six minutes later   55% of the time
+        #   54% of TAKEs exist for a SINGLE scan
+        #   longest run observed                        19 scans (110 min)
+        #   survived the ~21 scans a 2h hold needs      ZERO
+        #
+        # The engine was opening on a thesis that had usually evaporated before the
+        # position was six minutes old, then holding it for two hours. The cause is
+        # not noise in the market: the 5m RSI moves a median 3.2 points per scan
+        # against hard band edges, one check flips, and 35 points of setup quality
+        # move with it. A signal read on a 5-minute chart cannot describe a two-hour
+        # trade.
+        #
+        # Decision moves to 15m (eight bars inside a 2h hold, so it still updates
+        # within the trade) and entry to 5m. Bias moves to 4H, keeping the same ~16x
+        # ratio to the decision chart it had before.
+        #
+        # ATR deliberately STAYS on 15m. It sets the stop, and Round 15 measured the
+        # alternative: a 5m ATR shrinks the stop ~40% and raises cost_in_R by the same
+        # proportion (cost = 2 x fee / stop_pct), needing a 75-87% win rate. The ATR
+        # timeframe is a cost decision and is settled; only the SIGNAL timeframes move
+        # here.
+        "label": "Scalp (2h+ hold, 15m decisions)",
+        "bias_tf": "4H", "decision_tf": "15m", "entry_tf": "5m", "atr_tf": "15m",
         "atr_mult": 1.5,
         "stop_pct_min": 0.0, "stop_pct_max": 1.5,
         # TP1 raised 1.0 -> 2.0 (Round 23). A stop does not cost 1R: it costs about
@@ -74,8 +91,11 @@ PROFILES = {
         # It was 0.50, which was never measured and, paired with the raised target,
         # would have inflated every score by inventing expectancy.
         "default_win_rate": 0.40,
-        # 4 x 5m decision candles = the 20-minute ceiling of the intended hold.
-        "time_stop_candles": 4,
+        # 8 x 15m decision candles = the 2h minimum hold. The live engine has no
+        # time stop at all (it was removed for booking certain losses), so this only
+        # appears in the printed plan — but a plan that names 20 minutes beside a 2h
+        # hold is telling the reader something false.
+        "time_stop_candles": 8,
         # tradability gates
         "atr_pct_min": 0.3, "atr_pct_max": 1.5,
         "max_spread_pct": 0.10, "liquidity_multiple": 3.0,
@@ -99,7 +119,21 @@ PROFILES = {
         # Live corroboration on 14 closed trades: blocks 4 of 8 stop-outs (both ZECs,
         # AAVE, XRP; -0.674 USDT of realised loss) and 0 of 6 target hits.
         "gate_stop_pct_min": 1.0, "gate_stop_pct_max": 2.25,
-        "gate_bias_atr_max": 2.25,
+        # Rescaled 2026-08-25 with the bias timeframe. This gate reads the BIAS-TF
+        # ATR, and moving that chart from 1H to 4H changes what the same number
+        # means: measured across all 33 symbols the 4H ATR is **2.31x** the 1H ATR
+        # (median 3.033% against 1.312%; a random walk would give 2.00x). Left at
+        # 2.25 it would have passed 7 of 33 symbols instead of 32 — silently
+        # strangling the scanner while every test still passed.
+        #
+        # 2.25 x 2.31 = 5.20. The scale factor is measured, not the pass rate: tuning
+        # the number until a particular count of coins survives would be fitting it to
+        # one afternoon.
+        #
+        # This is the second time a constant calibrated against one scale survived a
+        # change to that scale (Round 23's +0.30R expectancy anchor was the first).
+        # When a timeframe moves, re-derive every threshold that reads it.
+        "gate_bias_atr_max": 5.20,
     },
     "intraday": {
         "label": "Intraday (1-4H)",
