@@ -843,6 +843,112 @@ minutes, where forward return (~+0.105%) does not cover the 0.200% round trip.
 
 Tests 24; 147/147.
 
+## Round 26 (2026-08-25) — 17 hours of market behaviour, and the timeframe fix
+
+The observation routine ran **16.8 hours**: 5,567 candidates, 176 scans, 33 coins.
+Regime: BTC **+6.03%** over 48h with a 7.08% range — a strong uptrend, and 73% of
+signals were long.
+
+### The headline: the score selects STOP WIDTH, not opportunity
+
+Raw, the score looks inversely predictive — low scores reach TP more often and carry
+a better mean R:
+
+| score | n | TP% | mean R | med MFE(R) |
+|---|---|---|---|---|
+| 0-55 | 2196 | **29.4%** | -0.1272 | +1.146 |
+| 60-65 | 555 | 11.2% | -0.3188 | +0.706 |
+| 73-100 | 182 | 11.0% | **-0.3425** | +0.625 |
+
+**But that is a confound, and controlling for it is the real finding.** Score and
+stop width are entangled: median stop rises **0.884% → 2.096%** straight up the score
+bands, because `cost drag` (15 pts) rewards a low `cost_in_R = 2 x fee / stop_pct`,
+which is just a reward for a wider stop.
+
+Measured in PERCENT, which the stop cannot distort:
+
+| score | med MFE% | med stop% | **MFE / stop** |
+|---|---|---|---|
+| 0-55 | +0.854 | 0.884 | **0.97** |
+| 60-65 | +1.069 | 1.487 | 0.72 |
+| 65-70 | +1.120 | 1.685 | 0.66 |
+| 70-73 | +1.082 | 1.846 | **0.59** |
+
+**Price travels about 1% either way regardless of score.** What the score predicts is
+how far away the stop is — and a wider stop makes the same move worth less in R. Held
+inside a fixed stop band the score shows no consistent direction, and within a single
+coin **high score beat low score on 3 coins and lost on 14**.
+
+The score is not measuring opportunity. It is measuring geometry.
+
+### Gates
+
+`passed every gate` reaches TP 17.5% against 23.9% for those that failed one — but
+that is the same confound. Per gate, what each refused:
+
+| gate | n | mean R of what it refused |
+|---|---|---|
+| liquidation buffer | 356 | **-0.9930** |
+| volatility fit | 398 | **-0.9709** |
+| plan blocker | 2550 | -0.2520 |
+| cost efficiency | 960 | -0.2229 |
+| stop reachability | 1722 | **-0.1021** |
+
+The first two earn their place decisively. `stop reachability` refuses 1,722 things
+that were barely negative — it is mostly removing trades, not losers.
+
+### Where price actually goes
+
+```
+favourable  p25 +0.37R  median +0.88R  p75 +1.84R  p90 +3.36R
+adverse     p25 -1.50R  median -0.78R  p75 -0.39R
+reaches 1.0R 45.6%   2.0R 22.4%   3.0R 11.6%
+```
+
+Mean R rises monotonically with TP all the way to 3.0R, agreeing with Round 23.
+
+### By coin — the edge is concentrated
+
+HYPE **+0.709R**, SOL +0.522, ZEC +0.370, DOGE +0.275 … against XAUT **-1.210**,
+PAXG -0.979, AAVE -0.977, GRAM -0.909, TRX -0.890. PAXG and XAUT are gold-backed and
+barely move; TRX is nearly as quiet. A quiet coin's move never covers the round trip.
+
+### The fix shipped this round: the signal now lasts as long as the trade
+
+Round 25 confirmed at 4x the sample — a TAKE survives six minutes **55%** of the
+time, 54% exist for a single scan, and **none** of 130 runs lasted the ~21 scans a 2h
+hold implies.
+
+```
+bias      1H  -> 4H
+decision  5m  -> 15m      (8 bars inside a 2h hold)
+entry     1m  -> 5m
+ATR      15m  -> 15m      UNCHANGED — a cost decision, settled by Round 15
+```
+
+**And the coupling that would have strangled it.** `gate_bias_atr_max` reads the BIAS
+chart. Across all 33 symbols the 4H ATR is **2.31x** the 1H ATR (median 3.033% vs
+1.312%; a random walk gives 2.00x). Left at 2.25 the gate would have passed **7 of 33
+symbols instead of 32**, with every test still green. Rescaled to 2.25 x 2.31 =
+**5.20** — the scale factor is what was measured, not the pass rate.
+
+**Second time a constant outlived the scale it was calibrated on.** Round 23's
++0.30R expectancy anchor was the first. When a timeframe moves, re-derive every
+threshold that reads it.
+
+First scan on the new timeframes: 1 TAKE (ZEC 73.3), max 75.8, and `regime
+volatility` no longer appears in the failures.
+
+### Not acted on, and why
+
+The controlled result argues for reweighting or removing `cost drag`, and possibly
+for lowering `gate_stop_pct_min` below 1.0 — the 0.8-1.2% stop band with score <60
+was the only positive cell in the whole controlled table (+0.0438R). Both are left
+alone: the timeframe change has just altered every input those gates read, so any
+threshold derived from the old data is derived from a system that no longer exists.
+Re-measure on the new timeframes first.
+
+
 ## Round 25 (2026-08-24) — the signal does not last as long as the trade
 
 **Operator's claim:** if a signal is TAKE now and WATCH or SKIP five minutes later,
